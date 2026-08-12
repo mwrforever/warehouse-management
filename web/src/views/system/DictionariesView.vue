@@ -35,7 +35,7 @@
     <!-- 字典项管理弹窗：当前字典的启用项列表 + 新增/编辑/删除 -->
     <el-dialog v-model="itemDialogVisible" :title="`字典项 - ${currentDict?.name}`" width="640px">
       <div class="toolbar">
-        <el-button v-if="auth.has('dictionary.update')" class="btn-primary" @click="openItemCreate">新 增</el-button>
+        <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openItemCreate">新 增</el-button>
       </div>
       <el-table :data="items">
         <el-table-column prop="label" label="标签" />

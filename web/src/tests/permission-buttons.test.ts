@@ -34,7 +34,7 @@ vi.mock('../api/dictionary', () => ({
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
-    items: vi.fn(),
+    items: vi.fn().mockResolvedValue({ items: [{ id: 1, dictionary_id: 1, label: '个', value: 'pc', sort: 1, status: 1 }] }),
     createItem: vi.fn(),
     updateItem: vi.fn(),
     removeItem: vi.fn(),
@@ -127,5 +127,34 @@ describe('按钮级权限显隐', () => {
     expect(texts).toContain('新 建')
     expect(texts).toContain('编 辑')
     expect(texts).toContain('删 除')
+  })
+
+  it('字典项弹窗：持有 dictionary.create 无 update 时显示「新 增」按钮', async () => {
+    // 边界路径：新增字典项走后端 POST /dictionaries/{id}/items（permission:dictionary.create），
+    // 按钮门控必须与后端路由权限一致，create 无 update 的角色应看到入口
+    store.permissions = ['dictionary.list', 'dictionary.create']
+    const wrapper = mountView(DictionariesView)
+    await flushPromises()
+    const itemBtn = wrapper.findAll('button').find((b) => b.text().trim() === '字典项')
+    expect(itemBtn).toBeTruthy()
+    await itemBtn!.trigger('click')
+    await flushPromises()
+    const texts = buttonTexts(wrapper)
+    expect(texts).toContain('新 增')
+    // 弹窗内字典项行的编辑/删除按钮仍按 update/delete 门控，create 角色不可见
+    expect(texts).not.toContain('删 除')
+  })
+
+  it('字典项弹窗：持有 dictionary.update 无 create 时不显示「新 增」按钮', async () => {
+    // 越权防护：update 权限不能新增字典项（按钮隐藏，后端 create 中间件兜底）
+    store.permissions = ['dictionary.list', 'dictionary.update']
+    const wrapper = mountView(DictionariesView)
+    await flushPromises()
+    const itemBtn = wrapper.findAll('button').find((b) => b.text().trim() === '字典项')
+    expect(itemBtn).toBeTruthy()
+    await itemBtn!.trigger('click')
+    await flushPromises()
+    const texts = buttonTexts(wrapper)
+    expect(texts).not.toContain('新 增')
   })
 })
