@@ -82,6 +82,30 @@ const router = createRouter({
           meta: { permission: 'product.list' },
         },
         {
+          path: 'inventory/balances',
+          name: 'inventory-balances',
+          component: () => import('../views/inventory/BalancesView.vue'),
+          meta: { permission: 'inventory.list' },
+        },
+        {
+          path: 'inventory/movements',
+          name: 'inventory-movements',
+          component: () => import('../views/inventory/MovementsView.vue'),
+          meta: { permission: 'inventory.list' },
+        },
+        {
+          path: 'inventory/checks/:id?',
+          name: 'inventory-checks',
+          component: () => import('../views/inventory/ChecksView.vue'),
+          meta: { permission: 'check.list' },
+        },
+        {
+          path: 'inventory/alerts',
+          name: 'inventory-alerts',
+          component: () => import('../views/inventory/AlertsView.vue'),
+          meta: { permission: 'inventory.list' },
+        },
+        {
           path: 'master/boms',
           name: 'master-boms',
           component: () => import('../views/master/BomsView.vue'),
