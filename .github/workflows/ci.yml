@@ -1,0 +1,123 @@
+# CI 质量门禁：push 到 main / PR 到 main 触发
+# 后端：Pint（PHP-CS-Fixer）→ PHPCS → PHPStan → 全量测试
+# 前端：vue-tsc → ESLint → Stylelint → Prettier → Vitest
+# E2E：Playwright（自动拉起后端种子库 + 前端 dev server）
+# 汇总 job「ci」全绿 = 通过（main 分支保护要求该检查）
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: 后端（Pint → PHPCS → PHPStan → 测试）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - name: 安装依赖
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Pint 格式检查（PHP-CS-Fixer）
+        run: ./vendor/bin/pint --test
+
+      - name: PHPCS 编码规范（PSR-12）
+        run: ./vendor/bin/phpcs
+
+      - name: PHPStan 静态分析
+        run: ./vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: 全量测试（PHPUnit）
+        run: php artisan test
+
+  frontend:
+    name: 前端（TS → ESLint → Stylelint → Prettier → Vitest）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: TypeScript 类型检查
+        run: npm run type-check
+
+      - name: ESLint 代码规范
+        run: npm run lint
+
+      - name: Stylelint CSS 规范
+        run: npm run lint:css
+
+      - name: Prettier 格式检查
+        run: npm run format:check
+
+      - name: 单元测试（Vitest）
+        run: npm run test:unit
+
+  e2e:
+    name: E2E（Playwright 业务流程）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 安装 Chromium（含系统依赖）
+        run: npx playwright install --with-deps chromium
+
+      - name: 安装后端依赖
+        working-directory: server
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: 准备后端 .env（E2E 用 SQLite 库，playwright webServer 自动 migrate+seed）
+        working-directory: server
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Playwright E2E 测试
+        run: npx playwright test
+
+  ci:
+    name: CI 汇总（全部通过）
+    needs: [backend, frontend, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查结果
+        run: echo "✅ 后端/前端/E2E 全部通过，允许合并"

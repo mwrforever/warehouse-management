@@ -1,5 +1,7 @@
 <?php
+
 // 字典管理控制器：字典/字典项 CRUD + 按编码取值（供其他模块下拉）
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -26,6 +28,7 @@ class DictionaryController extends Controller
     {
         // per_page 钳制到 1-100：防 0 值除零 500 与超大分页拖垮性能
         $items = Dictionary::orderByDesc('id')->paginate(max(1, min(100, $request->integer('per_page', 10))));
+
         return $this->ok([
             'items' => $items->map(fn ($d) => ['id' => $d->id, 'name' => $d->name, 'code' => $d->code, 'remark' => $d->remark]),
             'total' => $items->total(), 'page' => $items->currentPage(), 'per_page' => $items->perPage(),
@@ -40,6 +43,7 @@ class DictionaryController extends Controller
         if (Dictionary::where('code', $data['code'])->exists()) {
             return $this->fail(1005, '字典编码已存在');
         }
+
         return $this->ok(['id' => Dictionary::create($data)->id]);
     }
 
@@ -56,6 +60,7 @@ class DictionaryController extends Controller
             return $this->fail(1005, '字典编码已存在');
         }
         $dictionary->update($data);
+
         return $this->ok();
     }
 
@@ -63,6 +68,7 @@ class DictionaryController extends Controller
     public function destroy(Dictionary $dictionary)
     {
         $dictionary->delete();
+
         return $this->ok();
     }
 
@@ -75,15 +81,27 @@ class DictionaryController extends Controller
     /** 新增字典项 */
     public function storeItem(Request $request, Dictionary $dictionary)
     {
-        $data = $request->validate(['label' => 'required|string|max:50', 'value' => 'required|string|max:50', 'sort' => 'integer', 'status' => 'in:0,1']);
+        $data = $request->validate([
+            'label' => 'required|string|max:50',
+            'value' => 'required|string|max:50',
+            'sort' => 'integer',
+            'status' => 'in:0,1',
+        ]);
+
         return $this->ok(['id' => $dictionary->items()->create($data)->id]);
     }
 
     /** 更新字典项 */
     public function updateItem(Request $request, DictionaryItem $item)
     {
-        $data = $request->validate(['label' => 'required|string|max:50', 'value' => 'required|string|max:50', 'sort' => 'integer', 'status' => 'in:0,1']);
+        $data = $request->validate([
+            'label' => 'required|string|max:50',
+            'value' => 'required|string|max:50',
+            'sort' => 'integer',
+            'status' => 'in:0,1',
+        ]);
         $item->update($data);
+
         return $this->ok();
     }
 
@@ -91,6 +109,7 @@ class DictionaryController extends Controller
     public function destroyItem(DictionaryItem $item)
     {
         $item->delete();
+
         return $this->ok();
     }
 
@@ -101,6 +120,7 @@ class DictionaryController extends Controller
         if (! $dictionary) {
             return $this->fail(1008, '字典不存在');
         }
+
         return $this->ok(['items' => $dictionary->items()->where('status', 1)->orderBy('sort')->get()]);
     }
 }

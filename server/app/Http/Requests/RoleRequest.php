@@ -1,5 +1,7 @@
 <?php
+
 // 角色表单校验：名称/编码必填、编码唯一（忽略自身）、权限数组
+
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;

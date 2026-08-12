@@ -1,5 +1,7 @@
 <?php
+
 // 仓库/库位控制器：仓库 CRUD + 库位子资源 + 删除保护（有库存不可删）
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -24,8 +26,16 @@ class WarehouseController extends Controller
             $query->where('status', $request->input('status'));
         }
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
-            'items' => $rows->map(fn ($w) => ['id' => $w->id, 'name' => $w->name, 'code' => $w->code, 'address' => $w->address, 'manager' => $w->manager, 'status' => $w->status]),
+            'items' => $rows->map(fn ($w) => [
+                'id' => $w->id,
+                'name' => $w->name,
+                'code' => $w->code,
+                'address' => $w->address,
+                'manager' => $w->manager,
+                'status' => $w->status,
+            ]),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
         ]);
     }
@@ -47,6 +57,7 @@ class WarehouseController extends Controller
             'name' => $data['name'], 'code' => $data['code'],
             'address' => $data['address'] ?? null, 'manager' => $data['manager'] ?? null, 'status' => $data['status'] ?? 1,
         ]);
+
         return $this->ok(['id' => $warehouse->id]);
     }
 
@@ -68,6 +79,7 @@ class WarehouseController extends Controller
             'address' => $data['address'] ?? $warehouse->address, 'manager' => $data['manager'] ?? $warehouse->manager,
             'status' => $data['status'] ?? $warehouse->status,
         ]);
+
         return $this->ok();
     }
 
@@ -78,6 +90,7 @@ class WarehouseController extends Controller
             return $this->fail(1106, '仓库存在库存，不可删除');
         }
         $warehouse->delete();
+
         return $this->ok();
     }
 
@@ -86,6 +99,7 @@ class WarehouseController extends Controller
     {
         $items = $warehouse->locations()->orderBy('id')->get()
             ->map(fn ($l) => ['id' => $l->id, 'name' => $l->name, 'code' => $l->code, 'status' => $l->status]);
+
         return $this->ok(['items' => $items]);
     }
 
@@ -98,6 +112,7 @@ class WarehouseController extends Controller
             'status' => 'nullable|in:0,1',
         ]);
         $location = $warehouse->locations()->create(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? 1]);
+
         return $this->ok(['id' => $location->id]);
     }
 
@@ -106,10 +121,11 @@ class WarehouseController extends Controller
     {
         $data = $request->validate([
             'name' => 'required|string|max:50',
-            'code' => 'required|string|max:50|unique:locations,code,' . $location->id,
+            'code' => 'required|string|max:50|unique:locations,code,'.$location->id,
             'status' => 'nullable|in:0,1',
         ]);
         $location->update(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? $location->status]);
+
         return $this->ok();
     }
 
@@ -120,6 +136,7 @@ class WarehouseController extends Controller
             return $this->fail(1107, '库位存在库存，不可删除');
         }
         $location->delete();
+
         return $this->ok();
     }
 }

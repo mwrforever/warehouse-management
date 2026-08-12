@@ -40,11 +40,17 @@ export const dictionaryApi = {
     return data.data as { items: DictItem[] }
   },
   // 新增字典项
-  async createItem(dictId: number, payload: { label: string; value: string; sort?: number; status?: number }) {
+  async createItem(
+    dictId: number,
+    payload: { label: string; value: string; sort?: number; status?: number },
+  ) {
     await http.post(`/dictionaries/${dictId}/items`, payload)
   },
   // 更新字典项
-  async updateItem(itemId: number, payload: { label: string; value: string; sort?: number; status?: number }) {
+  async updateItem(
+    itemId: number,
+    payload: { label: string; value: string; sort?: number; status?: number },
+  ) {
     await http.put(`/dictionaries/items/${itemId}`, payload)
   },
   // 删除字典项

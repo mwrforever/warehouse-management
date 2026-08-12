@@ -1,5 +1,7 @@
 <?php
+
 // 角色管理控制器：CRUD + 权限分配 + 删除保护（被引用/最后一个 admin 角色）
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -25,6 +27,7 @@ class RoleController extends Controller
     {
         // per_page 钳制到 1-100：防 0 值除零 500 与超大分页拖垮性能
         $roles = Role::with('permissions')->orderByDesc('id')->paginate(max(1, min(100, $request->integer('per_page', 10))));
+
         return $this->ok([
             'items' => $roles->map(fn ($r) => [
                 'id' => $r->id, 'name' => $r->name, 'code' => $r->code, 'remark' => $r->remark,
@@ -39,6 +42,7 @@ class RoleController extends Controller
     {
         $role = Role::create($request->safe()->except('permission_ids'));
         $role->permissions()->sync($request->input('permission_ids', []));
+
         return $this->ok(['id' => $role->id]);
     }
 
@@ -47,6 +51,7 @@ class RoleController extends Controller
     {
         $role->update($request->safe()->except('permission_ids'));
         $role->permissions()->sync($request->input('permission_ids', []));
+
         return $this->ok();
     }
 
@@ -62,6 +67,7 @@ class RoleController extends Controller
             return $this->fail(1004, '该角色已分配给用户，不可删除');
         }
         $role->delete();
+
         return $this->ok();
     }
 
@@ -69,8 +75,16 @@ class RoleController extends Controller
     public function permissions()
     {
         $groups = Permission::orderBy('group')->get()->groupBy('group')
-            ->map(fn ($perms, $group) => ['group' => $group, 'permissions' => $perms->map(fn ($p) => ['id' => $p->id, 'name' => $p->name, 'code' => $p->code])->values()])
+            ->map(fn ($perms, $group) => [
+                'group' => $group,
+                'permissions' => $perms->map(fn (Permission $p) => [
+                    'id' => $p->id,
+                    'name' => $p->name,
+                    'code' => $p->code,
+                ])->values(),
+            ])
             ->values();
+
         return $this->ok(['groups' => $groups]);
     }
 }

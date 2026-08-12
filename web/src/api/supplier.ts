@@ -19,11 +19,30 @@ export const supplierApi = {
     return data.data as { items: SupplierItem[]; total: number; page: number; per_page: number }
   },
   // 新建供应商
-  async create(payload: { name: string; code: string; contact?: string; phone?: string; address?: string; remark?: string; status?: number }) {
+  async create(payload: {
+    name: string
+    code: string
+    contact?: string
+    phone?: string
+    address?: string
+    remark?: string
+    status?: number
+  }) {
     await http.post('/suppliers', payload)
   },
   // 更新供应商
-  async update(id: number, payload: { name: string; code: string; contact?: string; phone?: string; address?: string; remark?: string; status?: number }) {
+  async update(
+    id: number,
+    payload: {
+      name: string
+      code: string
+      contact?: string
+      phone?: string
+      address?: string
+      remark?: string
+      status?: number
+    },
+  ) {
     await http.put(`/suppliers/${id}`, payload)
   },
   // 删除供应商

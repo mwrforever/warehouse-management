@@ -1,11 +1,14 @@
 <?php
+
 // 用户管理控制器：CRUD + 重置密码 + 角色分配
 // 依赖 ApiResponse/UserResource；删除保护内置 admin；用户名唯一由 FormRequest 校验
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\UserStoreRequest;
 use App\Http\Requests\UserUpdateRequest;
+use App\Models\Role;
 use App\Models\User;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
@@ -35,7 +38,7 @@ class UserController extends Controller
             'items' => $users->map(fn ($u) => [
                 'id' => $u->id, 'name' => $u->name, 'username' => $u->username,
                 'email' => $u->email, 'status' => $u->status, 'last_login_at' => $u->last_login_at?->toDateTimeString(),
-                'roles' => $u->roles->map(fn ($r) => ['id' => $r->id, 'name' => $r->name]),
+                'roles' => $u->roles->map(fn (Role $r) => ['id' => $r->id, 'name' => $r->name]),
             ]),
             'total' => $users->total(), 'page' => $users->currentPage(), 'per_page' => $users->perPage(),
         ]);
@@ -46,6 +49,7 @@ class UserController extends Controller
     {
         $user = User::create($request->safe()->except('role_ids'));
         $user->roles()->sync($request->input('role_ids', []));
+
         return $this->ok(['id' => $user->id, 'name' => $user->name, 'username' => $user->username]);
     }
 
@@ -80,6 +84,7 @@ class UserController extends Controller
             return $this->fail(1003, '内置管理员不可删除');
         }
         $user->delete();
+
         return $this->ok();
     }
 
@@ -90,6 +95,7 @@ class UserController extends Controller
         $user->update(['password' => $data['password']]);
         // 密码已变更：撤销全部 token，旧 token 调 /auth/me 返回 401
         $user->tokens()->delete();
+
         return $this->ok();
     }
 }

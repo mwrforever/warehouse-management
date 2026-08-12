@@ -2,34 +2,58 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-input v-model="query.keyword" placeholder="用户名/姓名" clearable style="width: 220px" @keyup.enter="load" />
-      <el-button v-if="auth.has('user.create')" class="btn-primary" @click="openCreate">新 建</el-button>
+      <el-input
+        v-model="query.keyword"
+        placeholder="用户名/姓名"
+        clearable
+        style="width: 220px"
+        @keyup.enter="load"
+      />
+      <el-button v-if="auth.has('user.create')" class="btn-primary" @click="openCreate"
+        >新 建</el-button
+      >
     </div>
-    <el-table :data="rows" v-loading="loading">
+    <el-table v-loading="loading" :data="rows">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="username" label="用户名" class-name="font-code" />
       <el-table-column prop="name" label="姓名" />
       <el-table-column prop="email" label="邮箱" />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '已禁用' }}</el-tag>
+          <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
+            row.status === 1 ? '启用' : '已禁用'
+          }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="角色">
         <template #default="{ row }">
-          <el-tag v-for="r in row.roles" :key="r.id" size="small" class="role-tag">{{ r.name }}</el-tag>
+          <el-tag v-for="r in row.roles" :key="r.id" size="small" class="role-tag">{{
+            r.name
+          }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="last_login_at" label="最后登录" width="180" />
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="auth.has('user.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button v-if="auth.has('user.update')" link type="warning" @click="openReset(row)">重置密码</el-button>
-          <el-button v-if="auth.has('user.delete')" link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('user.update')" link type="primary" @click="openEdit(row)"
+            >编 辑</el-button
+          >
+          <el-button v-if="auth.has('user.update')" link type="warning" @click="openReset(row)"
+            >重置密码</el-button
+          >
+          <el-button v-if="auth.has('user.delete')" link type="danger" @click="remove(row)"
+            >删 除</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
-    <el-pagination v-model:current-page="query.page" :total="total" :page-size="10" layout="total, prev, pager, next" @current-change="load" />
+    <el-pagination
+      v-model:current-page="query.page"
+      :total="total"
+      :page-size="10"
+      layout="total, prev, pager, next"
+      @current-change="load"
+    />
 
     <!-- 新建/编辑弹窗 -->
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑用户' : '新建用户'" width="480px">
@@ -37,8 +61,12 @@
         <el-form-item label="用户名" required><el-input v-model="form.username" /></el-form-item>
         <el-form-item label="姓名" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="form.email" /></el-form-item>
-        <el-form-item v-if="!form.id" label="密码" required><el-input v-model="form.password" type="password" show-password /></el-form-item>
-        <el-form-item label="状态"><el-switch v-model="form.status" :active-value="1" :inactive-value="0" /></el-form-item>
+        <el-form-item v-if="!form.id" label="密码" required
+          ><el-input v-model="form.password" type="password" show-password
+        /></el-form-item>
+        <el-form-item label="状态"
+          ><el-switch v-model="form.status" :active-value="1" :inactive-value="0"
+        /></el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role_ids" multiple placeholder="选择角色" style="width: 100%">
             <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id" />
@@ -69,7 +97,27 @@ const total = ref(0)
 const loading = ref(false)
 const query = reactive({ page: 1, keyword: '' })
 const dialogVisible = ref(false)
-const form = reactive<Record<string, any>>({})
+
+// 用户表单：password 仅新建时必填（编辑弹窗不展示）；role_ids 为多选角色 id 数组
+interface UserForm {
+  id: number | null
+  username: string
+  name: string
+  email: string
+  password: string
+  status: number
+  role_ids: number[]
+}
+
+const form = reactive<UserForm>({
+  id: null,
+  username: '',
+  name: '',
+  email: '',
+  password: '',
+  status: 1,
+  role_ids: [],
+})
 
 // 加载列表：携带分页与关键字
 async function load() {
@@ -85,11 +133,26 @@ async function load() {
 
 // 新建/编辑弹窗初始化（角色下拉复用角色列表接口）
 function openCreate() {
-  Object.assign(form, { id: null, username: '', name: '', email: '', password: '', status: 1, role_ids: [] })
+  Object.assign(form, {
+    id: null,
+    username: '',
+    name: '',
+    email: '',
+    password: '',
+    status: 1,
+    role_ids: [],
+  })
   dialogVisible.value = true
 }
 function openEdit(row: UserItem) {
-  Object.assign(form, { id: row.id, username: row.username, name: row.name, email: row.email, status: row.status, role_ids: row.roles.map((r) => r.id) })
+  Object.assign(form, {
+    id: row.id,
+    username: row.username,
+    name: row.name,
+    email: row.email,
+    status: row.status,
+    role_ids: row.roles.map((r) => r.id),
+  })
   dialogVisible.value = true
 }
 
@@ -97,9 +160,22 @@ function openEdit(row: UserItem) {
 async function save() {
   try {
     if (form.id) {
-      await userApi.update(form.id, { name: form.name, username: form.username, email: form.email, status: form.status, role_ids: form.role_ids })
+      await userApi.update(form.id, {
+        name: form.name,
+        username: form.username,
+        email: form.email,
+        status: form.status,
+        role_ids: form.role_ids,
+      })
     } else {
-      await userApi.create({ name: form.name, username: form.username, password: form.password, email: form.email, status: form.status, role_ids: form.role_ids })
+      await userApi.create({
+        name: form.name,
+        username: form.username,
+        password: form.password,
+        email: form.email,
+        status: form.status,
+        role_ids: form.role_ids,
+      })
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
@@ -112,7 +188,9 @@ async function save() {
 // 删除：二次确认后调用；后端拒绝（如内置 admin）时展示错误
 async function remove(row: UserItem) {
   try {
-    await ElMessageBox.confirm(`确定删除用户 ${row.name}？此操作不可恢复`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(`确定删除用户 ${row.name}？此操作不可恢复`, '提示', {
+      type: 'warning',
+    })
   } catch {
     return // 用户取消
   }
@@ -128,7 +206,11 @@ async function remove(row: UserItem) {
 // 重置密码：输入新密码（后端校验强度）；用户取消/关闭弹窗时静默退出，不产生未处理 rejection
 async function openReset(row: UserItem) {
   try {
-    const { value } = await ElMessageBox.prompt('请输入新密码（至少8位，含字母和数字）', `重置密码 - ${row.username}`, { inputType: 'password' })
+    const { value } = await ElMessageBox.prompt(
+      '请输入新密码（至少8位，含字母和数字）',
+      `重置密码 - ${row.username}`,
+      { inputType: 'password' },
+    )
     await userApi.resetPassword(row.id, value)
     ElMessage.success('密码重置成功')
   } catch (e) {
@@ -146,7 +228,17 @@ onMounted(async () => {
 
 <style scoped>
 /* 工具栏间距与主按钮样式（btn-primary 语义色） */
-.toolbar { display: flex; gap: var(--space-lg); margin-bottom: var(--space-xl); }
-.btn-primary { background: var(--color-accent); border-color: var(--color-accent); cursor: pointer; }
-.role-tag { margin-right: var(--space-xs); }
+.toolbar {
+  display: flex;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  cursor: pointer;
+}
+.role-tag {
+  margin-right: var(--space-xs);
+}
 </style>

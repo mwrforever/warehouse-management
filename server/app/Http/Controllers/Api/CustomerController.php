@@ -1,5 +1,7 @@
 <?php
+
 // 客户控制器：CRUD + 搜索 + 编码唯一 + 被销售单据引用保护
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -25,6 +27,7 @@ class CustomerController extends Controller
             $query->where('status', $request->input('status'));
         }
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
             'items' => $rows->map(fn ($c) => [
                 'id' => $c->id, 'name' => $c->name, 'code' => $c->code, 'contact' => $c->contact,
@@ -54,6 +57,7 @@ class CustomerController extends Controller
             'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
             'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? 1,
         ]);
+
         return $this->ok(['id' => $customer->id]);
     }
 
@@ -77,6 +81,7 @@ class CustomerController extends Controller
             'phone' => $data['phone'] ?? $customer->phone, 'address' => $data['address'] ?? $customer->address,
             'remark' => $data['remark'] ?? $customer->remark, 'status' => $data['status'] ?? $customer->status,
         ]);
+
         return $this->ok();
     }
 
@@ -87,6 +92,7 @@ class CustomerController extends Controller
             return $this->fail(1111, '客户已被销售单据使用，不可删除');
         }
         $customer->delete();
+
         return $this->ok();
     }
 }

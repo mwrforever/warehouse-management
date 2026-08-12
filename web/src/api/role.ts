@@ -31,7 +31,10 @@ export const roleApi = {
     await http.post('/roles', payload)
   },
   // 更新角色并全量重挂权限
-  async update(id: number, payload: { name: string; code: string; remark?: string; permission_ids: number[] }) {
+  async update(
+    id: number,
+    payload: { name: string; code: string; remark?: string; permission_ids: number[] },
+  ) {
     await http.put(`/roles/${id}`, payload)
   },
   // 删除角色（被用户引用时后端返回 1004 拦截）

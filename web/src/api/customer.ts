@@ -19,11 +19,30 @@ export const customerApi = {
     return data.data as { items: CustomerItem[]; total: number; page: number; per_page: number }
   },
   // 新建客户
-  async create(payload: { name: string; code: string; contact?: string; phone?: string; address?: string; remark?: string; status?: number }) {
+  async create(payload: {
+    name: string
+    code: string
+    contact?: string
+    phone?: string
+    address?: string
+    remark?: string
+    status?: number
+  }) {
     await http.post('/customers', payload)
   },
   // 更新客户
-  async update(id: number, payload: { name: string; code: string; contact?: string; phone?: string; address?: string; remark?: string; status?: number }) {
+  async update(
+    id: number,
+    payload: {
+      name: string
+      code: string
+      contact?: string
+      phone?: string
+      address?: string
+      remark?: string
+      status?: number
+    },
+  ) {
     await http.put(`/customers/${id}`, payload)
   },
   // 删除客户

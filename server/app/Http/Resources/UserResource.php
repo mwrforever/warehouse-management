@@ -1,10 +1,18 @@
 <?php
+
 // 用户资源：对外输出的用户数据结构（含角色与权限，供前端守卫使用）
+
 namespace App\Http\Resources;
 
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
+/**
+ * 用户资源：对外输出的用户数据结构（含角色与权限，供前端守卫使用）
+ *
+ * @mixin User
+ */
 class UserResource extends JsonResource
 {
     public function toArray(Request $request): array

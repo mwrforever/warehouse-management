@@ -15,7 +15,17 @@ const router = useRouter()
 </script>
 
 <style scoped>
-.forbidden { text-align: center; padding-top: 20vh; }
-.forbidden h1 { font-size: 48px; color: var(--color-primary); margin-bottom: var(--space-lg); }
-.forbidden p { color: var(--color-secondary); margin-bottom: var(--space-2xl); }
+.forbidden {
+  text-align: center;
+  padding-top: 20vh;
+}
+.forbidden h1 {
+  font-size: 48px;
+  color: var(--color-primary);
+  margin-bottom: var(--space-lg);
+}
+.forbidden p {
+  color: var(--color-secondary);
+  margin-bottom: var(--space-2xl);
+}
 </style>

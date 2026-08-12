@@ -1,5 +1,7 @@
 <?php
+
 // BOM 接口测试：单头+明细事务/类型校验/启用版本唯一/启用切换/删除（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\BomHeader;
@@ -16,10 +18,15 @@ class BomTest extends TestCase
     use RefreshDatabase;
 
     private string $token;
+
     private Category $rawCat;
+
     private Category $finCat;
+
     private Unit $unit;
+
     private Product $material;
+
     private Product $finished;
 
     protected function setUp(): void

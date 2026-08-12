@@ -21,15 +21,54 @@ vi.mock('../api/bom', () => ({
 }))
 vi.mock('../api/product', () => ({
   productApi: {
-    list: vi.fn().mockImplementation((params: any) => {
-      if (params.type === 'finished') return Promise.resolve({ items: [{ id: 2, name: '成品B', code: 'FIN-002', type: 'finished', type_label: '成品', category_id: 1, unit_id: 1, unit_name: '个', status: 1 }], total: 1 })
-      return Promise.resolve({ items: [{ id: 1, name: '测试铝材', code: 'MAT-001', type: 'raw_material', type_label: '原料', category_id: 1, unit_id: 1, unit_name: '个', spec: '1mm', status: 1 }], total: 1 })
+    // params 仅用于区分成品/物料两类下拉数据源（type 为商品类型）
+    list: vi.fn().mockImplementation((params: { type?: string }) => {
+      if (params.type === 'finished')
+        return Promise.resolve({
+          items: [
+            {
+              id: 2,
+              name: '成品B',
+              code: 'FIN-002',
+              type: 'finished',
+              type_label: '成品',
+              category_id: 1,
+              unit_id: 1,
+              unit_name: '个',
+              status: 1,
+            },
+          ],
+          total: 1,
+        })
+      return Promise.resolve({
+        items: [
+          {
+            id: 1,
+            name: '测试铝材',
+            code: 'MAT-001',
+            type: 'raw_material',
+            type_label: '原料',
+            category_id: 1,
+            unit_id: 1,
+            unit_name: '个',
+            spec: '1mm',
+            status: 1,
+          },
+        ],
+        total: 1,
+      })
     }),
   },
 }))
 vi.mock('../api/unit', () => ({
   unitApi: {
-    list: vi.fn().mockResolvedValue({ items: [{ id: 3, name: '千克', code: 'kg', status: 1 }, { id: 1, name: '个', code: 'pc', status: 1 }], total: 2 }),
+    list: vi.fn().mockResolvedValue({
+      items: [
+        { id: 3, name: '千克', code: 'kg', status: 1 },
+        { id: 1, name: '个', code: 'pc', status: 1 },
+      ],
+      total: 2,
+    }),
   },
 }))
 import { bomApi } from '../api/bom'
@@ -54,7 +93,7 @@ describe('BOM 物料行单位自动带出', () => {
     // 正常路径：单位跟随物料（修复前固定取第一个单位「千克」）
     const wrapper = mountView()
     await flushPromises()
-    const newBtn = wrapper.findAll('button').find((b: any) => b.text().trim() === '新 建')
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
     expect(newBtn).toBeTruthy()
     await newBtn!.trigger('click')
     await flushPromises()
@@ -64,8 +103,11 @@ describe('BOM 物料行单位自动带出', () => {
     expect(materialSelect, '物料行下拉应存在').toBeTruthy()
     await materialSelect.trigger('click')
     await flushPromises()
-    const opt = [...document.querySelectorAll('.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item')]
-      .find((o) => (o as HTMLElement).textContent!.trim() === 'MAT-001 测试铝材')
+    const opt = [
+      ...document.querySelectorAll(
+        '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
+      ),
+    ].find((o) => (o as HTMLElement).textContent!.trim() === 'MAT-001 测试铝材')
     expect(opt, '物料选项 MAT-001 应存在').toBeTruthy()
     ;(opt as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
@@ -78,18 +120,23 @@ describe('BOM 物料行单位自动带出', () => {
     const productSelect = wrapper.findAll('.el-dialog .el-select__wrapper')[0]
     await productSelect.trigger('click')
     await flushPromises()
-    const finOpt = [...document.querySelectorAll('.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item')]
-      .find((o) => (o as HTMLElement).textContent!.trim() === 'FIN-002 成品B')
+    const finOpt = [
+      ...document.querySelectorAll(
+        '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
+      ),
+    ].find((o) => (o as HTMLElement).textContent!.trim() === 'FIN-002 成品B')
     expect(finOpt, '成品选项 FIN-002 应存在').toBeTruthy()
     ;(finOpt as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
 
-    const saveBtn = wrapper.findAll('button').find((b: any) => b.text().trim() === '保 存')
+    const saveBtn = wrapper.findAll('button').find((b) => b.text().trim() === '保 存')
     await saveBtn!.trigger('click')
     await flushPromises()
-    expect(bomApi.create).toHaveBeenCalledWith(expect.objectContaining({
-      items: expect.arrayContaining([expect.objectContaining({ material_id: 1, unit_id: 1 })]),
-    }))
+    expect(bomApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: expect.arrayContaining([expect.objectContaining({ material_id: 1, unit_id: 1 })]),
+      }),
+    )
     wrapper.unmount()
   })
 })

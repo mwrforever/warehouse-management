@@ -37,5 +37,5 @@ http.interceptors.response.use(
       return Promise.reject(new Error(body.message))
     }
     return Promise.reject(err)
-  }
+  },
 )

@@ -1,4 +1,5 @@
 <?php
+
 // RBAC 核心表：roles/permissions + 两张关联表（多对多）
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;

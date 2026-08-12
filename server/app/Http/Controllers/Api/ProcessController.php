@@ -1,5 +1,7 @@
 <?php
+
 // 工序控制器：列表（sort 升序）+ CRUD + 编码唯一 + 被工单引用保护
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -16,7 +18,15 @@ class ProcessController extends Controller
     public function index()
     {
         $items = Process::orderBy('sort')->orderBy('id')->get()
-            ->map(fn ($p) => ['id' => $p->id, 'name' => $p->name, 'code' => $p->code, 'sort' => $p->sort, 'description' => $p->description, 'status' => $p->status]);
+            ->map(fn ($p) => [
+                'id' => $p->id,
+                'name' => $p->name,
+                'code' => $p->code,
+                'sort' => $p->sort,
+                'description' => $p->description,
+                'status' => $p->status,
+            ]);
+
         return $this->ok(['items' => $items]);
     }
 
@@ -37,6 +47,7 @@ class ProcessController extends Controller
             'name' => $data['name'], 'code' => $data['code'],
             'sort' => $data['sort'] ?? 0, 'description' => $data['description'] ?? null, 'status' => $data['status'] ?? 1,
         ]);
+
         return $this->ok(['id' => $process->id]);
     }
 
@@ -58,6 +69,7 @@ class ProcessController extends Controller
             'sort' => $data['sort'] ?? $process->sort, 'description' => $data['description'] ?? $process->description,
             'status' => $data['status'] ?? $process->status,
         ]);
+
         return $this->ok();
     }
 
@@ -68,6 +80,7 @@ class ProcessController extends Controller
             return $this->fail(1113, '工序已被生产工单使用，不可删除');
         }
         $process->delete();
+
         return $this->ok();
     }
 }

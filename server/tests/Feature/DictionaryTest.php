@@ -1,5 +1,7 @@
 <?php
+
 // 字典接口测试：字典与字典项 CRUD/取值/重复编码（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\Dictionary;
@@ -39,10 +41,20 @@ class DictionaryTest extends TestCase
     {
         // 正常路径：字典项增改删
         $d = Dictionary::create(['name' => '计量单位', 'code' => 'unit']);
-        $this->withToken($this->token)->postJson("/api/v1/dictionaries/{$d->id}/items", ['label' => '个', 'value' => 'pc', 'sort' => 1, 'status' => 1])
+        $this->withToken($this->token)->postJson("/api/v1/dictionaries/{$d->id}/items", [
+            'label' => '个',
+            'value' => 'pc',
+            'sort' => 1,
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         $item = DictionaryItem::first();
-        $this->withToken($this->token)->putJson("/api/v1/dictionaries/items/{$item->id}", ['label' => '箱', 'value' => 'box', 'sort' => 2, 'status' => 1])
+        $this->withToken($this->token)->putJson("/api/v1/dictionaries/items/{$item->id}", [
+            'label' => '箱',
+            'value' => 'box',
+            'sort' => 2,
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         $this->withToken($this->token)->deleteJson("/api/v1/dictionaries/items/{$item->id}")->assertJsonPath('code', 0);
     }

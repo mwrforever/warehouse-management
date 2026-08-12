@@ -6,18 +6,40 @@
       <nav>
         <RouterLink to="/dashboard" class="menu-item">仪表盘</RouterLink>
         <div class="menu-group">系统管理</div>
-        <RouterLink v-if="auth.has('user.list')" to="/system/users" class="menu-item">用户管理</RouterLink>
-        <RouterLink v-if="auth.has('role.list')" to="/system/roles" class="menu-item">角色管理</RouterLink>
-        <RouterLink v-if="auth.has('dictionary.list')" to="/system/dictionaries" class="menu-item">字典管理</RouterLink>
+        <RouterLink v-if="auth.has('user.list')" to="/system/users" class="menu-item"
+          >用户管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('role.list')" to="/system/roles" class="menu-item"
+          >角色管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('dictionary.list')" to="/system/dictionaries" class="menu-item"
+          >字典管理</RouterLink
+        >
         <div class="menu-group">基础资料</div>
-        <RouterLink v-if="auth.has('product.list')" to="/master/products" class="menu-item">商品管理</RouterLink>
-        <RouterLink v-if="auth.has('category.list')" to="/master/categories" class="menu-item">分类管理</RouterLink>
-        <RouterLink v-if="auth.has('unit.list')" to="/master/units" class="menu-item">单位管理</RouterLink>
-        <RouterLink v-if="auth.has('warehouse.list')" to="/master/warehouses" class="menu-item">仓库管理</RouterLink>
-        <RouterLink v-if="auth.has('supplier.list')" to="/master/suppliers" class="menu-item">供应商管理</RouterLink>
-        <RouterLink v-if="auth.has('customer.list')" to="/master/customers" class="menu-item">客户管理</RouterLink>
-        <RouterLink v-if="auth.has('bom.list')" to="/master/boms" class="menu-item">BOM 管理</RouterLink>
-        <RouterLink v-if="auth.has('process.list')" to="/master/processes" class="menu-item">工序管理</RouterLink>
+        <RouterLink v-if="auth.has('product.list')" to="/master/products" class="menu-item"
+          >商品管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('category.list')" to="/master/categories" class="menu-item"
+          >分类管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('unit.list')" to="/master/units" class="menu-item"
+          >单位管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('warehouse.list')" to="/master/warehouses" class="menu-item"
+          >仓库管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('supplier.list')" to="/master/suppliers" class="menu-item"
+          >供应商管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('customer.list')" to="/master/customers" class="menu-item"
+          >客户管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('bom.list')" to="/master/boms" class="menu-item"
+          >BOM 管理</RouterLink
+        >
+        <RouterLink v-if="auth.has('process.list')" to="/master/processes" class="menu-item"
+          >工序管理</RouterLink
+        >
       </nav>
     </aside>
     <div class="main">
@@ -55,15 +77,61 @@ async function onCommand(cmd: string) {
 
 <style scoped>
 /* 布局样式：遵循设计令牌（深色侧边栏 + 浅色内容区） */
-.layout { display: flex; min-height: 100vh; }
-.sidebar { width: 220px; background: var(--color-foreground); color: #fff; padding: var(--space-2xl) var(--space-lg); }
-.brand { font-size: 18px; font-weight: 700; margin-bottom: var(--space-2xl); }
-.menu-group { margin: var(--space-xl) 0 var(--space-md); color: #94a3b8; font-size: 12px; }
-.menu-item { display: block; padding: var(--space-md) var(--space-lg); color: #cbd5e1; text-decoration: none; border-radius: 6px; cursor: pointer; }
-.menu-item:hover { background: #1e293b; color: #fff; }
-.menu-item.router-link-active { background: var(--color-primary); color: var(--color-on-primary); }
-.main { flex: 1; background: var(--color-background); display: flex; flex-direction: column; }
-.topbar { height: 56px; background: #fff; border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; padding: 0 var(--space-2xl); }
-.user-name { cursor: pointer; }
-.content { padding: var(--space-2xl); }
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+.sidebar {
+  width: 220px;
+  background: var(--color-foreground);
+  color: #fff;
+  padding: var(--space-2xl) var(--space-lg);
+}
+.brand {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: var(--space-2xl);
+}
+.menu-group {
+  margin: var(--space-xl) 0 var(--space-md);
+  color: #94a3b8;
+  font-size: 12px;
+}
+.menu-item {
+  display: block;
+  padding: var(--space-md) var(--space-lg);
+  color: #cbd5e1;
+  text-decoration: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.menu-item:hover {
+  background: #1e293b;
+  color: #fff;
+}
+.menu-item.router-link-active {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+.main {
+  flex: 1;
+  background: var(--color-background);
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  height: 56px;
+  background: #fff;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--space-2xl);
+}
+.user-name {
+  cursor: pointer;
+}
+.content {
+  padding: var(--space-2xl);
+}
 </style>

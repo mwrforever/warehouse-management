@@ -1,5 +1,7 @@
 <?php
+
 // 工序接口测试：CRUD/编码唯一/排序（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\Process;
@@ -37,7 +39,12 @@ class ProcessTest extends TestCase
     public function test_store_and_duplicate_code_fails_with_1112(): void
     {
         // 正常路径：创建成功
-        $this->withToken($this->token)->postJson('/api/v1/processes', ['name' => '车削', 'code' => 'PROC-02', 'sort' => 2, 'description' => ''])
+        $this->withToken($this->token)->postJson('/api/v1/processes', [
+            'name' => '车削',
+            'code' => 'PROC-02',
+            'sort' => 2,
+            'description' => '',
+        ])
             ->assertJsonPath('code', 0);
         // 异常路径：重复编码 1112
         $this->withToken($this->token)->postJson('/api/v1/processes', ['name' => '重复', 'code' => 'PROC-02'])
@@ -48,7 +55,12 @@ class ProcessTest extends TestCase
     {
         // 正常路径：更新排序生效
         $p = Process::create(['name' => '测试工序', 'code' => 'PROC-99', 'sort' => 99, 'status' => 1]);
-        $this->withToken($this->token)->putJson("/api/v1/processes/{$p->id}", ['name' => '测试工序', 'code' => 'PROC-99', 'sort' => 1, 'status' => 1])
+        $this->withToken($this->token)->putJson("/api/v1/processes/{$p->id}", [
+            'name' => '测试工序',
+            'code' => 'PROC-99',
+            'sort' => 1,
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('processes', ['id' => $p->id, 'sort' => 1]);
     }

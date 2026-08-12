@@ -3,22 +3,30 @@
   <div class="page-card">
     <div class="toolbar">
       <span class="page-title">工序管理</span>
-      <el-button v-if="auth.has('process.create')" class="btn-primary" @click="openCreate">新 建</el-button>
+      <el-button v-if="auth.has('process.create')" class="btn-primary" @click="openCreate"
+        >新 建</el-button
+      >
     </div>
-    <el-table :data="rows" v-loading="loading">
+    <el-table v-loading="loading" :data="rows">
       <el-table-column prop="sort" label="排序" width="80" />
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="code" label="编码" class-name="font-code" />
       <el-table-column prop="description" label="说明" show-overflow-tooltip />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag>
+          <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
+            row.status === 1 ? '启用' : '停用'
+          }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="auth.has('process.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button v-if="auth.has('process.delete')" link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('process.update')" link type="primary" @click="openEdit(row)"
+            >编 辑</el-button
+          >
+          <el-button v-if="auth.has('process.delete')" link type="danger" @click="remove(row)"
+            >删 除</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
@@ -28,12 +36,18 @@
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="编码" required><el-input v-model="form.code" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sort" :min="0" /></el-form-item>
-        <el-form-item label="说明"><el-input v-model="form.description" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="状态"><el-switch v-model="form.status" :active-value="1" :inactive-value="0" /></el-form-item>
+        <el-form-item label="说明"
+          ><el-input v-model="form.description" type="textarea" :rows="2"
+        /></el-form-item>
+        <el-form-item label="状态"
+          ><el-switch v-model="form.status" :active-value="1" :inactive-value="0"
+        /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取 消</el-button>
-        <el-button type="primary" class="btn-primary" :loading="saving" @click="save">保 存</el-button>
+        <el-button type="primary" class="btn-primary" :loading="saving" @click="save"
+          >保 存</el-button
+        >
       </template>
     </el-dialog>
   </div>
@@ -51,7 +65,25 @@ const rows = ref<ProcessItem[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const saving = ref(false)
-const form = reactive<any>({})
+
+// 工序表单：sort 决定生产模块下拉顺序
+interface ProcessForm {
+  id: number | null
+  name: string
+  code: string
+  sort: number
+  description: string
+  status: number
+}
+
+const form = reactive<ProcessForm>({
+  id: null,
+  name: '',
+  code: '',
+  sort: 0,
+  description: '',
+  status: 1,
+})
 
 // 加载全量列表（后端已按 sort 升序）
 async function load() {
@@ -68,7 +100,14 @@ function openCreate() {
   dialogVisible.value = true
 }
 function openEdit(row: ProcessItem) {
-  Object.assign(form, { id: row.id, name: row.name, code: row.code, sort: row.sort, description: row.description, status: row.status })
+  Object.assign(form, {
+    id: row.id,
+    name: row.name,
+    code: row.code,
+    sort: row.sort,
+    description: row.description,
+    status: row.status,
+  })
   dialogVisible.value = true
 }
 
@@ -77,8 +116,22 @@ async function save() {
   if (!form.name || !form.code) return ElMessage.warning('请填写名称与编码')
   saving.value = true
   try {
-    if (form.id) await processApi.update(form.id, { name: form.name, code: form.code, sort: form.sort, description: form.description, status: form.status })
-    else await processApi.create({ name: form.name, code: form.code, sort: form.sort, description: form.description, status: form.status })
+    if (form.id)
+      await processApi.update(form.id, {
+        name: form.name,
+        code: form.code,
+        sort: form.sort,
+        description: form.description,
+        status: form.status,
+      })
+    else
+      await processApi.create({
+        name: form.name,
+        code: form.code,
+        sort: form.sort,
+        description: form.description,
+        status: form.status,
+      })
     ElMessage.success('保存成功')
     dialogVisible.value = false
     load()
@@ -110,8 +163,26 @@ onMounted(load)
 
 <style scoped>
 /* 页面骨架同上 */
-.page-card { background: #fff; border-radius: 8px; box-shadow: var(--shadow-sm); padding: var(--space-2xl); }
-.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-xl); }
-.page-title { font-size: 18px; font-weight: 600; color: var(--color-foreground); }
-.btn-primary { background: var(--color-accent); border-color: var(--color-accent); cursor: pointer; }
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-2xl);
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-xl);
+}
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  cursor: pointer;
+}
 </style>

@@ -1,5 +1,7 @@
 <?php
+
 // 新建用户表单校验：用户名唯一、密码强度、角色数组
+
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;

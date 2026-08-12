@@ -1,5 +1,7 @@
 <?php
+
 // RBAC 测试：权限中间件三个分支（admin bypass / 授权放行 / 无权限拒绝）+ 权限合并去重（核心安全路径，100% 覆盖）
+
 namespace Tests\Feature;
 
 use App\Models\Permission;

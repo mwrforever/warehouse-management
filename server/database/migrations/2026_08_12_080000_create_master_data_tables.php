@@ -1,4 +1,5 @@
 <?php
+
 // 基础资料核心表：分类/单位/仓库/库位/供应商/客户/工序/商品/BOM（头+明细）
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;

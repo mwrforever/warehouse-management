@@ -1,5 +1,7 @@
 <?php
+
 // 商品控制器：分页筛选 + CRUD + 扫码查询 + 删除保护（被 BOM/业务单据引用）
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -37,6 +39,7 @@ class ProductController extends Controller
             $query->where('status', $request->input('status'));
         }
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
             'items' => $rows->map(fn ($p) => $this->payload($p)),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
@@ -48,7 +51,7 @@ class ProductController extends Controller
     {
         return [
             'id' => $p->id, 'name' => $p->name, 'code' => $p->code, 'type' => $p->type,
-            'type_label' => self::TYPE_LABELS[$p->type] ?? $p->type,
+            'type_label' => self::TYPE_LABELS[$p->type],
             'category_id' => $p->category_id, 'category_name' => $p->category?->name,
             'unit_id' => $p->unit_id, 'unit_name' => $p->unit?->name,
             'spec' => $p->spec, 'barcode' => $p->barcode,
@@ -95,6 +98,7 @@ class ProductController extends Controller
             'safety_min' => $min, 'safety_max' => $max,
             'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
         ]);
+
         return $this->ok(['id' => $product->id]);
     }
 
@@ -134,6 +138,7 @@ class ProductController extends Controller
             'safety_min' => $min, 'safety_max' => $max,
             'status' => $data['status'] ?? $product->status, 'remark' => $data['remark'] ?? null,
         ]);
+
         return $this->ok();
     }
 
@@ -151,6 +156,7 @@ class ProductController extends Controller
             return $this->fail(1116, '商品已被业务单据使用，不可删除');
         }
         $product->delete();
+
         return $this->ok();
     }
 
@@ -162,6 +168,14 @@ class ProductController extends Controller
             return $this->fail(1117, '条码未匹配到商品');
         }
         $p = $this->payload($product);
-        return $this->ok(['id' => $p['id'], 'name' => $p['name'], 'code' => $p['code'], 'type' => $p['type'], 'spec' => $p['spec'], 'unit_name' => $p['unit_name']]);
+
+        return $this->ok([
+            'id' => $p['id'],
+            'name' => $p['name'],
+            'code' => $p['code'],
+            'type' => $p['type'],
+            'spec' => $p['spec'],
+            'unit_name' => $p['unit_name'],
+        ]);
     }
 }

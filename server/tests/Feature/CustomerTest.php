@@ -1,11 +1,15 @@
 <?php
+
 // 客户接口测试：CRUD/搜索/编码唯一/删除保护（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\Customer;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class CustomerTest extends TestCase
@@ -37,7 +41,14 @@ class CustomerTest extends TestCase
     public function test_store_and_duplicate_code_fails_with_1110(): void
     {
         // 正常路径：创建成功
-        $this->withToken($this->token)->postJson('/api/v1/customers', ['name' => '测试客户', 'code' => 'CUS-001', 'contact' => '张三', 'phone' => '13800000000', 'address' => '工业园1号', 'status' => 1])
+        $this->withToken($this->token)->postJson('/api/v1/customers', [
+            'name' => '测试客户',
+            'code' => 'CUS-001',
+            'contact' => '张三',
+            'phone' => '13800000000',
+            'address' => '工业园1号',
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         // 异常路径：重复编码 1110
         $this->withToken($this->token)->postJson('/api/v1/customers', ['name' => '重复', 'code' => 'CUS-001'])
@@ -48,7 +59,13 @@ class CustomerTest extends TestCase
     {
         // 正常路径：更新联系人电话
         $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'contact' => '张三', 'status' => 1]);
-        $this->withToken($this->token)->putJson("/api/v1/customers/{$c->id}", ['name' => '测试客户', 'code' => 'CUS-001', 'contact' => '王五', 'phone' => '13900000000', 'status' => 1])
+        $this->withToken($this->token)->putJson("/api/v1/customers/{$c->id}", [
+            'name' => '测试客户',
+            'code' => 'CUS-001',
+            'contact' => '王五',
+            'phone' => '13900000000',
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('customers', ['id' => $c->id, 'contact' => '王五', 'phone' => '13900000000']);
     }
@@ -65,16 +82,16 @@ class CustomerTest extends TestCase
     {
         // 边界路径：sales_orders 表存在且有引用时删除被拒 1111（临时表验证守卫联动）
         $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
-        \Illuminate\Support\Facades\Schema::create('sales_orders', function ($table) {
+        Schema::create('sales_orders', function ($table) {
             $table->id();
             $table->unsignedBigInteger('customer_id');
         });
-        \Illuminate\Support\Facades\DB::table('sales_orders')->insert(['customer_id' => $c->id]);
+        DB::table('sales_orders')->insert(['customer_id' => $c->id]);
         try {
             $this->withToken($this->token)->deleteJson("/api/v1/customers/{$c->id}")
                 ->assertJsonPath('code', 1111);
         } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('sales_orders');
+            Schema::dropIfExists('sales_orders');
         }
     }
 }

@@ -1,5 +1,7 @@
 <?php
+
 // 认证接口测试：登录/登出/me 全链路（核心路径，100% 覆盖）
+
 namespace Tests\Feature;
 
 use App\Models\User;
@@ -14,7 +16,13 @@ class AuthTest extends TestCase
     {
         parent::setUp();
         // 种子：admin 用户（密码 admin123）与普通用户（禁用态）
-        User::create(['name' => '管理员', 'username' => 'admin', 'email' => 'admin@test.com', 'password' => bcrypt('admin123'), 'status' => 1]);
+        User::create([
+            'name' => '管理员',
+            'username' => 'admin',
+            'email' => 'admin@test.com',
+            'password' => bcrypt('admin123'),
+            'status' => 1,
+        ]);
         User::create(['name' => '禁用用户', 'username' => 'disabled', 'email' => 'd@test.com', 'password' => bcrypt('pass'), 'status' => 0]);
     }
 

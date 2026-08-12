@@ -1,11 +1,15 @@
 <?php
+
 // 供应商接口测试：CRUD/搜索/编码唯一/删除保护（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\Role;
 use App\Models\Supplier;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class SupplierTest extends TestCase
@@ -37,7 +41,14 @@ class SupplierTest extends TestCase
     public function test_store_and_duplicate_code_fails_with_1108(): void
     {
         // 正常路径：创建成功
-        $this->withToken($this->token)->postJson('/api/v1/suppliers', ['name' => '测试供应商', 'code' => 'SUP-001', 'contact' => '张三', 'phone' => '13800000000', 'address' => '工业园1号', 'status' => 1])
+        $this->withToken($this->token)->postJson('/api/v1/suppliers', [
+            'name' => '测试供应商',
+            'code' => 'SUP-001',
+            'contact' => '张三',
+            'phone' => '13800000000',
+            'address' => '工业园1号',
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         // 异常路径：重复编码 1108
         $this->withToken($this->token)->postJson('/api/v1/suppliers', ['name' => '重复', 'code' => 'SUP-001'])
@@ -48,7 +59,13 @@ class SupplierTest extends TestCase
     {
         // 正常路径：更新联系人电话
         $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'contact' => '张三', 'status' => 1]);
-        $this->withToken($this->token)->putJson("/api/v1/suppliers/{$s->id}", ['name' => '测试供应商', 'code' => 'SUP-001', 'contact' => '王五', 'phone' => '13900000000', 'status' => 1])
+        $this->withToken($this->token)->putJson("/api/v1/suppliers/{$s->id}", [
+            'name' => '测试供应商',
+            'code' => 'SUP-001',
+            'contact' => '王五',
+            'phone' => '13900000000',
+            'status' => 1,
+        ])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('suppliers', ['id' => $s->id, 'contact' => '王五', 'phone' => '13900000000']);
     }
@@ -65,16 +82,16 @@ class SupplierTest extends TestCase
     {
         // 边界路径：purchase_orders 表存在且有引用时删除被拒 1109（临时表验证守卫联动）
         $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
-        \Illuminate\Support\Facades\Schema::create('purchase_orders', function ($table) {
+        Schema::create('purchase_orders', function ($table) {
             $table->id();
             $table->unsignedBigInteger('supplier_id');
         });
-        \Illuminate\Support\Facades\DB::table('purchase_orders')->insert(['supplier_id' => $s->id]);
+        DB::table('purchase_orders')->insert(['supplier_id' => $s->id]);
         try {
             $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
                 ->assertJsonPath('code', 1109);
         } finally {
-            \Illuminate\Support\Facades\Schema::dropIfExists('purchase_orders');
+            Schema::dropIfExists('purchase_orders');
         }
     }
 }

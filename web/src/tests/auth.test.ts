@@ -1,5 +1,5 @@
 // 认证 store 测试：登录/登出/权限状态流转（核心路径）
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAuthStore } from '../stores/auth'
 
@@ -13,6 +13,10 @@ vi.mock('../api/http', () => ({
 
 import { http } from '../api/http'
 
+// mock 句柄：运行时为 vi.fn()，静态类型用 vitest Mock（保留 mockResolvedValue 等链式 API，替代 any）
+const mockPost = http.post as Mock
+const mockGet = http.get as Mock
+
 describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -23,8 +27,14 @@ describe('auth store', () => {
   it('登录成功后保存 token 与用户权限', async () => {
     // 正常路径：login 保存 token、permissions
     const store = useAuthStore()
-    ;(http.post as any).mockResolvedValue({
-      data: { code: 0, data: { token: 'tk-1', user: { id: 1, name: 'a', username: 'admin', roles: [], permissions: ['user.list'] } } },
+    mockPost.mockResolvedValue({
+      data: {
+        code: 0,
+        data: {
+          token: 'tk-1',
+          user: { id: 1, name: 'a', username: 'admin', roles: [], permissions: ['user.list'] },
+        },
+      },
     })
     await store.login('admin', 'admin123')
     expect(localStorage.getItem('token')).toBe('tk-1')
@@ -35,7 +45,7 @@ describe('auth store', () => {
   it('登录失败抛出后端 message', async () => {
     // 异常路径：1001 时抛错且不存 token
     const store = useAuthStore()
-    ;(http.post as any).mockResolvedValue({ data: { code: 1001, message: '用户名或密码错误' } })
+    mockPost.mockResolvedValue({ data: { code: 1001, message: '用户名或密码错误' } })
     await expect(store.login('admin', 'bad')).rejects.toThrow('用户名或密码错误')
     expect(localStorage.getItem('token')).toBeNull()
   })
@@ -45,7 +55,7 @@ describe('auth store', () => {
     const store = useAuthStore()
     localStorage.setItem('token', 'tk-1')
     store.permissions = ['user.list']
-    ;(http.post as any).mockResolvedValue({ data: { code: 0 } })
+    mockPost.mockResolvedValue({ data: { code: 0 } })
     await store.logout()
     expect(localStorage.getItem('token')).toBeNull()
     expect(store.permissions).toEqual([])
@@ -55,7 +65,7 @@ describe('auth store', () => {
     // 异常路径：token 失效时清空状态
     const store = useAuthStore()
     localStorage.setItem('token', 'tk-old')
-    ;(http.get as any).mockRejectedValue({ response: { status: 401 } })
+    mockGet.mockRejectedValue({ response: { status: 401 } })
     await store.fetchMe()
     expect(store.user).toBeNull()
     expect(localStorage.getItem('token')).toBeNull()

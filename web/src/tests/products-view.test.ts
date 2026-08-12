@@ -2,7 +2,7 @@
 // 背景：el-tree-select 未配置 node-key 时取值默认为数据项的 value 字段，
 // 而分类数据项为 {id, name, ...}，导致选择分类后 category_id 绑定失效（真实缺陷回归用例）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import ProductsView from '../views/master/ProductsView.vue'
@@ -28,7 +28,9 @@ vi.mock('../api/category', () => ({
 }))
 vi.mock('../api/unit', () => ({
   unitApi: {
-    list: vi.fn().mockResolvedValue({ items: [{ id: 1, name: '个', code: 'pc', status: 1 }], total: 1 }),
+    list: vi
+      .fn()
+      .mockResolvedValue({ items: [{ id: 1, name: '个', code: 'pc', status: 1 }], total: 1 }),
   },
 }))
 import { productApi } from '../api/product'
@@ -47,20 +49,25 @@ describe('商品页分类树选择与安全库存校验', () => {
 
   // 挂载组件（attachTo body：下拉默认 teleport 到 body）
   function mountView() {
-    return mount(ProductsView, { attachTo: document.body, global: { plugins: [ElementPlus, pinia] } })
+    return mount(ProductsView, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus, pinia] },
+    })
   }
 
   // 点击指定文案按钮（新建/保存）
-  async function clickButton(wrapper: any, text: string) {
-    const btn = wrapper.findAll('button').find((b: any) => b.text().trim() === text)
+  async function clickButton(wrapper: VueWrapper, text: string) {
+    const btn = wrapper.findAll('button').find((b) => b.text().trim() === text)
     expect(btn, `按钮「${text}」应存在`).toBeTruthy()
     await btn!.trigger('click')
     await flushPromises()
   }
 
   // 按表单项 label 填充 input
-  async function fillByLabel(wrapper: any, label: string, val: string) {
-    const item = wrapper.findAll('.el-form-item').find((fi: any) => fi.find('.el-form-item__label').text().trim() === label)
+  async function fillByLabel(wrapper: VueWrapper, label: string, val: string) {
+    const item = wrapper
+      .findAll('.el-form-item')
+      .find((fi) => fi.find('.el-form-item__label').text().trim() === label)
     expect(item, `表单项「${label}」应存在`).toBeTruthy()
     await item!.find('input').setValue(val)
   }
@@ -93,14 +100,19 @@ describe('商品页分类树选择与安全库存校验', () => {
     // 单位下拉选择「个」
     await wrapper.findAll('.el-dialog .el-select__wrapper')[1].trigger('click')
     await flushPromises()
-    const unitOption = [...document.querySelectorAll('.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item')]
-      .find((o) => (o as HTMLElement).textContent!.trim() === '个')
+    const unitOption = [
+      ...document.querySelectorAll(
+        '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
+      ),
+    ].find((o) => (o as HTMLElement).textContent!.trim() === '个')
     expect(unitOption, '单位选项「个」应存在').toBeTruthy()
     ;(unitOption as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
 
     await clickButton(wrapper, '保 存')
-    expect(productApi.create).toHaveBeenCalledWith(expect.objectContaining({ category_id: 1, code: 'MAT-001', unit_id: 1 }))
+    expect(productApi.create).toHaveBeenCalledWith(
+      expect.objectContaining({ category_id: 1, code: 'MAT-001', unit_id: 1 }),
+    )
     wrapper.unmount()
   })
 
@@ -115,8 +127,11 @@ describe('商品页分类树选择与安全库存校验', () => {
     await fillByLabel(wrapper, '编码', 'MAT-001')
     await wrapper.findAll('.el-dialog .el-select__wrapper')[1].trigger('click')
     await flushPromises()
-    const unitOption = [...document.querySelectorAll('.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item')]
-      .find((o) => (o as HTMLElement).textContent!.trim() === '个')
+    const unitOption = [
+      ...document.querySelectorAll(
+        '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
+      ),
+    ].find((o) => (o as HTMLElement).textContent!.trim() === '个')
     expect(unitOption, '单位选项「个」应存在').toBeTruthy()
     ;(unitOption as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()

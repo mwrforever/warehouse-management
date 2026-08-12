@@ -1,5 +1,7 @@
 <?php
+
 // 基础资料种子：E2E 前置与手工演示所需的最小主数据集
+
 namespace Database\Seeders;
 
 use App\Models\Category;

@@ -1,5 +1,7 @@
 <?php
+
 // 更新用户表单校验：用户名唯一（排除自身）、密码可选、角色数组
+
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;

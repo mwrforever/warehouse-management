@@ -24,11 +24,20 @@ export const warehouseApi = {
     return data.data as { items: WarehouseItem[]; total: number; page: number; per_page: number }
   },
   // 新建仓库
-  async create(payload: { name: string; code: string; address?: string; manager?: string; status?: number }) {
+  async create(payload: {
+    name: string
+    code: string
+    address?: string
+    manager?: string
+    status?: number
+  }) {
     await http.post('/warehouses', payload)
   },
   // 更新仓库
-  async update(id: number, payload: { name: string; code: string; address?: string; manager?: string; status?: number }) {
+  async update(
+    id: number,
+    payload: { name: string; code: string; address?: string; manager?: string; status?: number },
+  ) {
     await http.put(`/warehouses/${id}`, payload)
   },
   // 删除仓库
@@ -41,7 +50,10 @@ export const warehouseApi = {
     return data.data as { items: LocationItem[] }
   },
   // 新建库位
-  async createLocation(warehouseId: number, payload: { name: string; code: string; status?: number }) {
+  async createLocation(
+    warehouseId: number,
+    payload: { name: string; code: string; status?: number },
+  ) {
     await http.post(`/warehouses/${warehouseId}/locations`, payload)
   },
   // 更新库位

@@ -25,3 +25,7 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+# E2E 测试专用 SQLite 数据库（playwright webServer 每次重建）
+database/e2e.sqlite
+# PHPStan 分析缓存
+storage/phpstan

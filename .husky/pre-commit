@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# 提交前检查（pre-commit）：
+# 1. 前端：lint-staged 检查暂存文件（eslint/prettier/stylelint 自动修复并重新暂存）
+# 2. 后端：Pint 检查暂存 PHP 文件（自动修复风格）
+cd web
+npx lint-staged
+
+# 后端 PHP 文件：Pint 自动修复（仅暂存文件，快速反馈）
+cd ../server
+# --relative：cwd 已是 server/，输出相对路径（app/...）供 pint 直接使用
+STAGED_PHP=$(git diff --cached --relative --name-only --diff-filter=ACM -- '*.php')
+if [ -n "$STAGED_PHP" ]; then
+  echo "$STAGED_PHP" | xargs vendor/bin/pint
+  # pint 修复后重新暂存
+  echo "$STAGED_PHP" | xargs git add
+fi

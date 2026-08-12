@@ -1,5 +1,7 @@
 <?php
+
 // 供应商控制器：CRUD + 搜索 + 编码唯一 + 被采购单据引用保护
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -25,6 +27,7 @@ class SupplierController extends Controller
             $query->where('status', $request->input('status'));
         }
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
             'items' => $rows->map(fn ($s) => [
                 'id' => $s->id, 'name' => $s->name, 'code' => $s->code, 'contact' => $s->contact,
@@ -54,6 +57,7 @@ class SupplierController extends Controller
             'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
             'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? 1,
         ]);
+
         return $this->ok(['id' => $supplier->id]);
     }
 
@@ -77,6 +81,7 @@ class SupplierController extends Controller
             'phone' => $data['phone'] ?? $supplier->phone, 'address' => $data['address'] ?? $supplier->address,
             'remark' => $data['remark'] ?? $supplier->remark, 'status' => $data['status'] ?? $supplier->status,
         ]);
+
         return $this->ok();
     }
 
@@ -87,6 +92,7 @@ class SupplierController extends Controller
             return $this->fail(1109, '供应商已被采购单据使用，不可删除');
         }
         $supplier->delete();
+
         return $this->ok();
     }
 }

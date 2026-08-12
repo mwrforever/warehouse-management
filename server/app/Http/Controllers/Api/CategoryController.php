@@ -1,5 +1,7 @@
 <?php
+
 // 商品分类控制器：树形列表 + CRUD + 删除保护（子分类/被商品引用）
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -18,17 +20,25 @@ class CategoryController extends Controller
         $all = Category::orderBy('sort')->orderBy('id')->get();
         // 递归组装子树（仅顶级作为根）
         $tree = $all->where('parent_id', 0)->values()->map(fn ($c) => $this->withChildren($c, $all))->values();
+
         return $this->ok($tree);
     }
 
     // 组装节点与子孙（children 为空时不输出该键，保持结构精简）
     private function withChildren(Category $category, $all): array
     {
-        $node = ['id' => $category->id, 'name' => $category->name, 'parent_id' => $category->parent_id, 'sort' => $category->sort, 'status' => $category->status];
+        $node = [
+            'id' => $category->id,
+            'name' => $category->name,
+            'parent_id' => $category->parent_id,
+            'sort' => $category->sort,
+            'status' => $category->status,
+        ];
         $children = $all->where('parent_id', $category->id)->values()->map(fn ($c) => $this->withChildren($c, $all))->values();
         if ($children->isNotEmpty()) {
             $node['children'] = $children;
         }
+
         return $node;
     }
 
@@ -55,6 +65,7 @@ class CategoryController extends Controller
             'name' => $data['name'], 'parent_id' => $parentId,
             'sort' => $data['sort'] ?? 0, 'status' => $data['status'] ?? 1,
         ]);
+
         return $this->ok(['id' => $category->id]);
     }
 
@@ -89,6 +100,7 @@ class CategoryController extends Controller
             'name' => $data['name'], 'parent_id' => $parentId,
             'sort' => $data['sort'] ?? $category->sort, 'status' => $data['status'] ?? $category->status,
         ]);
+
         return $this->ok();
     }
 
@@ -102,6 +114,7 @@ class CategoryController extends Controller
             return $this->fail(1102, '分类已被商品使用，不可删除');
         }
         $category->delete();
+
         return $this->ok();
     }
 }

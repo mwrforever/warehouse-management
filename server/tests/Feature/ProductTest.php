@@ -1,5 +1,7 @@
 <?php
+
 // 商品接口测试：CRUD/筛选/编码条码唯一/上下限校验/扫码查询/删除保护（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\BomHeader;
@@ -17,8 +19,11 @@ class ProductTest extends TestCase
     use RefreshDatabase;
 
     private string $token;
+
     private Category $rawCat;
+
     private Category $finCat;
+
     private Unit $unit;
 
     protected function setUp(): void
@@ -36,8 +41,22 @@ class ProductTest extends TestCase
     public function test_index_filters_by_keyword_type_and_category(): void
     {
         // 正常路径：关键字/类型/分类组合过滤
-        Product::create(['name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
-        Product::create(['name' => '成品A', 'code' => 'FIN-001', 'type' => 'finished', 'category_id' => $this->finCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        Product::create([
+            'name' => '成品A',
+            'code' => 'FIN-001',
+            'type' => 'finished',
+            'category_id' => $this->finCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->getJson('/api/v1/products?keyword=RAW-001&type=raw_material')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
@@ -58,7 +77,14 @@ class ProductTest extends TestCase
     public function test_store_duplicate_code_fails_with_1114(): void
     {
         // 异常路径：编码重复 1114
-        Product::create(['name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->postJson('/api/v1/products', [
             'name' => '重复', 'code' => 'RAW-001', 'type' => 'raw_material',
             'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
@@ -68,7 +94,15 @@ class ProductTest extends TestCase
     public function test_store_duplicate_barcode_fails_with_1115(): void
     {
         // 异常路径：条码重复 1115
-        Product::create(['name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'barcode' => '888888', 'status' => 1]);
+        Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'barcode' => '888888',
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->postJson('/api/v1/products', [
             'name' => '重复', 'code' => 'MAT-002', 'type' => 'raw_material',
             'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'barcode' => '888888', 'status' => 1,
@@ -99,7 +133,14 @@ class ProductTest extends TestCase
     public function test_update_product_keeps_unit_name(): void
     {
         // 正常路径：更新规格与上下限
-        $p = Product::create(['name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $p = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->putJson("/api/v1/products/{$p->id}", [
             'name' => '铝材2', 'code' => 'RAW-001', 'type' => 'raw_material',
             'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'spec' => '2mm',
@@ -111,7 +152,15 @@ class ProductTest extends TestCase
     public function test_by_barcode_returns_product_info(): void
     {
         // 正常路径：扫码命中返回商品信息
-        Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $this->finCat->id, 'unit_id' => $this->unit->id, 'barcode' => '888888', 'status' => 1]);
+        Product::create([
+            'name' => '成品B',
+            'code' => 'FIN-002',
+            'type' => 'finished',
+            'category_id' => $this->finCat->id,
+            'unit_id' => $this->unit->id,
+            'barcode' => '888888',
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->getJson('/api/v1/products/barcode/888888')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.name', '成品B')
@@ -128,9 +177,29 @@ class ProductTest extends TestCase
     public function test_destroy_referenced_by_bom_fails_with_1116(): void
     {
         // 异常路径：被 BOM 明细引用的商品不可删 1116
-        $material = Product::create(['name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
-        $fin = Product::create(['name' => '成品A', 'code' => 'FIN-001', 'type' => 'finished', 'category_id' => $this->finCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
-        $bom = BomHeader::create(['code' => 'BOM20260812-001', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        $material = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $fin = Product::create([
+            'name' => '成品A',
+            'code' => 'FIN-001',
+            'type' => 'finished',
+            'category_id' => $this->finCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $bom = BomHeader::create([
+            'code' => 'BOM20260812-001',
+            'product_id' => $fin->id,
+            'version' => 'v1',
+            'quantity' => 1,
+            'status' => 1,
+        ]);
         BomItem::create(['bom_header_id' => $bom->id, 'material_id' => $material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]);
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$material->id}")
             ->assertJsonPath('code', 1116);
@@ -139,7 +208,14 @@ class ProductTest extends TestCase
     public function test_destroy_unreferenced_product_succeeds(): void
     {
         // 正常路径：未被引用的商品可删
-        $p = Product::create(['name' => '临时', 'code' => 'TMP-001', 'type' => 'raw_material', 'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $p = Product::create([
+            'name' => '临时',
+            'code' => 'TMP-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")->assertJsonPath('code', 0);
         $this->assertDatabaseMissing('products', ['id' => $p->id]);
     }

@@ -28,6 +28,7 @@ class BomController extends Controller
             $query->where('code', 'like', "%{$keyword}%");
         }
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
             'items' => $rows->map(fn ($b) => [
                 'id' => $b->id, 'code' => $b->code, 'product_id' => $b->product_id,
@@ -55,13 +56,14 @@ class BomController extends Controller
                     // 生成单号：BOM{yyyyMMdd}-{3位流水}，流水 = 当日已有单号数 + 1
                     $date = now()->format('Ymd');
                     $seq = BomHeader::where('code', 'like', "BOM{$date}-%")->count() + 1;
-                    $code = "BOM{$date}-" . str_pad((string) $seq, 3, '0', STR_PAD_LEFT);
+                    $code = "BOM{$date}-".str_pad((string) $seq, 3, '0', STR_PAD_LEFT);
 
                     $bom = BomHeader::create([
                         'code' => $code, 'product_id' => $data['product_id'], 'version' => $data['version'],
                         'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'] ?? null,
                     ]);
                     $bom->items()->createMany($data['items']);
+
                     return $this->ok(['id' => $bom->id, 'code' => $code]);
                 });
             } catch (QueryException $e) {
@@ -91,6 +93,7 @@ class BomController extends Controller
             // 明细全量替换：先删后建（事务内，失败自动回滚）
             $bom->items()->delete();
             $bom->items()->createMany($data['items']);
+
             return $this->ok();
         });
     }
@@ -102,6 +105,7 @@ class BomController extends Controller
             return $this->fail(1121, 'BOM 已被生产工单使用，不可删除');
         }
         $bom->delete();
+
         return $this->ok();
     }
 
@@ -113,6 +117,7 @@ class BomController extends Controller
                 'id' => $i->id, 'material_id' => $i->material_id, 'material_name' => $i->material?->name,
                 'quantity' => (float) $i->quantity, 'unit_id' => $i->unit_id, 'unit_name' => $i->unit?->name,
             ]);
+
         return $this->ok(['items' => $items]);
     }
 
@@ -131,6 +136,7 @@ class BomController extends Controller
             }
             $bom->update(['status' => $status]);
         });
+
         return $this->ok();
     }
 
@@ -187,6 +193,7 @@ class BomController extends Controller
         if ($ignoreId) {
             $query->where('id', '!=', $ignoreId);
         }
+
         return $query->exists();
     }
 }

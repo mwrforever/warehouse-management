@@ -1,5 +1,7 @@
 <?php
+
 // 分类接口测试：树形/两级限制/删除保护（正常+边界+异常）
+
 namespace Tests\Feature;
 
 use App\Models\Category;

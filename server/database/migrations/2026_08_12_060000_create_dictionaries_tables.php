@@ -1,4 +1,5 @@
 <?php
+
 // 数据字典表：字典头 + 字典项（级联删除）
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;

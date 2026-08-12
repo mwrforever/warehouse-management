@@ -1,5 +1,7 @@
 <?php
+
 // 权限校验中间件：permission:user.list 用法，用户无权限时返回 403
+
 namespace App\Http\Middleware;
 
 use App\Support\ApiResponse;

@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+# 推送前门禁（pre-push）：全量质量检查，任一环节失败即阻断推送
+# 前端：类型检查 → lint → stylelint → prettier → 单元测试
+# 后端：PHPStan → PHPCS → Pint → 全量测试
+# 注：E2E 需起前后端服务，耗时较长，由云端 CI 兜底执行
+
+command -v php >/dev/null 2>&1 || {
+  echo "⚠️ 未找到 php 命令。本机 Git Bash 不继承 Windows PATH，请先执行："
+  echo '  export PATH="$PATH:/d/code/envs/php/8.5.9:/d/code/envs/composer/2.10.2"'
+  exit 1
+}
+
+cd web
+echo "==> [前端] 类型检查（vue-tsc）"
+npm run type-check
+echo "==> [前端] ESLint"
+npm run lint
+echo "==> [前端] Stylelint"
+npm run lint:css
+echo "==> [前端] Prettier 格式检查"
+npm run format:check
+echo "==> [前端] 单元测试（Vitest）"
+npm run test:unit
+
+cd ../server
+echo "==> [后端] PHPStan 静态分析"
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+echo "==> [后端] PHPCS 编码规范"
+vendor/bin/phpcs
+echo "==> [后端] Pint 格式检查"
+vendor/bin/pint --test
+echo "==> [后端] 全量测试（PHPUnit）"
+php artisan test
+
+echo "✅ 全部检查通过"

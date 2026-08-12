@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright E2E 产物
+test-results/
+playwright-report/
+blob-report/

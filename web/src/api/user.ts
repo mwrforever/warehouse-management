@@ -18,11 +18,21 @@ export const userApi = {
     return data.data as { items: UserItem[]; total: number; page: number; per_page: number }
   },
   // 新建用户（新建必填密码；role_ids 为角色 id 数组）
-  async create(payload: { name: string; username: string; password: string; email?: string; status: number; role_ids: number[] }) {
+  async create(payload: {
+    name: string
+    username: string
+    password: string
+    email?: string
+    status: number
+    role_ids: number[]
+  }) {
     await http.post('/users', payload)
   },
   // 更新用户（password 不带=不改密码）
-  async update(id: number, payload: { name: string; username: string; email?: string; status: number; role_ids: number[] }) {
+  async update(
+    id: number,
+    payload: { name: string; username: string; email?: string; status: number; role_ids: number[] },
+  ) {
     await http.put(`/users/${id}`, payload)
   },
   // 删除用户（内置 admin 删除被后端拦截并返回 1003）

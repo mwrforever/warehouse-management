@@ -1,5 +1,7 @@
 <?php
+
 // 基础资料数据模型测试：表结构、种子完整性、引用保护守卫（核心数据结构，100% 覆盖）
+
 namespace Tests\Feature;
 
 use App\Models\Permission;
@@ -24,7 +26,20 @@ class MasterDataStructureTest extends TestCase
     public function test_all_master_data_tables_exist(): void
     {
         // 正常路径：10 张基础资料表全部建立
-        foreach (['categories', 'units', 'warehouses', 'locations', 'suppliers', 'customers', 'processes', 'products', 'bom_headers', 'bom_items'] as $table) {
+        foreach (
+            [
+                'categories',
+                'units',
+                'warehouses',
+                'locations',
+                'suppliers',
+                'customers',
+                'processes',
+                'products',
+                'bom_headers',
+                'bom_items',
+            ] as $table
+        ) {
             $this->assertTrue(Schema::hasTable($table), "表 {$table} 不存在");
         }
     }

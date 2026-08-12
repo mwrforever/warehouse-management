@@ -22,7 +22,10 @@ export const categoryApi = {
     return data.data as { id: number }
   },
   // 更新分类
-  async update(id: number, payload: { name: string; parent_id: number; sort?: number; status?: number }) {
+  async update(
+    id: number,
+    payload: { name: string; parent_id: number; sort?: number; status?: number },
+  ) {
     await http.put(`/categories/${id}`, payload)
   },
   // 删除分类

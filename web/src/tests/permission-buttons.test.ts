@@ -1,7 +1,8 @@
 // 按钮级权限测试：只读账号（仅 *.list 权限）不得渲染 新建/编辑/删除/重置密码 等写操作按钮
 // 覆盖安全路径：前端按钮显隐与后端权限拦截双重防线中的前端一侧（核心功能，E2E TC-SYS-05 回归保护）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import type { Component } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import UsersView from '../views/system/UsersView.vue'
@@ -12,7 +13,10 @@ import { useAuthStore } from '../stores/auth'
 // mock 三个 API 模块：列表返回单行数据用于断言行内操作按钮
 vi.mock('../api/user', () => ({
   userApi: {
-    list: vi.fn().mockResolvedValue({ items: [{ id: 1, username: 'u1', name: '用户1', email: 'u1@test.com', status: 1, roles: [] }], total: 1 }),
+    list: vi.fn().mockResolvedValue({
+      items: [{ id: 1, username: 'u1', name: '用户1', email: 'u1@test.com', status: 1, roles: [] }],
+      total: 1,
+    }),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -21,7 +25,10 @@ vi.mock('../api/user', () => ({
 }))
 vi.mock('../api/role', () => ({
   roleApi: {
-    list: vi.fn().mockResolvedValue({ items: [{ id: 1, name: '管理员', code: 'admin', permissions: [] }], total: 1 }),
+    list: vi.fn().mockResolvedValue({
+      items: [{ id: 1, name: '管理员', code: 'admin', permissions: [] }],
+      total: 1,
+    }),
     permissions: vi.fn().mockResolvedValue({ groups: [] }),
     create: vi.fn(),
     update: vi.fn(),
@@ -30,11 +37,16 @@ vi.mock('../api/role', () => ({
 }))
 vi.mock('../api/dictionary', () => ({
   dictionaryApi: {
-    list: vi.fn().mockResolvedValue({ items: [{ id: 1, name: '计量单位', code: 'unit', remark: '' }], total: 1 }),
+    list: vi.fn().mockResolvedValue({
+      items: [{ id: 1, name: '计量单位', code: 'unit', remark: '' }],
+      total: 1,
+    }),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
-    items: vi.fn().mockResolvedValue({ items: [{ id: 1, dictionary_id: 1, label: '个', value: 'pc', sort: 1, status: 1 }] }),
+    items: vi.fn().mockResolvedValue({
+      items: [{ id: 1, dictionary_id: 1, label: '个', value: 'pc', sort: 1, status: 1 }],
+    }),
     createItem: vi.fn(),
     updateItem: vi.fn(),
     removeItem: vi.fn(),
@@ -42,8 +54,11 @@ vi.mock('../api/dictionary', () => ({
 }))
 
 // 工具：过滤页面渲染出的全部按钮文本
-function buttonTexts(wrapper: any): string[] {
-  return wrapper.findAll('button').map((b: any) => b.text().trim()).filter(Boolean)
+function buttonTexts(wrapper: VueWrapper): string[] {
+  return wrapper
+    .findAll('button')
+    .map((b) => b.text().trim())
+    .filter(Boolean)
 }
 
 describe('按钮级权限显隐', () => {
@@ -57,7 +72,7 @@ describe('按钮级权限显隐', () => {
   })
 
   // 挂载组件：复用与测试同一 pinia 实例，保证 store 权限与组件内 useAuthStore() 一致
-  function mountView(view: any) {
+  function mountView(view: Component) {
     return mount(view, { global: { plugins: [ElementPlus, pinia] } })
   }
 
@@ -120,7 +135,12 @@ describe('按钮级权限显隐', () => {
 
   it('字典管理：具备全部写权限时渲染 新建/编辑/删除 按钮', async () => {
     // 正常路径：管理员可见字典全部操作
-    store.permissions = ['dictionary.list', 'dictionary.create', 'dictionary.update', 'dictionary.delete']
+    store.permissions = [
+      'dictionary.list',
+      'dictionary.create',
+      'dictionary.update',
+      'dictionary.delete',
+    ]
     const wrapper = mountView(DictionariesView)
     await flushPromises()
     const texts = buttonTexts(wrapper)

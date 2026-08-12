@@ -3,14 +3,21 @@
   <div class="login-page">
     <el-card class="login-card">
       <h1 class="font-code">Nexus Factory</h1>
-      <el-form :model="form" :rules="rules" ref="formRef" @keyup.enter="submit">
+      <el-form ref="formRef" :model="form" :rules="rules" @keyup.enter="submit">
         <el-form-item prop="username">
           <el-input v-model="form.username" placeholder="请输入用户名" />
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password />
+          <el-input
+            v-model="form.password"
+            type="password"
+            placeholder="请输入密码"
+            show-password
+          />
         </el-form-item>
-        <el-button type="primary" class="login-btn" :loading="loading" @click="submit">登 录</el-button>
+        <el-button type="primary" class="login-btn" :loading="loading" @click="submit"
+          >登 录</el-button
+        >
       </el-form>
     </el-card>
   </div>
@@ -54,7 +61,20 @@ async function submit() {
 
 <style scoped>
 /* 居中卡片 + 库存绿主按钮（btn-primary 语义） */
-.login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--color-background); }
-.login-card { width: 400px; padding: var(--space-3xl); }
-.login-btn { width: 100%; background: var(--color-accent); cursor: pointer; }
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-background);
+}
+.login-card {
+  width: 400px;
+  padding: var(--space-3xl);
+}
+.login-btn {
+  width: 100%;
+  background: var(--color-accent);
+  cursor: pointer;
+}
 </style>

@@ -17,11 +17,20 @@ export const processApi = {
     return data.data as { items: ProcessItem[] }
   },
   // 新建工序
-  async create(payload: { name: string; code: string; sort?: number; description?: string; status?: number }) {
+  async create(payload: {
+    name: string
+    code: string
+    sort?: number
+    description?: string
+    status?: number
+  }) {
     await http.post('/processes', payload)
   },
   // 更新工序
-  async update(id: number, payload: { name: string; code: string; sort?: number; description?: string; status?: number }) {
+  async update(
+    id: number,
+    payload: { name: string; code: string; sort?: number; description?: string; status?: number },
+  ) {
     await http.put(`/processes/${id}`, payload)
   },
   // 删除工序

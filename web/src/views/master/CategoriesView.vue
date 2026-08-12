@@ -3,15 +3,35 @@
   <div class="page-card">
     <div class="toolbar">
       <span class="page-title">分类管理</span>
-      <el-button v-if="auth.has('category.create')" class="btn-primary" @click="openCreate()">新 建</el-button>
+      <el-button v-if="auth.has('category.create')" class="btn-primary" @click="openCreate()"
+        >新 建</el-button
+      >
     </div>
-    <el-tree :data="tree" :props="{ label: 'name', children: 'children' }" default-expand-all node-key="id">
+    <el-tree
+      :data="tree"
+      :props="{ label: 'name', children: 'children' }"
+      default-expand-all
+      node-key="id"
+    >
       <template #default="{ data }">
         <div class="tree-node">
           <span>{{ data.name }}</span>
           <span class="tree-actions">
-            <el-button v-if="auth.has('category.update')" link type="primary" @click.stop="openEdit(data)">编 辑</el-button>
-            <el-button v-if="auth.has('category.delete')" link type="danger" :disabled="hasChildren(data)" @click.stop="remove(data)">删 除</el-button>
+            <el-button
+              v-if="auth.has('category.update')"
+              link
+              type="primary"
+              @click.stop="openEdit(data)"
+              >编 辑</el-button
+            >
+            <el-button
+              v-if="auth.has('category.delete')"
+              link
+              type="danger"
+              :disabled="hasChildren(data)"
+              @click.stop="remove(data)"
+              >删 除</el-button
+            >
           </span>
         </div>
       </template>
@@ -28,11 +48,15 @@
         </el-form-item>
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sort" :min="0" /></el-form-item>
-        <el-form-item label="状态"><el-switch v-model="form.status" :active-value="1" :inactive-value="0" /></el-form-item>
+        <el-form-item label="状态"
+          ><el-switch v-model="form.status" :active-value="1" :inactive-value="0"
+        /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取 消</el-button>
-        <el-button type="primary" class="btn-primary" :loading="saving" @click="save">保 存</el-button>
+        <el-button type="primary" class="btn-primary" :loading="saving" @click="save"
+          >保 存</el-button
+        >
       </template>
     </el-dialog>
   </div>
@@ -49,7 +73,17 @@ const auth = useAuthStore()
 const tree = ref<CategoryItem[]>([])
 const dialogVisible = ref(false)
 const saving = ref(false)
-const form = reactive<any>({})
+
+// 分类表单：parent_id=0 表示顶级分类（新建时由 openCreate(parentId) 决定）
+interface CategoryForm {
+  id: number | null
+  name: string
+  parent_id: number
+  sort: number
+  status: number
+}
+
+const form = reactive<CategoryForm>({ id: null, name: '', parent_id: 0, sort: 0, status: 1 })
 
 // 顶级分类列表（上级下拉数据源）
 const topLevel = computed(() => tree.value.map((n) => ({ id: n.id, name: n.name })))
@@ -72,7 +106,13 @@ function openCreate(parentId = 0) {
 
 // 编辑回填
 function openEdit(node: CategoryItem) {
-  Object.assign(form, { id: node.id, name: node.name, parent_id: node.parent_id, sort: node.sort, status: node.status })
+  Object.assign(form, {
+    id: node.id,
+    name: node.name,
+    parent_id: node.parent_id,
+    sort: node.sort,
+    status: node.status,
+  })
   dialogVisible.value = true
 }
 
@@ -81,8 +121,20 @@ async function save() {
   if (!form.name) return ElMessage.warning('请输入分类名称')
   saving.value = true
   try {
-    if (form.id) await categoryApi.update(form.id, { name: form.name, parent_id: form.parent_id, sort: form.sort, status: form.status })
-    else await categoryApi.create({ name: form.name, parent_id: form.parent_id, sort: form.sort, status: form.status })
+    if (form.id)
+      await categoryApi.update(form.id, {
+        name: form.name,
+        parent_id: form.parent_id,
+        sort: form.sort,
+        status: form.status,
+      })
+    else
+      await categoryApi.create({
+        name: form.name,
+        parent_id: form.parent_id,
+        sort: form.sort,
+        status: form.status,
+      })
     ElMessage.success('保存成功')
     dialogVisible.value = false
     load()
@@ -114,11 +166,39 @@ onMounted(load)
 
 <style scoped>
 /* 树节点行内操作：hover 显示，点击不冒泡到节点选中 */
-.page-card { background: #fff; border-radius: 8px; box-shadow: var(--shadow-sm); padding: var(--space-2xl); }
-.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-xl); }
-.page-title { font-size: 18px; font-weight: 600; color: var(--color-foreground); }
-.btn-primary { background: var(--color-accent); border-color: var(--color-accent); cursor: pointer; }
-.tree-node { display: flex; justify-content: space-between; align-items: center; flex: 1; padding-right: var(--space-lg); }
-.tree-actions { visibility: hidden; }
-.tree-node:hover .tree-actions { visibility: visible; }
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-2xl);
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-xl);
+}
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  cursor: pointer;
+}
+.tree-node {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+  padding-right: var(--space-lg);
+}
+.tree-actions {
+  visibility: hidden;
+}
+.tree-node:hover .tree-actions {
+  visibility: visible;
+}
 </style>

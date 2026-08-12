@@ -1,5 +1,7 @@
 <?php
+
 // 引用保护守卫：主数据删除前检查是否被业务单据引用
+
 namespace App\Support;
 
 use Illuminate\Support\Facades\DB;
@@ -18,6 +20,7 @@ class DeletionGuard
         if (! Schema::hasTable($table)) {
             return false;
         }
+
         return DB::table($table)->where($column, $id)->exists();
     }
 }

@@ -1,5 +1,7 @@
 <?php
+
 // 计量单位控制器：CRUD + 编码唯一 + 被商品引用保护
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -16,6 +18,7 @@ class UnitController extends Controller
     public function index(Request $request)
     {
         $units = Unit::orderByDesc('id')->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
         return $this->ok([
             'items' => $units->map(fn ($u) => ['id' => $u->id, 'name' => $u->name, 'code' => $u->code, 'status' => $u->status]),
             'total' => $units->total(), 'page' => $units->currentPage(), 'per_page' => $units->perPage(),
@@ -34,6 +37,7 @@ class UnitController extends Controller
             return $this->fail(1103, '单位编码已存在');
         }
         $unit = Unit::create(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? 1]);
+
         return $this->ok(['id' => $unit->id]);
     }
 
@@ -49,6 +53,7 @@ class UnitController extends Controller
             return $this->fail(1103, '单位编码已存在');
         }
         $unit->update(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? $unit->status]);
+
         return $this->ok();
     }
 
@@ -59,6 +64,7 @@ class UnitController extends Controller
             return $this->fail(1104, '单位已被商品使用，不可删除');
         }
         $unit->delete();
+
         return $this->ok();
     }
 }

@@ -2,9 +2,11 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openCreate">新 建</el-button>
+      <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openCreate"
+        >新 建</el-button
+      >
     </div>
-    <el-table :data="rows" v-loading="loading">
+    <el-table v-loading="loading" :data="rows">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="code" label="编码" class-name="font-code" />
@@ -12,12 +14,22 @@
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openItems(row)">字典项</el-button>
-          <el-button v-if="auth.has('dictionary.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button v-if="auth.has('dictionary.delete')" link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('dictionary.update')" link type="primary" @click="openEdit(row)"
+            >编 辑</el-button
+          >
+          <el-button v-if="auth.has('dictionary.delete')" link type="danger" @click="remove(row)"
+            >删 除</el-button
+          >
         </template>
       </el-table-column>
     </el-table>
-    <el-pagination v-model:current-page="query.page" :total="total" :page-size="10" layout="total, prev, pager, next" @current-change="load" />
+    <el-pagination
+      v-model:current-page="query.page"
+      :total="total"
+      :page-size="10"
+      layout="total, prev, pager, next"
+      @current-change="load"
+    />
 
     <!-- 字典新建/编辑弹窗 -->
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑字典' : '新建字典'" width="480px">
@@ -35,7 +47,9 @@
     <!-- 字典项管理弹窗：当前字典的启用项列表 + 新增/编辑/删除 -->
     <el-dialog v-model="itemDialogVisible" :title="`字典项 - ${currentDict?.name}`" width="640px">
       <div class="toolbar">
-        <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openItemCreate">新 增</el-button>
+        <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openItemCreate"
+          >新 增</el-button
+        >
       </div>
       <el-table :data="items">
         <el-table-column prop="label" label="标签" />
@@ -43,13 +57,27 @@
         <el-table-column prop="sort" label="排序" width="80" />
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '禁用' }}</el-tag>
+            <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
+              row.status === 1 ? '启用' : '禁用'
+            }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140">
           <template #default="{ row }">
-            <el-button v-if="auth.has('dictionary.update')" link type="primary" @click="openItemEdit(row)">编 辑</el-button>
-            <el-button v-if="auth.has('dictionary.delete')" link type="danger" @click="removeItem(row)">删 除</el-button>
+            <el-button
+              v-if="auth.has('dictionary.update')"
+              link
+              type="primary"
+              @click="openItemEdit(row)"
+              >编 辑</el-button
+            >
+            <el-button
+              v-if="auth.has('dictionary.delete')"
+              link
+              type="danger"
+              @click="removeItem(row)"
+              >删 除</el-button
+            >
           </template>
         </el-table-column>
       </el-table>
@@ -59,12 +87,20 @@
     </el-dialog>
 
     <!-- 字典项新增/编辑弹窗 -->
-    <el-dialog v-model="itemFormVisible" :title="itemForm.id ? '编辑字典项' : '新增字典项'" width="440px">
+    <el-dialog
+      v-model="itemFormVisible"
+      :title="itemForm.id ? '编辑字典项' : '新增字典项'"
+      width="440px"
+    >
       <el-form :model="itemForm" label-width="80px">
         <el-form-item label="标签" required><el-input v-model="itemForm.label" /></el-form-item>
         <el-form-item label="值" required><el-input v-model="itemForm.value" /></el-form-item>
-        <el-form-item label="排序"><el-input-number v-model="itemForm.sort" :min="0" /></el-form-item>
-        <el-form-item label="状态"><el-switch v-model="itemForm.status" :active-value="1" :inactive-value="0" /></el-form-item>
+        <el-form-item label="排序"
+          ><el-input-number v-model="itemForm.sort" :min="0"
+        /></el-form-item>
+        <el-form-item label="状态"
+          ><el-switch v-model="itemForm.status" :active-value="1" :inactive-value="0"
+        /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="itemFormVisible = false">取 消</el-button>
@@ -88,14 +124,33 @@ const total = ref(0)
 const loading = ref(false)
 const query = reactive({ page: 1 })
 const dialogVisible = ref(false)
-const form = reactive<any>({})
+
+// 字典表单：code 重复由后端 1005 拦截
+interface DictForm {
+  id: number | null
+  name: string
+  code: string
+  remark: string
+}
+
+const form = reactive<DictForm>({ id: null, name: '', code: '', remark: '' })
 
 // 字典项弹窗状态（当前字典 + 启用项列表 + 项表单）
 const itemDialogVisible = ref(false)
 const currentDict = ref<DictionaryItem | null>(null)
 const items = ref<DictItem[]>([])
 const itemFormVisible = ref(false)
-const itemForm = reactive<any>({})
+
+// 字典项表单：sort/status 由输入控件绑定
+interface DictItemForm {
+  id: number | null
+  label: string
+  value: string
+  sort: number
+  status: number
+}
+
+const itemForm = reactive<DictItemForm>({ id: null, label: '', value: '', sort: 0, status: 1 })
 
 // 加载字典列表
 async function load() {
@@ -122,7 +177,8 @@ function openEdit(row: DictionaryItem) {
 // 保存字典：失败（如重复编码 1005）ElMessage 展示后端 message
 async function save() {
   try {
-    if (form.id) await dictionaryApi.update(form.id, { name: form.name, code: form.code, remark: form.remark })
+    if (form.id)
+      await dictionaryApi.update(form.id, { name: form.name, code: form.code, remark: form.remark })
     else await dictionaryApi.create({ name: form.name, code: form.code, remark: form.remark })
     ElMessage.success('保存成功')
     dialogVisible.value = false
@@ -143,7 +199,11 @@ async function openItems(dict: DictionaryItem) {
 // 删除字典：确认框提示引用风险（引用此字典的下拉将失效）
 async function remove(row: DictionaryItem) {
   try {
-    await ElMessageBox.confirm(`确定删除字典「${row.name}」？删除后引用此字典的下拉将失效`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(
+      `确定删除字典「${row.name}」？删除后引用此字典的下拉将失效`,
+      '提示',
+      { type: 'warning' },
+    )
   } catch {
     return // 用户取消
   }
@@ -162,15 +222,33 @@ function openItemCreate() {
   itemFormVisible.value = true
 }
 function openItemEdit(row: DictItem) {
-  Object.assign(itemForm, { id: row.id, label: row.label, value: row.value, sort: row.sort, status: row.status })
+  Object.assign(itemForm, {
+    id: row.id,
+    label: row.label,
+    value: row.value,
+    sort: row.sort,
+    status: row.status,
+  })
   itemFormVisible.value = true
 }
 
 // 保存字典项（编辑走 updateItem，新增走 createItem），成功后刷新当前字典项列表
 async function saveItem() {
   try {
-    if (itemForm.id) await dictionaryApi.updateItem(itemForm.id, { label: itemForm.label, value: itemForm.value, sort: itemForm.sort, status: itemForm.status })
-    else await dictionaryApi.createItem(currentDict.value!.id, { label: itemForm.label, value: itemForm.value, sort: itemForm.sort, status: itemForm.status })
+    if (itemForm.id)
+      await dictionaryApi.updateItem(itemForm.id, {
+        label: itemForm.label,
+        value: itemForm.value,
+        sort: itemForm.sort,
+        status: itemForm.status,
+      })
+    else
+      await dictionaryApi.createItem(currentDict.value!.id, {
+        label: itemForm.label,
+        value: itemForm.value,
+        sort: itemForm.sort,
+        status: itemForm.status,
+      })
     ElMessage.success('保存成功')
     itemFormVisible.value = false
     items.value = (await dictionaryApi.items(currentDict.value!.id)).items
@@ -200,6 +278,14 @@ onMounted(load)
 
 <style scoped>
 /* 工具栏间距与主按钮样式（btn-primary 语义色） */
-.toolbar { display: flex; gap: var(--space-lg); margin-bottom: var(--space-xl); }
-.btn-primary { background: var(--color-accent); border-color: var(--color-accent); cursor: pointer; }
+.toolbar {
+  display: flex;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  cursor: pointer;
+}
 </style>

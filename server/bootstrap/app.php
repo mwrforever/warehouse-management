@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsurePermission;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -18,7 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // 权限中间件别名：permission:user.list
-        $middleware->alias(['permission' => \App\Http\Middleware\EnsurePermission::class]);
+        $middleware->alias(['permission' => EnsurePermission::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
@@ -50,6 +51,7 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/*')) {
                 // 仅 Unique 规则命中才报 1002，且 message 固定为「用户名已存在」与 code 语义一致
                 $duplicateUsername = isset($e->validator->failed()['username']['Unique']);
+
                 return response()->json([
                     'code' => $duplicateUsername ? 1002 : 422,
                     'message' => $duplicateUsername ? '用户名已存在' : $e->validator->errors()->first(),

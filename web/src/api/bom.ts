@@ -28,12 +28,29 @@ export const bomApi = {
     return data.data as { items: BomRow[]; total: number; page: number; per_page: number }
   },
   // 新建（单头+明细一次提交；status 缺省=启用）
-  async create(payload: { product_id: number; version: string; quantity?: number; remark?: string; status?: number; items: { material_id: number; quantity: number; unit_id: number }[] }) {
+  async create(payload: {
+    product_id: number
+    version: string
+    quantity?: number
+    remark?: string
+    status?: number
+    items: { material_id: number; quantity: number; unit_id: number }[]
+  }) {
     const { data } = await http.post('/boms', payload)
     return data.data as { id: number; code: string }
   },
   // 更新（明细全量替换）
-  async update(id: number, payload: { product_id: number; version: string; quantity?: number; remark?: string; status?: number; items: { material_id: number; quantity: number; unit_id: number }[] }) {
+  async update(
+    id: number,
+    payload: {
+      product_id: number
+      version: string
+      quantity?: number
+      remark?: string
+      status?: number
+      items: { material_id: number; quantity: number; unit_id: number }[]
+    },
+  ) {
     await http.put(`/boms/${id}`, payload)
   },
   // 删除 BOM

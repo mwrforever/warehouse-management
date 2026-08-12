@@ -1,6 +1,8 @@
 <?php
+
 // 认证控制器：登录/登出/当前用户信息
 // 依赖 Sanctum Token 认证；登录成功签发 token，登出撤销当前 token
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -46,6 +48,7 @@ class AuthController extends Controller
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()->delete();
+
         return $this->ok(null, '已退出登录');
     }
 

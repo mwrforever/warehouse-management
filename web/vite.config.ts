@@ -9,5 +9,9 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': { target: 'http://localhost:8000', changeOrigin: true } },
   },
-  test: { environment: 'jsdom' }, // vitest 配置
+  // vitest 配置：仅收集 src 下单测；e2e/ 下的 playwright 用例由 playwright.config.ts 驱动，避免被默认 include 误收集
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts'],
+  },
 })

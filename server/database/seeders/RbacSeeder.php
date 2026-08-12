@@ -1,5 +1,7 @@
 <?php
+
 // RBAC 种子：权限分组数据 + admin/operator 角色 + 超级管理员
+
 namespace Database\Seeders;
 
 use App\Models\Dictionary;

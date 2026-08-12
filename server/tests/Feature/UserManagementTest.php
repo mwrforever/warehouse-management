@@ -1,5 +1,7 @@
 <?php
+
 // 用户管理接口测试：CRUD/角色分配/重置密码/删除保护（安全路径，100% 覆盖）
+
 namespace Tests\Feature;
 
 use App\Models\Role;
@@ -12,6 +14,7 @@ class UserManagementTest extends TestCase
     use RefreshDatabase;
 
     private string $token;
+
     private User $admin;
 
     protected function setUp(): void
@@ -65,7 +68,12 @@ class UserManagementTest extends TestCase
     {
         // 正常路径：更新姓名与角色
         $u = User::create(['name' => '旧名', 'username' => 'u1', 'password' => 'p', 'status' => 1]);
-        $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", ['name' => '新名', 'username' => 'u1', 'status' => 1, 'role_ids' => []])
+        $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", [
+            'name' => '新名',
+            'username' => 'u1',
+            'status' => 1,
+            'role_ids' => [],
+        ])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('users', ['id' => $u->id, 'name' => '新名']);
     }
@@ -73,7 +81,7 @@ class UserManagementTest extends TestCase
     public function test_delete_builtin_admin_fails_with_1003(): void
     {
         // 异常路径：内置 admin 不可删除（按 username=admin 判定）
-        $this->withToken($this->token)->deleteJson('/api/v1/users/' . $this->admin->id)
+        $this->withToken($this->token)->deleteJson('/api/v1/users/'.$this->admin->id)
             ->assertJsonPath('code', 1003);
     }
 
@@ -100,7 +108,12 @@ class UserManagementTest extends TestCase
         // 边界路径：更新不带 password 时跳过密码变更分支，旧密码与旧 token 均保持有效
         $u = User::create(['name' => '保密', 'username' => 'keep', 'password' => 'Old@12345', 'status' => 1]);
         $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])->json('data.token');
-        $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", ['name' => '保密改', 'username' => 'keep', 'status' => 1, 'role_ids' => []])
+        $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", [
+            'name' => '保密改',
+            'username' => 'keep',
+            'status' => 1,
+            'role_ids' => [],
+        ])
             ->assertJsonPath('code', 0);
         $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])->assertJsonPath('code', 0);
         // 未改密码不得误撤销旧 token（防止误伤在线会话）
@@ -137,7 +150,7 @@ class UserManagementTest extends TestCase
     public function test_update_builtin_admin_username_rejected_with_1003(): void
     {
         // 异常路径：内置 admin 禁止改名（防改名后绕过 1003 删除保护）
-        $this->withToken($this->token)->putJson('/api/v1/users/' . $this->admin->id, [
+        $this->withToken($this->token)->putJson('/api/v1/users/'.$this->admin->id, [
             'name' => '管理员', 'username' => 'super', 'status' => 1, 'role_ids' => [],
         ])->assertJsonPath('code', 1003);
         $this->assertDatabaseHas('users', ['id' => $this->admin->id, 'username' => 'admin']);
@@ -146,7 +159,7 @@ class UserManagementTest extends TestCase
     public function test_update_builtin_admin_status_rejected_with_1003(): void
     {
         // 异常路径：内置 admin 禁止禁用（防禁用唯一管理员锁死系统）
-        $this->withToken($this->token)->putJson('/api/v1/users/' . $this->admin->id, [
+        $this->withToken($this->token)->putJson('/api/v1/users/'.$this->admin->id, [
             'name' => '管理员', 'username' => 'admin', 'status' => 0, 'role_ids' => [],
         ])->assertJsonPath('code', 1003);
         $this->assertDatabaseHas('users', ['id' => $this->admin->id, 'status' => 1]);
@@ -155,7 +168,7 @@ class UserManagementTest extends TestCase
     public function test_update_builtin_admin_name_allowed(): void
     {
         // 边界路径：内置 admin 仅禁止改 username/status，姓名等普通字段仍可更新
-        $this->withToken($this->token)->putJson('/api/v1/users/' . $this->admin->id, [
+        $this->withToken($this->token)->putJson('/api/v1/users/'.$this->admin->id, [
             'name' => '系统管理员', 'username' => 'admin', 'status' => 1, 'role_ids' => [],
         ])->assertJsonPath('code', 0);
         $this->assertDatabaseHas('users', ['id' => $this->admin->id, 'name' => '系统管理员']);

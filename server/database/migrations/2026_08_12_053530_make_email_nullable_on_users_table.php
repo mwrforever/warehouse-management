@@ -1,4 +1,5 @@
 <?php
+
 // 用户表 email 改为可空：允许纯用户名登录用户不填邮箱（UserStoreRequest/UserUpdateRequest 中 email 为 nullable）
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
