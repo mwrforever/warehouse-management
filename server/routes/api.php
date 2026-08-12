@@ -1,6 +1,7 @@
 <?php
 // API 路由：/api/v1 前缀，认证路由公开，用户管理挂 auth:sanctum + 权限中间件
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -16,5 +17,14 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:user.update')->put('/users/{user}', [UserController::class, 'update']);
         Route::middleware('permission:user.update')->put('/users/{user}/reset-password', [UserController::class, 'resetPassword']);
         Route::middleware('permission:user.delete')->delete('/users/{user}', [UserController::class, 'destroy']);
+    });
+
+    // 角色与权限：全部要求认证 + 对应权限（role.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:role.list')->get('/roles', [RoleController::class, 'index']);
+        Route::middleware('permission:role.list')->get('/permissions', [RoleController::class, 'permissions']);
+        Route::middleware('permission:role.create')->post('/roles', [RoleController::class, 'store']);
+        Route::middleware('permission:role.update')->put('/roles/{role}', [RoleController::class, 'update']);
+        Route::middleware('permission:role.delete')->delete('/roles/{role}', [RoleController::class, 'destroy']);
     });
 });
