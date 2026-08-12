@@ -104,4 +104,23 @@ class WarehouseTest extends TestCase
             \Illuminate\Support\Facades\Schema::dropIfExists('inventory_balances');
         }
     }
+
+    public function test_destroy_location_with_balances_table_reference_fails(): void
+    {
+        // 边界路径：inventory_balances 表存在且有 location_id 引用时，库位删除被拒 1107（临时表验证守卫联动）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        \Illuminate\Support\Facades\Schema::create('inventory_balances', function ($table) {
+            $table->id();
+            $table->unsignedBigInteger('warehouse_id');
+            $table->unsignedBigInteger('location_id')->nullable();
+        });
+        \Illuminate\Support\Facades\DB::table('inventory_balances')->insert(['warehouse_id' => $w->id, 'location_id' => $l->id]);
+        try {
+            $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+                ->assertJsonPath('code', 1107);
+        } finally {
+            \Illuminate\Support\Facades\Schema::dropIfExists('inventory_balances');
+        }
+    }
 }
