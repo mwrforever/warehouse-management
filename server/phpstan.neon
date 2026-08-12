@@ -1,0 +1,11 @@
+# PHPStan 静态分析配置（larastan 提供 Laravel 框架感知扩展）
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    # 分析级别：5 起步（覆盖基本类型检查），后续可逐步上调
+    level: 5
+    paths:
+        - app
+    # 缓存写入 storage/phpstan，避免污染 vendor
+    tmpDir: storage/phpstan

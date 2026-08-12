@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!-- PHPCS 配置：PSR-12 编码标准，检查 app/config/database/routes/tests -->
+<ruleset name="Warehouse Management Coding Standard">
+    <description>PSR-12 编码标准（配合 Pint 使用：Pint 管代码风格、PHPCS 管编码规范）</description>
+
+    <rule ref="PSR12"/>
+
+    <!-- 行长阈值：软限制 120（warning），硬限制 140（error） -->
+    <rule ref="Generic.Files.LineLength">
+        <properties>
+            <property name="lineLimit" value="120"/>
+            <property name="absoluteLineLimit" value="140"/>
+        </properties>
+    </rule>
+
+    <!-- 测试方法名豁免 camelCase：Laravel 官方推荐 snake_case（test_xxx） -->
+    <rule ref="PSR1.Methods.CamelCapsMethodName">
+        <exclude-pattern>*/tests/*</exclude-pattern>
+    </rule>
+
+    <!-- 拼接运算符（.）空格豁免：与 Pint laravel preset 的 concat_space=none 冲突，
+         拼接风格由 Pint 统一管理，PHPCS 不再重复检查 -->
+    <rule ref="PSR12.Operators.OperatorSpacing">
+        <severity>0</severity>
+    </rule>
+
+    <file>app</file>
+    <file>config</file>
+    <file>database</file>
+    <file>routes</file>
+    <file>tests</file>
+
+    <!-- 排除依赖与运行时产物目录 -->
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/storage/*</exclude-pattern>
+    <exclude-pattern>*/bootstrap/cache/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+</ruleset>
