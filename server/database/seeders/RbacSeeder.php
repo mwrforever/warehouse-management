@@ -61,6 +61,12 @@ class RbacSeeder extends Seeder
             ['name' => 'BOM创建', 'code' => 'bom.create', 'group' => '基础资料'],
             ['name' => 'BOM更新', 'code' => 'bom.update', 'group' => '基础资料'],
             ['name' => 'BOM删除', 'code' => 'bom.delete', 'group' => '基础资料'],
+            // 库存管理模块权限（inventory 查询 + check 四动作，group=库存管理；盘点审核复用 check.update）
+            ['name' => '库存查询', 'code' => 'inventory.list', 'group' => '库存管理'],
+            ['name' => '盘点单列表', 'code' => 'check.list', 'group' => '库存管理'],
+            ['name' => '盘点单创建', 'code' => 'check.create', 'group' => '库存管理'],
+            ['name' => '盘点单更新', 'code' => 'check.update', 'group' => '库存管理'],
+            ['name' => '盘点单删除', 'code' => 'check.delete', 'group' => '库存管理'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
