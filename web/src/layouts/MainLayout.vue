@@ -9,6 +9,15 @@
         <RouterLink v-if="auth.has('user.list')" to="/system/users" class="menu-item">用户管理</RouterLink>
         <RouterLink v-if="auth.has('role.list')" to="/system/roles" class="menu-item">角色管理</RouterLink>
         <RouterLink v-if="auth.has('dictionary.list')" to="/system/dictionaries" class="menu-item">字典管理</RouterLink>
+        <div class="menu-group">基础资料</div>
+        <RouterLink v-if="auth.has('product.list')" to="/master/products" class="menu-item">商品管理</RouterLink>
+        <RouterLink v-if="auth.has('category.list')" to="/master/categories" class="menu-item">分类管理</RouterLink>
+        <RouterLink v-if="auth.has('unit.list')" to="/master/units" class="menu-item">单位管理</RouterLink>
+        <RouterLink v-if="auth.has('warehouse.list')" to="/master/warehouses" class="menu-item">仓库管理</RouterLink>
+        <RouterLink v-if="auth.has('supplier.list')" to="/master/suppliers" class="menu-item">供应商管理</RouterLink>
+        <RouterLink v-if="auth.has('customer.list')" to="/master/customers" class="menu-item">客户管理</RouterLink>
+        <RouterLink v-if="auth.has('bom.list')" to="/master/boms" class="menu-item">BOM 管理</RouterLink>
+        <RouterLink v-if="auth.has('process.list')" to="/master/processes" class="menu-item">工序管理</RouterLink>
       </nav>
     </aside>
     <div class="main">
