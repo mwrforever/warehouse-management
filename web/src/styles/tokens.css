@@ -1,0 +1,23 @@
+/* 设计令牌：nexus-factory 设计系统（MASTER.md） */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --color-primary: #334155;    /* 主色-石板灰 */
+  --color-on-primary: #FFFFFF;
+  --color-secondary: #475569;
+  --color-accent: #059669;     /* 强调-库存绿 */
+  --color-background: #F8FAFC;
+  --color-foreground: #0F172A;
+  --color-muted: #F2F3F4;
+  --color-border: #E6E8EA;
+  --color-destructive: #DC2626;
+  --color-ring: #334155;
+  --space-xs: 2px; --space-sm: 4px; --space-md: 8px; --space-lg: 12px;
+  --space-xl: 16px; --space-2xl: 24px; --space-3xl: 32px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
+  --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+  --el-color-primary: #334155; /* Element Plus 主色定制 */
+  font-family: 'Fira Sans', system-ui, sans-serif;
+}
+.font-code { font-family: 'Fira Code', monospace; }

@@ -1,0 +1,19 @@
+# 进销存+生产管理系统：MySQL 开发环境（docker compose）
+# 提供 MySQL 8.4 服务，数据库 php_design（用户 php / 密码 secret），供 Laravel 后端连接使用
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: php-design-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: php_design
+      MYSQL_USER: php
+      MYSQL_PASSWORD: secret
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+volumes:
+  mysql_data:
