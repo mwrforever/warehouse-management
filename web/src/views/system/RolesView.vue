@@ -2,7 +2,7 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-button class="btn-primary" @click="openEdit()">新 建</el-button>
+      <el-button v-if="auth.has('role.create')" class="btn-primary" @click="openEdit()">新 建</el-button>
     </div>
     <el-table :data="rows" v-loading="loading">
       <el-table-column prop="id" label="ID" width="70" />
@@ -16,8 +16,8 @@
       <el-table-column prop="remark" label="备注" />
       <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('role.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
+          <el-button v-if="auth.has('role.delete')" link type="danger" @click="remove(row)">删 除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -46,6 +46,9 @@
 import { nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { roleApi, type PermissionItem, type RoleItem } from '../../api/role'
+import { useAuthStore } from '../../stores/auth'
+
+const auth = useAuthStore()
 
 const rows = ref<RoleItem[]>([])
 const total = ref(0)

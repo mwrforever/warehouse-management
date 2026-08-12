@@ -3,7 +3,7 @@
   <div>
     <div class="toolbar">
       <el-input v-model="query.keyword" placeholder="用户名/姓名" clearable style="width: 220px" @keyup.enter="load" />
-      <el-button class="btn-primary" @click="openCreate">新 建</el-button>
+      <el-button v-if="auth.has('user.create')" class="btn-primary" @click="openCreate">新 建</el-button>
     </div>
     <el-table :data="rows" v-loading="loading">
       <el-table-column prop="id" label="ID" width="70" />
@@ -23,9 +23,9 @@
       <el-table-column prop="last_login_at" label="最后登录" width="180" />
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button link type="warning" @click="openReset(row)">重置密码</el-button>
-          <el-button link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('user.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
+          <el-button v-if="auth.has('user.update')" link type="warning" @click="openReset(row)">重置密码</el-button>
+          <el-button v-if="auth.has('user.delete')" link type="danger" @click="remove(row)">删 除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -59,6 +59,9 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { userApi, type UserItem } from '../../api/user'
 import { roleApi } from '../../api/role'
+import { useAuthStore } from '../../stores/auth'
+
+const auth = useAuthStore()
 
 const rows = ref<UserItem[]>([])
 const roles = ref<{ id: number; name: string }[]>([])

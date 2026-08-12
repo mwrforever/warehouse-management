@@ -2,7 +2,7 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-button class="btn-primary" @click="openCreate">新 建</el-button>
+      <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openCreate">新 建</el-button>
     </div>
     <el-table :data="rows" v-loading="loading">
       <el-table-column prop="id" label="ID" width="70" />
@@ -12,8 +12,8 @@
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openItems(row)">字典项</el-button>
-          <el-button link type="primary" @click="openEdit(row)">编 辑</el-button>
-          <el-button link type="danger" @click="remove(row)">删 除</el-button>
+          <el-button v-if="auth.has('dictionary.update')" link type="primary" @click="openEdit(row)">编 辑</el-button>
+          <el-button v-if="auth.has('dictionary.delete')" link type="danger" @click="remove(row)">删 除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -35,7 +35,7 @@
     <!-- 字典项管理弹窗：当前字典的启用项列表 + 新增/编辑/删除 -->
     <el-dialog v-model="itemDialogVisible" :title="`字典项 - ${currentDict?.name}`" width="640px">
       <div class="toolbar">
-        <el-button class="btn-primary" @click="openItemCreate">新 增</el-button>
+        <el-button v-if="auth.has('dictionary.update')" class="btn-primary" @click="openItemCreate">新 增</el-button>
       </div>
       <el-table :data="items">
         <el-table-column prop="label" label="标签" />
@@ -48,8 +48,8 @@
         </el-table-column>
         <el-table-column label="操作" width="140">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openItemEdit(row)">编 辑</el-button>
-            <el-button link type="danger" @click="removeItem(row)">删 除</el-button>
+            <el-button v-if="auth.has('dictionary.update')" link type="primary" @click="openItemEdit(row)">编 辑</el-button>
+            <el-button v-if="auth.has('dictionary.delete')" link type="danger" @click="removeItem(row)">删 除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -79,6 +79,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dictionaryApi, type DictItem, type DictionaryItem } from '../../api/dictionary'
+import { useAuthStore } from '../../stores/auth'
+
+const auth = useAuthStore()
 
 const rows = ref<DictionaryItem[]>([])
 const total = ref(0)
