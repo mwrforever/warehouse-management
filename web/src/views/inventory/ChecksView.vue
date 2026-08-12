@@ -273,6 +273,8 @@ async function openEdit(row: CheckItem) {
       book_qty: i.book_qty,
       actual_qty: i.actual_qty,
     }))
+    // 清空账面缓存，避免残留上一仓库数据导致扫码误判
+    books.value = []
     dialogVisible.value = true
   } catch (e) {
     ElMessage.error((e as Error).message)
@@ -325,18 +327,18 @@ async function scanAdd() {
   if (!code) return
   try {
     const p = await productApi.byBarcode(code)
+    // 未加载账面缓存时先加载缓存（不重置明细，扫码只追加命中行）
+    if (form.warehouse_id && books.value.length === 0) {
+      try {
+        const res = await inventoryApi.autoBooks(form.warehouse_id)
+        books.value = res.items
+      } catch (e) {
+        ElMessage.error((e as Error).message)
+        return
+      }
+    }
     const book = books.value.find((b) => b.product_id === p.id)
     if (!book) {
-      // 未加载账面或该商品无余额：尝试按仓库实时查询后补充
-      if (form.warehouse_id && books.value.length === 0) {
-        await loadBooks()
-        const b2 = books.value.find((x) => x.product_id === p.id)
-        if (b2) {
-          appendRow(b2)
-          barcode.value = ''
-          return
-        }
-      }
       ElMessage.error('商品在该仓库无库存，无需盘点')
       return
     }
