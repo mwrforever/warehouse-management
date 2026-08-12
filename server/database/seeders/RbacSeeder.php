@@ -2,6 +2,7 @@
 // RBAC 种子：权限分组数据 + admin/operator 角色 + 超级管理员
 namespace Database\Seeders;
 
+use App\Models\Dictionary;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
@@ -43,5 +44,13 @@ class RbacSeeder extends Seeder
             ['name' => '管理员', 'email' => 'admin@php-design.local', 'password' => 'admin123', 'status' => 1]
         );
         $adminUser->roles()->syncWithoutDetaching([$admin->id]);
+
+        // 种子字典：计量单位（供基础资料模块下拉引用）
+        $unit = Dictionary::firstOrCreate(['code' => 'unit'], ['name' => '计量单位', 'remark' => '全系统计量单位']);
+        $unit->items()->delete();
+        $unit->items()->createMany([
+            ['label' => '个', 'value' => 'pc', 'sort' => 1, 'status' => 1],
+            ['label' => '箱', 'value' => 'box', 'sort' => 2, 'status' => 1],
+        ]);
     }
 }
