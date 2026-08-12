@@ -6,6 +6,15 @@ use App\Support\ApiResponse;
 use Closure;
 use Illuminate\Http\Request;
 
+/**
+ * 权限校验中间件
+ *
+ * 校验已认证用户是否拥有指定权限 code（用法：permission:user.list）。
+ * admin 角色拥有全部权限直接放行（bypass 分支）；其余用户按角色权限集合判断，
+ * 无对应权限时返回 403（{code:403, message:'无权限操作'}）。
+ * 依赖 User::roles()/permissions() 与 ApiResponse trait；必须挂在 auth:sanctum 之后，
+ * 否则 $request->user() 为空。
+ */
 class EnsurePermission
 {
     use ApiResponse;
