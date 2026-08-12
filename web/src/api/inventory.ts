@@ -171,10 +171,16 @@ export const inventoryApi = {
   async deleteCheck(id: number) {
     await http.delete(`/checks/${id}`)
   },
-  // 审核（响应盘盈/盘亏汇总）
+  // 审核（响应盘盈/盘亏汇总：changed_items 差异行数，increased/decreased 数量，*_items 行数）
   async approveCheck(id: number) {
     const { data } = await http.post(`/checks/${id}/approve`)
-    return data.data as { changed_items: number; increased: number; decreased: number }
+    return data.data as {
+      changed_items: number
+      increased: number
+      decreased: number
+      increased_items: number
+      decreased_items: number
+    }
   },
   // 账面预填：某仓库全部有余额的商品×库位
   async autoBooks(warehouseId: number) {
