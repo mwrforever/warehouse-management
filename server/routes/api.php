@@ -2,9 +2,11 @@
 // API 路由：/api/v1 前缀，认证路由公开，业务路由挂 auth:sanctum + 权限中间件
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\WarehouseController;
@@ -81,5 +83,21 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:warehouse.create')->post('/warehouses/{warehouse}/locations', [WarehouseController::class, 'storeLocation']);
         Route::middleware('permission:warehouse.update')->put('/locations/{location}', [WarehouseController::class, 'updateLocation']);
         Route::middleware('permission:warehouse.delete')->delete('/locations/{location}', [WarehouseController::class, 'destroyLocation']);
+    });
+
+    // 供应商：CRUD（supplier.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:supplier.list')->get('/suppliers', [SupplierController::class, 'index']);
+        Route::middleware('permission:supplier.create')->post('/suppliers', [SupplierController::class, 'store']);
+        Route::middleware('permission:supplier.update')->put('/suppliers/{supplier}', [SupplierController::class, 'update']);
+        Route::middleware('permission:supplier.delete')->delete('/suppliers/{supplier}', [SupplierController::class, 'destroy']);
+    });
+
+    // 客户：CRUD（customer.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:customer.list')->get('/customers', [CustomerController::class, 'index']);
+        Route::middleware('permission:customer.create')->post('/customers', [CustomerController::class, 'store']);
+        Route::middleware('permission:customer.update')->put('/customers/{customer}', [CustomerController::class, 'update']);
+        Route::middleware('permission:customer.delete')->delete('/customers/{customer}', [CustomerController::class, 'destroy']);
     });
 });
