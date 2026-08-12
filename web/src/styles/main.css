@@ -1,0 +1,23 @@
+/* 全局基础样式：reset 与通用排版，配合 tokens.css 设计令牌 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Fira Sans', system-ui, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

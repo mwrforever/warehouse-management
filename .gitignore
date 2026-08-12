@@ -1,0 +1,3 @@
+# 工具产物：playwright-cli 快照与浏览器会话数据
+.playwright/
+.playwright-cli/
