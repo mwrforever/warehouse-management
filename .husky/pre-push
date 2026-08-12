@@ -3,6 +3,9 @@
 # 前端：类型检查 → lint → stylelint → prettier → 单元测试
 # 后端：PHPStan → PHPCS → Pint → 全量测试
 # 注：E2E 需起前后端服务，耗时较长，由云端 CI 兜底执行
+# set -e：任一环节失败立即中断（phpcs 对 warning 返回非 0，需 --ignore-warnings-on-exit）
+
+set -e
 
 command -v php >/dev/null 2>&1 || {
   echo "⚠️ 未找到 php 命令。本机 Git Bash 不继承 Windows PATH，请先执行："
@@ -26,7 +29,8 @@ cd ../server
 echo "==> [后端] PHPStan 静态分析"
 vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 echo "==> [后端] PHPCS 编码规范"
-vendor/bin/phpcs
+# warning 仅提示不阻断：行长 120 软限制会产生大量 warning，退出码只看 error
+vendor/bin/phpcs --ignore-warnings-on-exit
 echo "==> [后端] Pint 格式检查"
 vendor/bin/pint --test
 echo "==> [后端] 全量测试（PHPUnit）"

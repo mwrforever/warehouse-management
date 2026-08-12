@@ -34,7 +34,8 @@ jobs:
         run: ./vendor/bin/pint --test
 
       - name: PHPCS 编码规范（PSR-12）
-        run: ./vendor/bin/phpcs
+        # warning 仅提示不阻断：行长 120 软限制会产生大量 warning，退出码只看 error
+        run: ./vendor/bin/phpcs --ignore-warnings-on-exit
 
       - name: PHPStan 静态分析
         run: ./vendor/bin/phpstan analyse --no-progress --memory-limit=1G
