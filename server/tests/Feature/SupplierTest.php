@@ -9,7 +9,6 @@ use App\Models\Supplier;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class SupplierTest extends TestCase
@@ -86,18 +85,13 @@ class SupplierTest extends TestCase
 
     public function test_destroy_with_purchase_order_reference_fails(): void
     {
-        // 边界路径：purchase_orders 表存在且有引用时删除被拒 1109（临时表验证守卫联动）
+        // 边界路径：purchase_orders 有引用时删除被拒 1109（本 Task 迁移落地后直接使用真实表）
         $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
-        Schema::create('purchase_orders', function ($table) {
-            $table->id();
-            $table->unsignedBigInteger('supplier_id');
-        });
-        DB::table('purchase_orders')->insert(['supplier_id' => $s->id]);
-        try {
-            $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
-                ->assertJsonPath('code', 1109);
-        } finally {
-            Schema::dropIfExists('purchase_orders');
-        }
+        DB::table('purchase_orders')->insert([
+            'no' => 'PO-TEST-001', 'supplier_id' => $s->id, 'order_date' => now()->toDateString(),
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
+            ->assertJsonPath('code', 1109);
     }
 }
