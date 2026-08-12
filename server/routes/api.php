@@ -4,6 +4,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BomController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\CheckController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
@@ -133,5 +134,16 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:inventory.list')->get('/inventory/balances/export', [InventoryController::class, 'exportBalances']);
         Route::middleware('permission:inventory.list')->get('/inventory/movements', [InventoryController::class, 'movements']);
         Route::middleware('permission:inventory.list')->get('/inventory/alerts', [InventoryController::class, 'alerts']);
+    });
+
+    // 盘点单：CRUD + 账面预填 + 审核（check.list/create/update/delete；审核复用 check.update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:check.list')->get('/checks/auto-books', [CheckController::class, 'autoBooks']);
+        Route::middleware('permission:check.list')->get('/checks', [CheckController::class, 'index']);
+        Route::middleware('permission:check.create')->post('/checks', [CheckController::class, 'store']);
+        Route::middleware('permission:check.list')->get('/checks/{check}', [CheckController::class, 'show']);
+        Route::middleware('permission:check.update')->put('/checks/{check}', [CheckController::class, 'update']);
+        Route::middleware('permission:check.delete')->delete('/checks/{check}', [CheckController::class, 'destroy']);
+        Route::middleware('permission:check.update')->post('/checks/{check}/approve', [CheckController::class, 'approve']);
     });
 });
