@@ -4,3 +4,8 @@
 
 # 本地工具与会话杂项
 .zcode/
+
+# 本地工具配置（未纳入版本控制）
+server/pint.json
+server/phpcs.xml
+server/phpstan.neon
