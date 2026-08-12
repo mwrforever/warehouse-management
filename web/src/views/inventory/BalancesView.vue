@@ -1,0 +1,223 @@
+<!-- 库存余额页：筛选 + 预警标签 + 行点击跳流水 + CSV 导出 -->
+<template>
+  <div class="page-card">
+    <div class="toolbar">
+      <span class="page-title">库存余额</span>
+      <el-input
+        v-model="query.keyword"
+        placeholder="商品编码/名称/条码"
+        clearable
+        style="width: 220px"
+        @keyup.enter="reload"
+        @clear="reload"
+      />
+      <el-select
+        v-model="query.warehouse_id"
+        placeholder="仓库"
+        clearable
+        style="width: 160px"
+        @change="reload"
+      >
+        <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
+      </el-select>
+      <el-select
+        v-model="query.type"
+        placeholder="类型"
+        clearable
+        style="width: 130px"
+        @change="reload"
+      >
+        <el-option label="原料" value="raw_material" />
+        <el-option label="半成品" value="semi_finished" />
+        <el-option label="成品" value="finished" />
+      </el-select>
+      <el-switch
+        v-model="query.alert"
+        :active-value="1"
+        :inactive-value="0"
+        active-text="仅看预警"
+        @change="reload"
+      />
+      <el-button class="btn-secondary" :disabled="loading" @click="doExport">导 出</el-button>
+      <el-button class="btn-secondary" @click="reload">查 询</el-button>
+    </div>
+
+    <el-table v-loading="loading" :data="rows" @row-click="gotoMovements">
+      <el-table-column prop="product_code" label="商品编码" width="130" class-name="font-code" />
+      <el-table-column prop="product_name" label="商品名称" min-width="140" />
+      <el-table-column label="类型" width="90">
+        <template #default="{ row }">
+          <el-tag :type="typeTagType(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="warehouse_name" label="仓库" width="100" />
+      <el-table-column prop="location_name" label="库位" width="90" />
+      <el-table-column label="数量" width="110" align="right">
+        <template #default="{ row }">
+          <span class="qty-cell">{{ row.quantity }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="下限" width="90" align="right">
+        <template #default="{ row }">{{ row.safety_min }}</template>
+      </el-table-column>
+      <el-table-column label="上限" width="90" align="right">
+        <template #default="{ row }">{{ row.safety_max }}</template>
+      </el-table-column>
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag v-if="row.alert_level === 1" type="danger" size="small">低库存</el-tag>
+          <el-tag v-else-if="row.alert_level === 2" type="warning" size="small">超上限</el-tag>
+        </template>
+      </el-table-column>
+    </el-table>
+    <el-pagination
+      v-model:current-page="query.page"
+      :total="total"
+      :page-size="10"
+      layout="total, prev, pager, next"
+      @current-change="load"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+// 库存余额页：列表/筛选/预警标签；点击行跳流水页并预填筛选；导出 CSV
+import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { inventoryApi, type BalanceItem, type ProductType } from '../../api/inventory'
+import { warehouseApi } from '../../api/warehouse'
+
+const router = useRouter()
+const rows = ref<BalanceItem[]>([])
+const total = ref(0)
+const loading = ref(false)
+const warehouses = ref<{ id: number; name: string }[]>([])
+const query = reactive<{
+  page: number
+  keyword: string
+  warehouse_id?: number
+  type?: ProductType
+  alert: number
+}>({
+  page: 1,
+  keyword: '',
+  warehouse_id: undefined,
+  type: undefined,
+  alert: 0,
+})
+
+// 类型标签语义色（原料蓝/半成品琥珀/成品绿）
+function typeLabel(type: ProductType): string {
+  return type === 'raw_material' ? '原料' : type === 'semi_finished' ? '半成品' : '成品'
+}
+function typeTagType(type: ProductType): 'primary' | 'warning' | 'success' {
+  return type === 'raw_material' ? 'primary' : type === 'semi_finished' ? 'warning' : 'success'
+}
+
+// 加载列表（筛选变化后重置页码）
+async function load() {
+  loading.value = true
+  try {
+    const res = await inventoryApi.balances({
+      page: query.page,
+      keyword: query.keyword || undefined,
+      warehouse_id: query.warehouse_id,
+      type: query.type,
+      alert: query.alert,
+    })
+    rows.value = res.items
+    total.value = res.total
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    loading.value = false
+  }
+}
+function reload() {
+  query.page = 1
+  load()
+}
+
+// 点击行：跳流水页并预填商品×仓库筛选
+function gotoMovements(row: BalanceItem) {
+  router.push({
+    path: '/inventory/movements',
+    query: { product_id: String(row.product_id), warehouse_id: String(row.warehouse_id) },
+  })
+}
+
+// 导出 CSV：blob 下载（中文文件名）
+async function doExport() {
+  try {
+    const blob = await inventoryApi.exportBalances({
+      keyword: query.keyword || undefined,
+      warehouse_id: query.warehouse_id,
+      type: query.type,
+      alert: query.alert,
+    })
+    // globalThis 前缀规避 eslint no-undef（flat config 未声明浏览器全局）
+    const url = globalThis.URL.createObjectURL(blob)
+    const a = globalThis.document.createElement('a')
+    a.href = url
+    a.download = `balances_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    globalThis.URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+onMounted(async () => {
+  load()
+  // 仓库下拉（全量）
+  try {
+    const res = await warehouseApi.list({ per_page: 100 })
+    warehouses.value = res.items.map((w) => ({ id: w.id, name: w.name }))
+  } catch {
+    // 下拉加载失败不阻断列表
+  }
+})
+</script>
+
+<style scoped>
+/* 页面骨架：卡片容器 + 工具栏（左标题右操作，筛选控件平铺换行） */
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-2xl);
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
+  align-items: center;
+  margin-bottom: var(--space-xl);
+}
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-foreground);
+  margin-right: auto;
+}
+/* 次按钮：透明底 + 石板灰描边（设计系统 MASTER.md Buttons） */
+.btn-secondary {
+  background: transparent;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  cursor: pointer;
+}
+/* 数量列强调：Fira Code 加粗（设计系统 inventory.md §2） */
+.qty-cell {
+  font-family: 'Fira Code', monospace;
+  font-weight: 700;
+}
+.el-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+.el-table :deep(.el-table__row:hover td) {
+  background: #f1f5f9;
+}
+</style>
