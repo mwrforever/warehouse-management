@@ -40,6 +40,14 @@ class AuthTest extends TestCase
         $this->postJson('/api/v1/auth/login', [])->assertStatus(422);
     }
 
+    public function test_login_missing_username_returns_422_not_1002(): void
+    {
+        // 边界路径：仅缺 username 的校验失败返回 code=422（与 HTTP 状态一致），不得误报业务错误 1002「用户名已存在」
+        $this->postJson('/api/v1/auth/login', ['password' => 'x1234567'])
+            ->assertStatus(422)
+            ->assertJsonPath('code', 422);
+    }
+
     public function test_login_disabled_account_fails_with_1006(): void
     {
         // 边界路径：禁用账号登录返回 1006

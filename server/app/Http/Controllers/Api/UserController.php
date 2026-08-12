@@ -27,7 +27,8 @@ class UserController extends Controller
             $query->where('status', $request->input('status'));
         }
 
-        $users = $query->paginate($request->integer('per_page', 10));
+        // per_page 钳制到 1-100：防 0 值除零与超大分页拖垮性能
+        $users = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
 
         // 分页映射：items 字段 + 用户资源（含角色，不含权限避免大响应）
         return $this->ok([

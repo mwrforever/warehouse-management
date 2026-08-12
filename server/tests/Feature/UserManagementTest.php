@@ -95,6 +95,42 @@ class UserManagementTest extends TestCase
         $this->postJson('/api/v1/auth/login', ['username' => 'rp', 'password' => 'Old@12345'])->assertJsonPath('code', 1001);
     }
 
+    public function test_update_without_password_keeps_old_password(): void
+    {
+        // 边界路径：更新不带 password 时跳过密码变更分支，旧密码仍可登录
+        $u = User::create(['name' => '保密', 'username' => 'keep', 'password' => 'Old@12345', 'status' => 1]);
+        $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", ['name' => '保密改', 'username' => 'keep', 'status' => 1, 'role_ids' => []])
+            ->assertJsonPath('code', 0);
+        $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])->assertJsonPath('code', 0);
+    }
+
+    public function test_store_attaches_roles_and_list_shows_them(): void
+    {
+        // 正常路径：新建用户挂角色后，列表返回的 roles 数组含对应角色
+        $role = Role::create(['name' => '操作员', 'code' => 'operator']);
+        $this->withToken($this->token)->postJson('/api/v1/users', [
+            'name' => '角色员', 'username' => 'withrole', 'password' => 'Test@12345', 'status' => 1, 'role_ids' => [$role->id],
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->getJson('/api/v1/users?keyword=withrole')
+            ->assertJsonPath('data.items.0.roles.0.id', $role->id)
+            ->assertJsonPath('data.items.0.roles.0.name', '操作员');
+    }
+
+    public function test_store_invalid_role_id_returns_422(): void
+    {
+        // 异常路径：role_ids 传不存在的角色 id 返回 code=422（参数错误，非业务错误 1002）
+        $this->withToken($this->token)->postJson('/api/v1/users', [
+            'name' => 'x', 'username' => 'badrole', 'password' => 'Test@12345', 'status' => 1, 'role_ids' => [999999],
+        ])->assertStatus(422)->assertJsonPath('code', 422);
+    }
+
+    public function test_index_clamps_per_page_to_valid_range(): void
+    {
+        // 边界路径：per_page 钳制到 1-100——0 值防除零、超上限防超大分页
+        $this->withToken($this->token)->getJson('/api/v1/users?per_page=0')->assertJsonPath('data.per_page', 1);
+        $this->withToken($this->token)->getJson('/api/v1/users?per_page=1000')->assertJsonPath('data.per_page', 100);
+    }
+
     public function test_user_management_requires_permission(): void
     {
         // 异常路径：无 user.list 权限的用户访问返回 403

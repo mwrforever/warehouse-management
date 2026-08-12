@@ -35,12 +35,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 return response()->json(['code' => 403, 'message' => '无权限操作', 'data' => null], 403);
             }
         });
-        // 表单校验失败统一返回 1002（HTTP 保持 422，message 取首条校验错误，避免前端拿不到错误信息）
+        // 表单校验失败统一返回 JSON：username 唯一性冲突（重复用户名）属业务错误归 code=1002，
+        // 其余校验失败（缺字段/弱密码/无效角色等）code 与 HTTP 状态一致为 422，避免机器端误判
         $exceptions->render(function (ValidationException $e, Request $request) {
             if ($request->is('api/*')) {
+                // 仅 Unique 规则命中才报 1002，且 message 固定为「用户名已存在」与 code 语义一致
+                $duplicateUsername = isset($e->validator->failed()['username']['Unique']);
                 return response()->json([
-                    'code' => 1002,
-                    'message' => $e->validator->errors()->first(),
+                    'code' => $duplicateUsername ? 1002 : 422,
+                    'message' => $duplicateUsername ? '用户名已存在' : $e->validator->errors()->first(),
                     'data' => null,
                 ], 422);
             }
