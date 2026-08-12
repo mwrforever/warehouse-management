@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Api\UnitController;
@@ -172,5 +173,18 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:check.delete')->delete('/checks/{check}', [CheckController::class, 'destroy']);
         Route::middleware('permission:check.update')
             ->post('/checks/{check}/approve', [CheckController::class, 'approve']);
+    });
+
+    // 采购订单：CRUD + 审核/关闭 + 可入库列表 + 入库记录（purchase.order.*；审核/关闭复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:purchase.order.list')->get('/purchase/orders/available', [PurchaseOrderController::class, 'available']);
+        Route::middleware('permission:purchase.order.list')->get('/purchase/orders', [PurchaseOrderController::class, 'index']);
+        Route::middleware('permission:purchase.order.create')->post('/purchase/orders', [PurchaseOrderController::class, 'store']);
+        Route::middleware('permission:purchase.order.list')->get('/purchase/orders/{order}', [PurchaseOrderController::class, 'show']);
+        Route::middleware('permission:purchase.order.update')->put('/purchase/orders/{order}', [PurchaseOrderController::class, 'update']);
+        Route::middleware('permission:purchase.order.update')->post('/purchase/orders/{order}/approve', [PurchaseOrderController::class, 'approve']);
+        Route::middleware('permission:purchase.order.update')->post('/purchase/orders/{order}/close', [PurchaseOrderController::class, 'close']);
+        Route::middleware('permission:purchase.order.delete')->delete('/purchase/orders/{order}', [PurchaseOrderController::class, 'destroy']);
+        Route::middleware('permission:purchase.order.list')->get('/purchase/orders/{order}/inbounds', [PurchaseOrderController::class, 'inbounds']);
     });
 });
