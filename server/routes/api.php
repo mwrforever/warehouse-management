@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\ProcessController;
+use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Api\UnitController;
@@ -99,5 +100,14 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:customer.create')->post('/customers', [CustomerController::class, 'store']);
         Route::middleware('permission:customer.update')->put('/customers/{customer}', [CustomerController::class, 'update']);
         Route::middleware('permission:customer.delete')->delete('/customers/{customer}', [CustomerController::class, 'destroy']);
+    });
+
+    // 商品：CRUD + 扫码查询（product.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:product.list')->get('/products', [ProductController::class, 'index']);
+        Route::middleware('permission:product.list')->get('/products/barcode/{barcode}', [ProductController::class, 'byBarcode']);
+        Route::middleware('permission:product.create')->post('/products', [ProductController::class, 'store']);
+        Route::middleware('permission:product.update')->put('/products/{product}', [ProductController::class, 'update']);
+        Route::middleware('permission:product.delete')->delete('/products/{product}', [ProductController::class, 'destroy']);
     });
 });
