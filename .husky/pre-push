@@ -29,8 +29,14 @@ cd ../server
 echo "==> [后端] PHPStan 静态分析"
 vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 echo "==> [后端] PHPCS 编码规范"
-# warning 仅提示不阻断：行长 120 软限制会产生大量 warning，退出码只看 error
-vendor/bin/phpcs --ignore-warnings-on-exit
+# 退出码语义（PHPCS 4）：0=通过，1=有 error，2=仅有 warning（行长软限制提示），3=error+warning
+# warning 仅提示不阻断，只按 error 阻断
+vendor/bin/phpcs -q
+PHPCS_STATUS=$?
+if [ "$PHPCS_STATUS" -ne 0 ] && [ "$PHPCS_STATUS" -ne 2 ]; then
+  echo "PHPCS 发现编码错误（退出码 $PHPCS_STATUS）"
+  exit "$PHPCS_STATUS"
+fi
 echo "==> [后端] Pint 格式检查"
 vendor/bin/pint --test
 echo "==> [后端] 全量测试（PHPUnit）"
