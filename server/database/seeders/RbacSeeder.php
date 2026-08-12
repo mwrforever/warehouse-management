@@ -67,6 +67,15 @@ class RbacSeeder extends Seeder
             ['name' => '盘点单创建', 'code' => 'check.create', 'group' => '库存管理'],
             ['name' => '盘点单更新', 'code' => 'check.update', 'group' => '库存管理'],
             ['name' => '盘点单删除', 'code' => 'check.delete', 'group' => '库存管理'],
+            // 采购管理模块权限（订单 + 入库单 各四动作，group=采购管理；审核/关闭复用 update）
+            ['name' => '采购订单列表', 'code' => 'purchase.order.list', 'group' => '采购管理'],
+            ['name' => '采购订单创建', 'code' => 'purchase.order.create', 'group' => '采购管理'],
+            ['name' => '采购订单更新', 'code' => 'purchase.order.update', 'group' => '采购管理'],
+            ['name' => '采购订单删除', 'code' => 'purchase.order.delete', 'group' => '采购管理'],
+            ['name' => '采购入库单列表', 'code' => 'purchase.inbound.list', 'group' => '采购管理'],
+            ['name' => '采购入库单创建', 'code' => 'purchase.inbound.create', 'group' => '采购管理'],
+            ['name' => '采购入库单更新', 'code' => 'purchase.inbound.update', 'group' => '采购管理'],
+            ['name' => '采购入库单删除', 'code' => 'purchase.inbound.delete', 'group' => '采购管理'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
