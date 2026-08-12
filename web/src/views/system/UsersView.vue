@@ -125,13 +125,15 @@ async function remove(row: UserItem) {
   }
 }
 
-// 重置密码：输入新密码（后端校验强度）
+// 重置密码：输入新密码（后端校验强度）；用户取消/关闭弹窗时静默退出，不产生未处理 rejection
 async function openReset(row: UserItem) {
-  const { value } = await ElMessageBox.prompt('请输入新密码（至少8位，含字母和数字）', `重置密码 - ${row.username}`, { inputType: 'password' })
   try {
+    const { value } = await ElMessageBox.prompt('请输入新密码（至少8位，含字母和数字）', `重置密码 - ${row.username}`, { inputType: 'password' })
     await userApi.resetPassword(row.id, value)
     ElMessage.success('密码重置成功')
   } catch (e) {
+    // Element Plus 用户取消时以字符串 'cancel'/'close' reject：静默返回，不提示错误
+    if (e === 'cancel' || e === 'close') return
     ElMessage.error((e as Error).message)
   }
 }
