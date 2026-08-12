@@ -30,7 +30,10 @@ return new class extends Migration
             $table->tinyInteger('direction')->comment('1=入库 -1=出库');
             $table->decimal('quantity', 12, 2)->comment('变动数量（恒正）');
             $table->decimal('balance_after', 12, 2)->comment('变动后余额快照');
-            $table->string('source_type', 30)->comment('来源类型枚举：purchase_inbound/sales_outbound/pick/return/finished_inbound/outsourcing_out/outsourcing_in/check_in/check_out');
+            $table->string('source_type', 30)->comment(
+                '来源类型枚举：purchase_inbound/sales_outbound/pick/return/'
+                .'finished_inbound/outsourcing_out/outsourcing_in/check_in/check_out'
+            );
             $table->unsignedBigInteger('source_id')->comment('来源单据ID');
             $table->string('source_no', 30)->comment('来源单号，如 PO20260812-001');
             $table->string('remark')->nullable()->comment('备注');

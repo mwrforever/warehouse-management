@@ -84,7 +84,8 @@ class WarehouseTest extends TestCase
         $this->withToken($this->token)->getJson("/api/v1/warehouses/{$w->id}/locations")
             ->assertJsonPath('data.items.0.name', 'A-01');
         $location = Location::first();
-        $this->withToken($this->token)->putJson("/api/v1/locations/{$location->id}", ['name' => 'A-02', 'code' => 'A-02', 'status' => 1])
+        $this->withToken($this->token)
+            ->putJson("/api/v1/locations/{$location->id}", ['name' => 'A-02', 'code' => 'A-02', 'status' => 1])
             ->assertJsonPath('code', 0);
         $this->withToken($this->token)->deleteJson("/api/v1/locations/{$location->id}")->assertJsonPath('code', 0);
         $this->assertDatabaseMissing('locations', ['id' => $location->id]);
@@ -119,7 +120,12 @@ class WarehouseTest extends TestCase
         $p = $this->createBalanceProduct();
         $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
         $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
-        InventoryBalance::create(['product_id' => $p->id, 'warehouse_id' => $w->id, 'location_id' => $l->id, 'quantity' => 1]);
+        InventoryBalance::create([
+            'product_id' => $p->id,
+            'warehouse_id' => $w->id,
+            'location_id' => $l->id,
+            'quantity' => 1,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
             ->assertJsonPath('code', 1106);
     }
@@ -130,7 +136,12 @@ class WarehouseTest extends TestCase
         $p = $this->createBalanceProduct();
         $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
         $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
-        InventoryBalance::create(['product_id' => $p->id, 'warehouse_id' => $w->id, 'location_id' => $l->id, 'quantity' => 1]);
+        InventoryBalance::create([
+            'product_id' => $p->id,
+            'warehouse_id' => $w->id,
+            'location_id' => $l->id,
+            'quantity' => 1,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
             ->assertJsonPath('code', 1107);
     }

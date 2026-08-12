@@ -44,8 +44,11 @@ class ProcessController extends Controller
             return $this->fail(1112, '工序编码已存在');
         }
         $process = Process::create([
-            'name' => $data['name'], 'code' => $data['code'],
-            'sort' => $data['sort'] ?? 0, 'description' => $data['description'] ?? null, 'status' => $data['status'] ?? 1,
+            'name' => $data['name'],
+            'code' => $data['code'],
+            'sort' => $data['sort'] ?? 0,
+            'description' => $data['description'] ?? null,
+            'status' => $data['status'] ?? 1,
         ]);
 
         return $this->ok(['id' => $process->id]);

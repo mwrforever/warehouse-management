@@ -24,7 +24,8 @@ class UserController extends Controller
 
         // 关键字搜索：匹配 username 或 name
         if ($keyword = $request->input('keyword')) {
-            $query->where(fn ($q) => $q->where('username', 'like', "%{$keyword}%")->orWhere('name', 'like', "%{$keyword}%"));
+            $query->where(fn ($q) => $q->where('username', 'like', "%{$keyword}%")
+                ->orWhere('name', 'like', "%{$keyword}%"));
         }
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
@@ -57,7 +58,10 @@ class UserController extends Controller
     public function update(UserUpdateRequest $request, User $user)
     {
         // 内置管理员保护：禁止改 username（防改名后绕过删除保护）与 status（防禁用唯一管理员锁死系统）
-        if ($user->username === 'admin' && ($request->input('username') !== 'admin' || (int) $request->input('status') !== 1)) {
+        if (
+            $user->username === 'admin'
+            && ($request->input('username') !== 'admin' || (int) $request->input('status') !== 1)
+        ) {
             return $this->fail(1003, '内置管理员不可修改');
         }
 
@@ -91,7 +95,9 @@ class UserController extends Controller
     /** 重置密码：仅更新密码字段，并撤销该用户全部旧 token（旧会话强制重新登录） */
     public function resetPassword(Request $request, User $user)
     {
-        $data = $request->validate(['password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/']]);
+        $data = $request->validate([
+            'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/'],
+        ]);
         $user->update(['password' => $data['password']]);
         // 密码已变更：撤销全部 token，旧 token 调 /auth/me 返回 401
         $user->tokens()->delete();

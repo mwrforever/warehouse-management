@@ -30,7 +30,13 @@ class CustomerTest extends TestCase
     public function test_index_keyword_search_filters_name_and_code(): void
     {
         // 正常路径：关键字按名称/编码/联系人模糊过滤
-        Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'contact' => '张三', 'phone' => '13800000000', 'status' => 1]);
+        Customer::create([
+            'name' => '测试客户',
+            'code' => 'CUS-001',
+            'contact' => '张三',
+            'phone' => '13800000000',
+            'status' => 1,
+        ]);
         Customer::create(['name' => '其他客户', 'code' => 'CUS-002', 'contact' => '李四', 'status' => 1]);
         $this->withToken($this->token)->getJson('/api/v1/customers?keyword=测试')
             ->assertJsonPath('code', 0)

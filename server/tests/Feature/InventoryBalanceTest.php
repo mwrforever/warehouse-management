@@ -38,7 +38,12 @@ class InventoryBalanceTest extends TestCase
 
         // 基础数据：主仓 + A-01 库位 + 两个商品（MAT-001 有库存、FIN-001 无库存）
         $this->wh = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
-        $this->a01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $this->a01 = Location::create([
+            'warehouse_id' => $this->wh->id,
+            'name' => 'A-01',
+            'code' => 'A-01',
+            'status' => 1,
+        ]);
         $cat = Category::create(['name' => '原材料', 'parent_id' => 0]);
         $unit = Unit::create(['name' => '个', 'code' => 'pc']);
         $this->mat = Product::create([

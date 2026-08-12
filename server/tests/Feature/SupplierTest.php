@@ -30,7 +30,13 @@ class SupplierTest extends TestCase
     public function test_index_keyword_search_filters_name_and_code(): void
     {
         // 正常路径：关键字按名称/编码/联系人模糊过滤
-        Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'contact' => '张三', 'phone' => '13800000000', 'status' => 1]);
+        Supplier::create([
+            'name' => '测试供应商',
+            'code' => 'SUP-001',
+            'contact' => '张三',
+            'phone' => '13800000000',
+            'status' => 1,
+        ]);
         Supplier::create(['name' => '其他供应商', 'code' => 'SUP-002', 'contact' => '李四', 'status' => 1]);
         $this->withToken($this->token)->getJson('/api/v1/suppliers?keyword=测试')
             ->assertJsonPath('code', 0)

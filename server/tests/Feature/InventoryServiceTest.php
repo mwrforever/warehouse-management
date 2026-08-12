@@ -42,7 +42,12 @@ class InventoryServiceTest extends TestCase
             'category_id' => $cat->id, 'unit_id' => $unit->id, 'safety_min' => 50, 'safety_max' => 500, 'status' => 1,
         ]);
         $this->warehouse = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
-        $this->location = Location::create(['warehouse_id' => $this->warehouse->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $this->location = Location::create([
+            'warehouse_id' => $this->warehouse->id,
+            'name' => 'A-01',
+            'code' => 'A-01',
+            'status' => 1,
+        ]);
     }
 
     // 组装单笔流水入参
@@ -75,9 +80,19 @@ class InventoryServiceTest extends TestCase
     {
         // 正常路径：出库余额减少且流水快照正确
         $this->svc->apply([$this->movement()]);
-        $this->svc->apply([$this->movement(['direction' => -1, 'quantity' => 40, 'source_type' => 'pick', 'source_id' => 2, 'source_no' => 'PL20260812-001'])]);
+        $this->svc->apply([$this->movement([
+            'direction' => -1,
+            'quantity' => 40,
+            'source_type' => 'pick',
+            'source_id' => 2,
+            'source_no' => 'PL20260812-001',
+        ])]);
         $this->assertDatabaseHas('inventory_balances', ['quantity' => '60.00']);
-        $this->assertDatabaseHas('inventory_movements', ['direction' => -1, 'quantity' => '40.00', 'balance_after' => '60.00']);
+        $this->assertDatabaseHas('inventory_movements', [
+            'direction' => -1,
+            'quantity' => '40.00',
+            'balance_after' => '60.00',
+        ]);
     }
 
     public function test_outbound_exceeding_balance_rolls_back(): void
@@ -85,7 +100,13 @@ class InventoryServiceTest extends TestCase
         // 异常路径：出库超卖抛异常且事务回滚（无流水残留）——余额不允许为负
         $this->svc->apply([$this->movement(['quantity' => 50])]);
         try {
-            $this->svc->apply([$this->movement(['direction' => -1, 'quantity' => 60, 'source_type' => 'sales_outbound', 'source_id' => 2, 'source_no' => 'SO20260812-001'])]);
+            $this->svc->apply([$this->movement([
+                'direction' => -1,
+                'quantity' => 60,
+                'source_type' => 'sales_outbound',
+                'source_id' => 2,
+                'source_no' => 'SO20260812-001',
+            ])]);
             $this->fail('出库超卖应抛出异常');
         } catch (InventoryException $e) {
             $this->assertStringContainsString('库存不足', $e->getMessage());
@@ -99,7 +120,13 @@ class InventoryServiceTest extends TestCase
     {
         // 核心不变式 2：余额恒等于全部流水 direction*quantity 之和
         $this->svc->apply([$this->movement(['quantity' => 100])]);
-        $this->svc->apply([$this->movement(['direction' => -1, 'quantity' => 30, 'source_type' => 'pick', 'source_id' => 2, 'source_no' => 'PL1'])]);
+        $this->svc->apply([$this->movement([
+            'direction' => -1,
+            'quantity' => 30,
+            'source_type' => 'pick',
+            'source_id' => 2,
+            'source_no' => 'PL1',
+        ])]);
         $this->svc->apply([$this->movement(['quantity' => 20, 'source_id' => 3, 'source_no' => 'PO2'])]);
         $sum = InventoryMovement::sum(DB::raw('direction * quantity'));
         $balance = InventoryBalance::first();
@@ -111,7 +138,13 @@ class InventoryServiceTest extends TestCase
     {
         // 异常路径：余额行不存在直接出库被拒
         $this->expectException(InventoryException::class);
-        $this->svc->apply([$this->movement(['direction' => -1, 'quantity' => 5, 'source_type' => 'sales_outbound', 'source_id' => 1, 'source_no' => 'SO1'])]);
+        $this->svc->apply([$this->movement([
+            'direction' => -1,
+            'quantity' => 5,
+            'source_type' => 'sales_outbound',
+            'source_id' => 1,
+            'source_no' => 'SO1',
+        ])]);
     }
 
     public function test_first_inbound_creates_row_then_updates(): void
@@ -140,7 +173,13 @@ class InventoryServiceTest extends TestCase
         try {
             $this->svc->apply([
                 $this->movement(['quantity' => 100, 'source_no' => 'PO1']),
-                $this->movement(['direction' => -1, 'quantity' => 999, 'source_type' => 'sales_outbound', 'source_id' => 2, 'source_no' => 'SO1']),
+                $this->movement([
+                    'direction' => -1,
+                    'quantity' => 999,
+                    'source_type' => 'sales_outbound',
+                    'source_id' => 2,
+                    'source_no' => 'SO1',
+                ]),
             ]);
             $this->fail('第二笔超卖应整体回滚');
         } catch (InventoryException $e) {

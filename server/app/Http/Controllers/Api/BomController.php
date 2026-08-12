@@ -59,8 +59,12 @@ class BomController extends Controller
                     $code = "BOM{$date}-".str_pad((string) $seq, 3, '0', STR_PAD_LEFT);
 
                     $bom = BomHeader::create([
-                        'code' => $code, 'product_id' => $data['product_id'], 'version' => $data['version'],
-                        'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'] ?? null,
+                        'code' => $code,
+                        'product_id' => $data['product_id'],
+                        'version' => $data['version'],
+                        'quantity' => $data['quantity'],
+                        'status' => $data['status'],
+                        'remark' => $data['remark'] ?? null,
                     ]);
                     $bom->items()->createMany($data['items']);
 

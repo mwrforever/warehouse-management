@@ -62,7 +62,8 @@ class CategoryTest extends TestCase
         // 正常路径：更新名称与上级
         $a = Category::create(['name' => 'A', 'parent_id' => 0]);
         $b = Category::create(['name' => 'B', 'parent_id' => 0]);
-        $this->withToken($this->token)->putJson("/api/v1/categories/{$b->id}", ['name' => 'B2', 'parent_id' => $a->id, 'sort' => 2])
+        $this->withToken($this->token)
+            ->putJson("/api/v1/categories/{$b->id}", ['name' => 'B2', 'parent_id' => $a->id, 'sort' => 2])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('categories', ['id' => $b->id, 'name' => 'B2', 'parent_id' => $a->id]);
     }
@@ -93,7 +94,13 @@ class CategoryTest extends TestCase
         // 异常路径：被商品引用不可删
         $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
         $unit = Unit::create(['name' => '个', 'code' => 'pc']);
-        Product::create(['name' => '成品A', 'code' => 'FIN-001', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id]);
+        Product::create([
+            'name' => '成品A',
+            'code' => 'FIN-001',
+            'type' => 'finished',
+            'category_id' => $cat->id,
+            'unit_id' => $unit->id,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/categories/{$cat->id}")
             ->assertJsonPath('code', 1102);
         $this->assertDatabaseHas('categories', ['id' => $cat->id]);

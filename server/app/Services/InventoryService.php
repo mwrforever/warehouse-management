@@ -48,7 +48,8 @@ class InventoryService
 
         // 出库：余额行必须存在且充足（余额允许 0 不允许负，超卖被业务层拒绝）
         if ($direction === -1 && (! $balance || (float) $balance->quantity < $quantity)) {
-            throw new InventoryException('库存不足：商品 '.$m['product_id'].' 当前余额 '.($balance->quantity ?? 0).'，出库 '.$quantity);
+            $msg = '库存不足：商品 '.$m['product_id'].' 当前余额 '.($balance->quantity ?? 0).'，出库 '.$quantity;
+            throw new InventoryException($msg);
         }
 
         // 入库且余额行不存在：创建（并发首次入库靠联合唯一索引兜底，冲突后重查加锁）

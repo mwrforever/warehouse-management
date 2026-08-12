@@ -30,7 +30,8 @@ class DictionaryTest extends TestCase
     public function test_dictionary_crud_and_duplicate_code(): void
     {
         // 正常路径：字典创建成功
-        $this->withToken($this->token)->postJson('/api/v1/dictionaries', ['name' => '计量单位', 'code' => 'unit', 'remark' => ''])
+        $this->withToken($this->token)
+            ->postJson('/api/v1/dictionaries', ['name' => '计量单位', 'code' => 'unit', 'remark' => ''])
             ->assertJsonPath('code', 0);
         // 异常路径：重复编码 1005
         $this->withToken($this->token)->postJson('/api/v1/dictionaries', ['name' => '重复', 'code' => 'unit'])
@@ -63,8 +64,20 @@ class DictionaryTest extends TestCase
     {
         // 正常路径：管理端 items 返回全部项（含停用，防禁用项在 UI 消失后无法恢复），按 sort 排序
         $d = Dictionary::create(['name' => 'd', 'code' => 'd1']);
-        DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '启用', 'value' => 'on', 'sort' => 1, 'status' => 1]);
-        DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '停用', 'value' => 'off', 'sort' => 2, 'status' => 0]);
+        DictionaryItem::create([
+            'dictionary_id' => $d->id,
+            'label' => '启用',
+            'value' => 'on',
+            'sort' => 1,
+            'status' => 1,
+        ]);
+        DictionaryItem::create([
+            'dictionary_id' => $d->id,
+            'label' => '停用',
+            'value' => 'off',
+            'sort' => 2,
+            'status' => 0,
+        ]);
         $this->withToken($this->token)->getJson("/api/v1/dictionaries/{$d->id}/items")
             ->assertJsonCount(2, 'data.items')
             ->assertJsonPath('data.items.0.value', 'on')
@@ -75,15 +88,29 @@ class DictionaryTest extends TestCase
     {
         // 边界路径：per_page 钳制到 1-100——0 值防除零 500、超上限防超大分页
         $this->withToken($this->token)->getJson('/api/v1/dictionaries?per_page=0')->assertJsonPath('data.per_page', 1);
-        $this->withToken($this->token)->getJson('/api/v1/dictionaries?per_page=1000')->assertJsonPath('data.per_page', 100);
+        $this->withToken($this->token)
+            ->getJson('/api/v1/dictionaries?per_page=1000')
+            ->assertJsonPath('data.per_page', 100);
     }
 
     public function test_get_by_code_returns_enabled_items(): void
     {
         // 正常路径：按编码取启用项（供其他模块下拉）
         $d = Dictionary::create(['name' => 'unit', 'code' => 'unit']);
-        DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '个', 'value' => 'pc', 'sort' => 1, 'status' => 1]);
-        DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '停用箱', 'value' => 'box', 'sort' => 2, 'status' => 0]);
+        DictionaryItem::create([
+            'dictionary_id' => $d->id,
+            'label' => '个',
+            'value' => 'pc',
+            'sort' => 1,
+            'status' => 1,
+        ]);
+        DictionaryItem::create([
+            'dictionary_id' => $d->id,
+            'label' => '停用箱',
+            'value' => 'box',
+            'sort' => 2,
+            'status' => 0,
+        ]);
         $this->withToken($this->token)->getJson('/api/v1/dictionaries/code/unit')
             ->assertJsonCount(1, 'data.items')
             ->assertJsonPath('data.items.0.label', '个');

@@ -34,7 +34,10 @@ class InventoryController extends Controller
             $level = $this->alertLevel($r);
             $status = $level === 1 ? '低库存' : ($level === 2 ? '超上限' : '正常');
             // CSV 字段统一加引号转义（防中文逗号破坏列结构）
-            $fields = [$r->product_code, $r->product_name, $r->warehouse_name, $r->location_name, $r->quantity, $r->safety_min, $r->safety_max, $status];
+            $fields = [
+                $r->product_code, $r->product_name, $r->warehouse_name,
+                $r->location_name, $r->quantity, $r->safety_min, $r->safety_max, $status,
+            ];
             $csv .= implode(',', array_map(fn ($f) => '"'.str_replace('"', '""', (string) $f).'"', $fields))."\n";
         }
 
@@ -57,8 +60,10 @@ class InventoryController extends Controller
             ->leftJoin('users', 'users.id', '=', 'inventory_movements.operator_id')
             ->select(
                 'inventory_movements.*',
-                'products.name as product_name', 'products.code as product_code',
-                'warehouses.name as warehouse_name', 'locations.name as location_name',
+                'products.name as product_name',
+                'products.code as product_code',
+                'warehouses.name as warehouse_name',
+                'locations.name as location_name',
                 'users.name as operator_name'
             )
             ->orderByDesc('inventory_movements.created_at')
@@ -117,12 +122,17 @@ class InventoryController extends Controller
             ->select(
                 'inventory_balances.quantity',
                 // 上下限取商品实时值（预警计算依赖，修改后立即生效）
-                'products.name as product_name', 'products.code as product_code',
-                'products.safety_min as safety_min', 'products.safety_max as safety_max',
+                'products.name as product_name',
+                'products.code as product_code',
+                'products.safety_min as safety_min',
+                'products.safety_max as safety_max',
                 'warehouses.name as warehouse_name'
             )
             // 预警 SQL 条件：低于下限或高于上限（0=不预警该侧）
-            ->whereRaw('(products.safety_min > 0 AND inventory_balances.quantity < products.safety_min) OR (products.safety_max > 0 AND inventory_balances.quantity > products.safety_max)')
+            ->whereRaw(
+                '(products.safety_min > 0 AND inventory_balances.quantity < products.safety_min) '
+                .'OR (products.safety_max > 0 AND inventory_balances.quantity > products.safety_max)'
+            )
             ->get();
 
         $items = $rows->map(fn ($r) => [
@@ -147,12 +157,19 @@ class InventoryController extends Controller
             ->join('warehouses', 'warehouses.id', '=', 'inventory_balances.warehouse_id')
             ->join('locations', 'locations.id', '=', 'inventory_balances.location_id')
             ->select(
-                'inventory_balances.id', 'inventory_balances.product_id', 'inventory_balances.warehouse_id',
-                'inventory_balances.location_id', 'inventory_balances.quantity',
+                'inventory_balances.id',
+                'inventory_balances.product_id',
+                'inventory_balances.warehouse_id',
+                'inventory_balances.location_id',
+                'inventory_balances.quantity',
                 // 上下限取商品实时值（预警计算依赖，修改后立即生效）
-                'products.name as product_name', 'products.code as product_code', 'products.type',
-                'products.safety_min', 'products.safety_max',
-                'warehouses.name as warehouse_name', 'locations.name as location_name'
+                'products.name as product_name',
+                'products.code as product_code',
+                'products.type',
+                'products.safety_min',
+                'products.safety_max',
+                'warehouses.name as warehouse_name',
+                'locations.name as location_name'
             )
             ->orderBy('inventory_balances.product_id')
             ->orderBy('inventory_balances.location_id');
@@ -170,7 +187,10 @@ class InventoryController extends Controller
         }
         // 仅看预警：SQL 层过滤（与 alerts 同规则）
         if ($request->input('alert') == 1) {
-            $query->whereRaw('(products.safety_min > 0 AND inventory_balances.quantity < products.safety_min) OR (products.safety_max > 0 AND inventory_balances.quantity > products.safety_max)');
+            $query->whereRaw(
+                '(products.safety_min > 0 AND inventory_balances.quantity < products.safety_min) '
+                .'OR (products.safety_max > 0 AND inventory_balances.quantity > products.safety_max)'
+            );
         }
 
         return $query;

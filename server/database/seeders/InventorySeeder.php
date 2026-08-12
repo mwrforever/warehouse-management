@@ -17,10 +17,19 @@ class InventorySeeder extends Seeder
     public function run(): void
     {
         $svc = app(InventoryService::class);
-        $wh = Warehouse::firstOrCreate(['code' => 'WH01'], ['name' => '主仓', 'address' => '厂区A', 'manager' => '张三', 'status' => 1]);
+        $wh = Warehouse::firstOrCreate(
+            ['code' => 'WH01'],
+            ['name' => '主仓', 'address' => '厂区A', 'manager' => '张三', 'status' => 1]
+        );
         // 库位：A-01（原料/半成品）、B-01（成品）
-        $a01 = Location::firstOrCreate(['code' => 'A-01'], ['warehouse_id' => $wh->id, 'name' => 'A-01', 'status' => 1]);
-        $b01 = Location::firstOrCreate(['code' => 'B-01'], ['warehouse_id' => $wh->id, 'name' => 'B-01', 'status' => 1]);
+        $a01 = Location::firstOrCreate(
+            ['code' => 'A-01'],
+            ['warehouse_id' => $wh->id, 'name' => 'A-01', 'status' => 1]
+        );
+        $b01 = Location::firstOrCreate(
+            ['code' => 'B-01'],
+            ['warehouse_id' => $wh->id, 'name' => 'B-01', 'status' => 1]
+        );
 
         // 分类：半成品（原材料/成品由基础资料种子提供）
         Category::firstOrCreate(['name' => '半成品'], ['parent_id' => 0, 'sort' => 3, 'status' => 1]);

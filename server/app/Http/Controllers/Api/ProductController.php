@@ -122,7 +122,10 @@ class ProductController extends Controller
         if (Product::where('code', $data['code'])->where('id', '!=', $product->id)->exists()) {
             return $this->fail(1114, '商品编码已存在');
         }
-        if (! empty($data['barcode']) && Product::where('barcode', $data['barcode'])->where('id', '!=', $product->id)->exists()) {
+        if (
+            ! empty($data['barcode']) && Product::where('barcode', $data['barcode'])
+                ->where('id', '!=', $product->id)->exists()
+        ) {
             return $this->fail(1115, '条码已存在');
         }
         $min = (float) ($data['safety_min'] ?? 0);

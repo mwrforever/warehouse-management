@@ -49,7 +49,8 @@ class UnitTest extends TestCase
     {
         // 正常路径：更新名称
         $unit = Unit::create(['name' => '个', 'code' => 'pc']);
-        $this->withToken($this->token)->putJson("/api/v1/units/{$unit->id}", ['name' => '箱', 'code' => 'pc', 'status' => 1])
+        $this->withToken($this->token)
+            ->putJson("/api/v1/units/{$unit->id}", ['name' => '箱', 'code' => 'pc', 'status' => 1])
             ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('units', ['id' => $unit->id, 'name' => '箱']);
     }
@@ -59,7 +60,13 @@ class UnitTest extends TestCase
         // 异常路径：被商品引用不可删
         $unit = Unit::create(['name' => '个', 'code' => 'pc']);
         $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
-        Product::create(['name' => '成品A', 'code' => 'FIN-001', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id]);
+        Product::create([
+            'name' => '成品A',
+            'code' => 'FIN-001',
+            'type' => 'finished',
+            'category_id' => $cat->id,
+            'unit_id' => $unit->id,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/units/{$unit->id}")
             ->assertJsonPath('code', 1104);
     }
