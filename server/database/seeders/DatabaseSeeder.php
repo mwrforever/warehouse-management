@@ -21,5 +21,8 @@ class DatabaseSeeder extends Seeder
             'name' => 'Test User',
             'email' => 'test@example.com',
         ]);
+
+        // RBAC 基础数据：权限、角色、内置 admin 用户
+        $this->call([RbacSeeder::class]);
     }
 }
