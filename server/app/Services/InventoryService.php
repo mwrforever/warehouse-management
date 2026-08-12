@@ -79,8 +79,9 @@ class InventoryService
         $product = Product::findOrFail($m['product_id']);
         // 余额累加 + 上下限冗余同步（预警计算以商品实时值为准，此冗余仅作快照）
         $balance->quantity = (float) $balance->quantity + $direction * $quantity;
-        $balance->safety_min = $product->safety_min;
-        $balance->safety_max = $product->safety_max;
+        // 上下限冗余同步（decimal cast 为字符串，显式转 float 保证类型一致）
+        $balance->safety_min = (float) $product->safety_min;
+        $balance->safety_max = (float) $product->safety_max;
         $balance->save();
 
         // 流水只增不改不删（审计要求）：每笔变动完整落库
