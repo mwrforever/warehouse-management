@@ -1,6 +1,8 @@
 <?php
+
 // API 路由：/api/v1 前缀，认证路由公开，业务路由挂 auth:sanctum + 权限中间件
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BomController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
@@ -43,11 +45,13 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:dictionary.list')->get('/dictionaries', [DictionaryController::class, 'index']);
         Route::middleware('permission:dictionary.list')->get('/dictionaries/{dictionary}/items', [DictionaryController::class, 'items']);
         Route::middleware('permission:dictionary.create')->post('/dictionaries', [DictionaryController::class, 'store']);
-        Route::middleware('permission:dictionary.create')->post('/dictionaries/{dictionary}/items', [DictionaryController::class, 'storeItem']);
+        Route::middleware('permission:dictionary.create')
+            ->post('/dictionaries/{dictionary}/items', [DictionaryController::class, 'storeItem']);
         Route::middleware('permission:dictionary.update')->put('/dictionaries/{dictionary}', [DictionaryController::class, 'update']);
         Route::middleware('permission:dictionary.update')->put('/dictionaries/items/{item}', [DictionaryController::class, 'updateItem']);
         Route::middleware('permission:dictionary.delete')->delete('/dictionaries/{dictionary}', [DictionaryController::class, 'destroy']);
-        Route::middleware('permission:dictionary.delete')->delete('/dictionaries/items/{item}', [DictionaryController::class, 'destroyItem']);
+        Route::middleware('permission:dictionary.delete')
+            ->delete('/dictionaries/items/{item}', [DictionaryController::class, 'destroyItem']);
     });
 
     // 分类：树形列表 + CRUD（category.list/create/update/delete）
@@ -81,7 +85,8 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:warehouse.update')->put('/warehouses/{warehouse}', [WarehouseController::class, 'update']);
         Route::middleware('permission:warehouse.delete')->delete('/warehouses/{warehouse}', [WarehouseController::class, 'destroy']);
         Route::middleware('permission:warehouse.list')->get('/warehouses/{warehouse}/locations', [WarehouseController::class, 'locations']);
-        Route::middleware('permission:warehouse.create')->post('/warehouses/{warehouse}/locations', [WarehouseController::class, 'storeLocation']);
+        Route::middleware('permission:warehouse.create')
+            ->post('/warehouses/{warehouse}/locations', [WarehouseController::class, 'storeLocation']);
         Route::middleware('permission:warehouse.update')->put('/locations/{location}', [WarehouseController::class, 'updateLocation']);
         Route::middleware('permission:warehouse.delete')->delete('/locations/{location}', [WarehouseController::class, 'destroyLocation']);
     });
@@ -109,5 +114,15 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:product.create')->post('/products', [ProductController::class, 'store']);
         Route::middleware('permission:product.update')->put('/products/{product}', [ProductController::class, 'update']);
         Route::middleware('permission:product.delete')->delete('/products/{product}', [ProductController::class, 'destroy']);
+    });
+
+    // BOM：CRUD + 明细 + 启用切换（bom.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:bom.list')->get('/boms', [BomController::class, 'index']);
+        Route::middleware('permission:bom.create')->post('/boms', [BomController::class, 'store']);
+        Route::middleware('permission:bom.update')->put('/boms/{bom}', [BomController::class, 'update']);
+        Route::middleware('permission:bom.delete')->delete('/boms/{bom}', [BomController::class, 'destroy']);
+        Route::middleware('permission:bom.list')->get('/boms/{bom}/items', [BomController::class, 'items']);
+        Route::middleware('permission:bom.update')->put('/boms/{bom}/toggle', [BomController::class, 'toggle']);
     });
 });
