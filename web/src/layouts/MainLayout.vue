@@ -5,6 +5,19 @@
       <div class="brand font-code">Nexus Factory</div>
       <nav>
         <RouterLink to="/dashboard" class="menu-item">仪表盘</RouterLink>
+        <div class="menu-group">库存管理</div>
+        <RouterLink v-if="auth.has('inventory.list')" to="/inventory/balances" class="menu-item"
+          >库存余额</RouterLink
+        >
+        <RouterLink v-if="auth.has('inventory.list')" to="/inventory/movements" class="menu-item"
+          >库存流水</RouterLink
+        >
+        <RouterLink v-if="auth.has('check.list')" to="/inventory/checks" class="menu-item"
+          >库存盘点</RouterLink
+        >
+        <RouterLink v-if="auth.has('inventory.list')" to="/inventory/alerts" class="menu-item"
+          >库存预警</RouterLink
+        >
         <div class="menu-group">系统管理</div>
         <RouterLink v-if="auth.has('user.list')" to="/system/users" class="menu-item"
           >用户管理</RouterLink
