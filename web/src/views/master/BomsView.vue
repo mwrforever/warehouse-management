@@ -118,13 +118,18 @@ function openCreate() {
   Object.assign(form, { id: null, product_id: null, version: 'v1', quantity: 1, remark: '', status: 1, items: [newRow()] })
   dialogVisible.value = true
 }
-function openEdit(row: BomRow) {
+// 编辑回填明细：先取明细再开弹窗，避免异步回填晚到覆盖新表单（审查 I-1 竞态修复）
+async function openEdit(row: BomRow) {
   Object.assign(form, { id: row.id, product_id: row.product_id, version: row.version, quantity: row.quantity, remark: row.remark, status: row.status, items: [newRow()] })
-  dialogVisible.value = true
-  // 编辑回填明细（异步加载后重建行）
-  bomApi.items(row.id).then((res) => {
+  try {
+    // 明细请求成功后组装行数据并打开弹窗，请求期间表单不会被旧数据回写
+    const res = await bomApi.items(row.id)
     form.items = res.items.map((i) => ({ material_id: i.material_id, quantity: i.quantity, unit_id: i.unit_id }))
-  })
+    dialogVisible.value = true
+  } catch (e) {
+    // 明细加载失败：提示错误且不打开弹窗，避免半成品表单
+    ElMessage.error((e as Error).message)
+  }
 }
 
 // 动态行：默认单位取第一个单位
