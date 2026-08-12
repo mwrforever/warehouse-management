@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\BomController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
+use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\RoleController;
@@ -124,5 +125,13 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:bom.delete')->delete('/boms/{bom}', [BomController::class, 'destroy']);
         Route::middleware('permission:bom.list')->get('/boms/{bom}/items', [BomController::class, 'items']);
         Route::middleware('permission:bom.update')->put('/boms/{bom}/toggle', [BomController::class, 'toggle']);
+    });
+
+    // 库存查询：余额/导出/流水/预警（inventory.list）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:inventory.list')->get('/inventory/balances', [InventoryController::class, 'balances']);
+        Route::middleware('permission:inventory.list')->get('/inventory/balances/export', [InventoryController::class, 'exportBalances']);
+        Route::middleware('permission:inventory.list')->get('/inventory/movements', [InventoryController::class, 'movements']);
+        Route::middleware('permission:inventory.list')->get('/inventory/alerts', [InventoryController::class, 'alerts']);
     });
 });
