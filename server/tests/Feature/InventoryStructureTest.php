@@ -70,4 +70,14 @@ class InventoryStructureTest extends TestCase
             'quantity' => 2, 'created_at' => now(), 'updated_at' => now(),
         ]);
     }
+
+    public function test_movements_created_at_index_exists(): void
+    {
+        // 正常路径：流水日期筛选索引已建（date_from/date_to 免全表扫）
+        $indexes = collect(Schema::getIndexes('inventory_movements'));
+        $this->assertTrue(
+            $indexes->contains(fn ($i) => $i['columns'] === ['created_at']),
+            'created_at 单列索引不存在'
+        );
+    }
 }

@@ -10,18 +10,20 @@ use App\Models\DocumentSequence;
 use App\Models\InventoryBalance;
 use App\Models\InventoryCheck;
 use App\Models\InventoryCheckItem;
+use App\Services\DocumentSequenceService;
 use App\Services\InventoryService;
 use App\Support\ApiResponse;
-use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class CheckController extends Controller
 {
     use ApiResponse;
 
-    public function __construct(private InventoryService $inventoryService) {}
+    public function __construct(
+        private InventoryService $inventoryService,
+        private DocumentSequenceService $sequenceService,
+    ) {}
 
     /** 盘点单分页列表：单号关键字/状态/仓库 筛选 */
     public function index(Request $request)
@@ -92,7 +94,14 @@ class CheckController extends Controller
     {
         $data = $this->validatePayload($request);
         $items = [];
+        // 明细查重：同商品×库位 只允许一行（防扫码/粘贴误加重复行）
+        $seen = [];
         foreach ($data['items'] as $item) {
+            $key = $item['product_id'].'-'.$item['location_id'];
+            if (isset($seen[$key])) {
+                return $this->fail(422, '盘点明细存在重复商品与库位');
+            }
+            $seen[$key] = true;
             // 实盘数不能为负
             if ((float) $item['actual_qty'] < 0) {
                 return $this->fail(1201, '实盘数量不能为负数');
@@ -114,8 +123,20 @@ class CheckController extends Controller
             ];
         }
         $check = DB::transaction(function () use ($data, $items) {
-            // 建单：单号在 nextNo 内生成并插入头记录（并发撞号 1062 由 nextNo 换号重试）
-            $check = $this->nextNo($data['warehouse_id'], $data['remark'] ?? null);
+            // 建单：单号走持久序列（并发撞号 1062/19 由服务换号重试；删除不回退号段）
+            $check = $this->sequenceService->nextNo(
+                DocumentSequence::TYPE_CHECK,
+                'CK',
+                fn (string $no) => InventoryCheck::create([
+                    'no' => $no,
+                    'warehouse_id' => $data['warehouse_id'],
+                    'status' => InventoryCheck::STATUS_DRAFT,
+                    'remark' => $data['remark'] ?? null,
+                ]),
+                // 老库衔接：序列行首次初始化时以当日既有 CK 单号段最大值为起点
+                fn () => (int) (InventoryCheck::where('no', 'like', 'CK'.date('Ymd').'-%')
+                    ->get('no')->map(fn ($c) => (int) substr((string) $c->no, -3))->max() ?? 0),
+            );
             foreach ($items as $i) {
                 InventoryCheckItem::create(['check_id' => $check->id] + $i);
             }
@@ -153,51 +174,74 @@ class CheckController extends Controller
         ]);
     }
 
-    /** 更新草稿：仅 status=草稿 可改（1202）；items 全量替换 */
+    /** 更新草稿：仅 status=草稿 可改（1202）；items 全量替换；事务内锁行复查防并发 */
     public function update(Request $request, InventoryCheck $check)
     {
-        if ($check->status === InventoryCheck::STATUS_APPROVED) {
-            return $this->fail(1202, '已审核单据不可修改');
+        try {
+            $data = $this->validatePayload($request);
+            $items = [];
+            // 明细查重：同商品×库位 只允许一行（防扫码/粘贴误加重复行）
+            $seen = [];
+            foreach ($data['items'] as $item) {
+                $key = $item['product_id'].'-'.$item['location_id'];
+                if (isset($seen[$key])) {
+                    return $this->fail(422, '盘点明细存在重复商品与库位');
+                }
+                $seen[$key] = true;
+                if ((float) $item['actual_qty'] < 0) {
+                    return $this->fail(1201, '实盘数量不能为负数');
+                }
+                $balance = InventoryBalance::where('product_id', $item['product_id'])
+                    ->where('warehouse_id', $data['warehouse_id'])
+                    ->where('location_id', $item['location_id'])
+                    ->first();
+                if (! $balance) {
+                    return $this->fail(1205, '商品在该仓库无库存，无需盘点');
+                }
+                $items[] = [
+                    'product_id' => $item['product_id'],
+                    'location_id' => $item['location_id'],
+                    'book_qty' => $balance->quantity,
+                    'actual_qty' => $item['actual_qty'],
+                ];
+            }
+            DB::transaction(function () use ($check, $data, $items) {
+                // 锁盘点单行复查状态：与审核并发时防止改到正在审核的单（幂等 1202）
+                $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status === InventoryCheck::STATUS_APPROVED) {
+                    throw new InventoryException('已审核单据不可修改', 1202);
+                }
+                $locked->update(['warehouse_id' => $data['warehouse_id'], 'remark' => $data['remark'] ?? $locked->remark]);
+                // 明细全量替换（旧行随头级联或先删后插）
+                $locked->items()->delete();
+                foreach ($items as $i) {
+                    InventoryCheckItem::create(['check_id' => $locked->id] + $i);
+                }
+            });
+        } catch (InventoryException $e) {
+            // 1202 已审核（锁行复查与并发审核幂等拦截）
+            return $this->fail($e->getCode() ?: 1202, $e->getMessage());
         }
-        $data = $this->validatePayload($request);
-        $items = [];
-        foreach ($data['items'] as $item) {
-            if ((float) $item['actual_qty'] < 0) {
-                return $this->fail(1201, '实盘数量不能为负数');
-            }
-            $balance = InventoryBalance::where('product_id', $item['product_id'])
-                ->where('warehouse_id', $data['warehouse_id'])
-                ->where('location_id', $item['location_id'])
-                ->first();
-            if (! $balance) {
-                return $this->fail(1205, '商品在该仓库无库存，无需盘点');
-            }
-            $items[] = [
-                'product_id' => $item['product_id'],
-                'location_id' => $item['location_id'],
-                'book_qty' => $balance->quantity,
-                'actual_qty' => $item['actual_qty'],
-            ];
-        }
-        DB::transaction(function () use ($check, $data, $items) {
-            $check->update(['warehouse_id' => $data['warehouse_id'], 'remark' => $data['remark'] ?? $check->remark]);
-            // 明细全量替换（旧行随头级联或先删后插）
-            $check->items()->delete();
-            foreach ($items as $i) {
-                InventoryCheckItem::create(['check_id' => $check->id] + $i);
-            }
-        });
 
         return $this->ok();
     }
 
-    /** 删除草稿：已审核不可删（1203） */
+    /** 删除草稿：已审核不可删（1203）；事务内锁行复查防并发 */
     public function destroy(InventoryCheck $check)
     {
-        if ($check->status === InventoryCheck::STATUS_APPROVED) {
-            return $this->fail(1203, '已审核单据不可删除');
+        try {
+            DB::transaction(function () use ($check) {
+                // 锁盘点单行复查状态：与审核并发时防止删到正在审核的单（幂等 1203）
+                $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status === InventoryCheck::STATUS_APPROVED) {
+                    throw new InventoryException('已审核单据不可删除', 1203);
+                }
+                $locked->delete();
+            });
+        } catch (InventoryException $e) {
+            // 1203 已审核（锁行复查与并发审核幂等拦截）
+            return $this->fail($e->getCode() ?: 1203, $e->getMessage());
         }
-        $check->delete();
 
         return $this->ok();
     }
@@ -290,64 +334,5 @@ class CheckController extends Controller
             'items.*.location_id' => 'required|integer|exists:locations,id',
             'items.*.actual_qty' => 'required|numeric',
         ]);
-    }
-
-    /**
-     * 生成并占号盘点单号 CK{date}-{seq}（seq 取自持久序列，单据删除不回退号段）
-     *
-     * 取号规则：序号来自 document_sequences 持久序列（按 类型+日期 原子自增），
-     * 与 inventory_checks 存量行数解耦——删除草稿后序号不回退，
-     * 杜绝旧实现"按当日存量 count+1 生成 → 删除后 count 回落 → 复用已存在单号 → 唯一索引冲突 500"的撞号缺陷。
-     * 并发安全：与建单同一外层事务内对序列行 FOR UPDATE 当前读（MySQL），
-     * 撞号（唯一索引 MySQL 1062 / SQLite 19）由循环换号重试兜底。
-     *
-     * @param  int  $warehouseId  仓库ID
-     * @param  string|null  $remark  备注（可空）
-     * @return InventoryCheck 已占号插入的草稿头记录
-     */
-    private function nextNo(int $warehouseId, ?string $remark = null): InventoryCheck
-    {
-        $date = date('Ymd');
-        for ($i = 0; $i < 3; $i++) {
-            try {
-                // 原子取号：序列行不存在则创建（并发下由唯一索引拦截后换号重试）
-                $seqRow = DocumentSequence::lockForUpdate()->firstOrCreate(
-                    ['type' => DocumentSequence::TYPE_CHECK, 'date' => $date],
-                    ['seq' => 0],
-                );
-                // 锁内衔接老库：序列行首次初始化（seq=0）时，起点取当日既有 CK 单号段最大值。
-                // 老库无序列记录但已有 -001/-002/-003 等历史单时，seq=0 起步会逐号撞历史单、
-                // 3 次重试耗尽直接 500；取 max 而非 count——历史号段可能缺号（如 -002 缺失），
-                // max=3 保证新单取 -004，不复用已用号（持久序列"删除不回退"语义）
-                if ((int) $seqRow->seq === 0) {
-                    $maxSeq = InventoryCheck::where('no', 'like', "CK{$date}-%")
-                        ->get('no')
-                        ->map(fn ($c) => (int) substr((string) $c->no, -3))
-                        ->max() ?? 0;
-                    if ($maxSeq > 0) {
-                        $seqRow->seq = $maxSeq;
-                    }
-                }
-                $seq = $seqRow->seq + 1;
-                $seqRow->seq = $seq;
-                $seqRow->save();
-
-                // 占号：插入头记录，若与历史遗留单号冲突由唯一索引拦截后换号重试
-                return InventoryCheck::create([
-                    'no' => sprintf('CK%s-%03d', $date, $seq),
-                    'warehouse_id' => $warehouseId,
-                    'status' => InventoryCheck::STATUS_DRAFT,
-                    'remark' => $remark,
-                ]);
-            } catch (QueryException $e) {
-                // 唯一冲突（MySQL 1062 / SQLite 19）：并发建序列行或单号撞号，换号重试；其余异常原样抛出
-                if (! in_array($e->errorInfo[1] ?? null, [1062, 19], true)) {
-                    throw $e;
-                }
-            }
-        }
-        // 极端并发下 3 次仍冲突：记录日志并抛错（理论不可达）
-        Log::warning('盘点单号生成连续冲突 3 次，请人工检查并发');
-        throw new \RuntimeException('单号生成失败，请重试');
     }
 }

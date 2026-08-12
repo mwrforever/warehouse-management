@@ -20,8 +20,14 @@ use Illuminate\Support\Carbon;
  */
 class DocumentSequence extends Model
 {
-    /** 盘点单号段类型 */
+    /** 单据号段类型：盘点单 check（库存模块）/ BOM（迁移）/ 采购订单 po / 采购入库单 pi（后续销售/生产模块追加） */
     public const TYPE_CHECK = 'check';
+
+    public const TYPE_BOM = 'bom';
+
+    public const TYPE_PO = 'po';
+
+    public const TYPE_PI = 'pi';
 
     protected $fillable = ['type', 'date', 'seq'];
 
