@@ -1,8 +1,11 @@
 <?php
-// API 路由：/api/v1 前缀，认证路由公开，用户管理挂 auth:sanctum + 权限中间件
+// API 路由：/api/v1 前缀，认证路由公开，业务路由挂 auth:sanctum + 权限中间件
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DictionaryController;
+use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -41,5 +44,29 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:dictionary.update')->put('/dictionaries/items/{item}', [DictionaryController::class, 'updateItem']);
         Route::middleware('permission:dictionary.delete')->delete('/dictionaries/{dictionary}', [DictionaryController::class, 'destroy']);
         Route::middleware('permission:dictionary.delete')->delete('/dictionaries/items/{item}', [DictionaryController::class, 'destroyItem']);
+    });
+
+    // 分类：树形列表 + CRUD（category.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:category.list')->get('/categories', [CategoryController::class, 'index']);
+        Route::middleware('permission:category.create')->post('/categories', [CategoryController::class, 'store']);
+        Route::middleware('permission:category.update')->put('/categories/{category}', [CategoryController::class, 'update']);
+        Route::middleware('permission:category.delete')->delete('/categories/{category}', [CategoryController::class, 'destroy']);
+    });
+
+    // 单位：CRUD（unit.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:unit.list')->get('/units', [UnitController::class, 'index']);
+        Route::middleware('permission:unit.create')->post('/units', [UnitController::class, 'store']);
+        Route::middleware('permission:unit.update')->put('/units/{unit}', [UnitController::class, 'update']);
+        Route::middleware('permission:unit.delete')->delete('/units/{unit}', [UnitController::class, 'destroy']);
+    });
+
+    // 工序：列表 + CRUD（process.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:process.list')->get('/processes', [ProcessController::class, 'index']);
+        Route::middleware('permission:process.create')->post('/processes', [ProcessController::class, 'store']);
+        Route::middleware('permission:process.update')->put('/processes/{process}', [ProcessController::class, 'update']);
+        Route::middleware('permission:process.delete')->delete('/processes/{process}', [ProcessController::class, 'destroy']);
     });
 });
