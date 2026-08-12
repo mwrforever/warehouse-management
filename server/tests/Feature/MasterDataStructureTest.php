@@ -64,8 +64,9 @@ class MasterDataStructureTest extends TestCase
 
     public function test_deletion_guard_returns_false_for_missing_table(): void
     {
-        // 边界路径：下游模块表未建时守卫返回 false（不阻止删除）
-        $this->assertFalse(DeletionGuard::referenced('inventory_balances', 'warehouse_id', 1));
+        // 边界路径：未建表时守卫返回 false（不阻止删除）
+        // 库存表已建且有种子引用，改用未实施的采购单据表验证该分支
+        $this->assertFalse(DeletionGuard::referenced('purchase_orders', 'warehouse_id', 1));
     }
 
     public function test_deletion_guard_detects_reference_in_existing_table(): void
