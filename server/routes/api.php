@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\WarehouseController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -68,5 +69,17 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:process.create')->post('/processes', [ProcessController::class, 'store']);
         Route::middleware('permission:process.update')->put('/processes/{process}', [ProcessController::class, 'update']);
         Route::middleware('permission:process.delete')->delete('/processes/{process}', [ProcessController::class, 'destroy']);
+    });
+
+    // 仓库/库位：CRUD + 库位子资源（warehouse.list/create/update/delete）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:warehouse.list')->get('/warehouses', [WarehouseController::class, 'index']);
+        Route::middleware('permission:warehouse.create')->post('/warehouses', [WarehouseController::class, 'store']);
+        Route::middleware('permission:warehouse.update')->put('/warehouses/{warehouse}', [WarehouseController::class, 'update']);
+        Route::middleware('permission:warehouse.delete')->delete('/warehouses/{warehouse}', [WarehouseController::class, 'destroy']);
+        Route::middleware('permission:warehouse.list')->get('/warehouses/{warehouse}/locations', [WarehouseController::class, 'locations']);
+        Route::middleware('permission:warehouse.create')->post('/warehouses/{warehouse}/locations', [WarehouseController::class, 'storeLocation']);
+        Route::middleware('permission:warehouse.update')->put('/locations/{location}', [WarehouseController::class, 'updateLocation']);
+        Route::middleware('permission:warehouse.delete')->delete('/locations/{location}', [WarehouseController::class, 'destroyLocation']);
     });
 });
