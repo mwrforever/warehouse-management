@@ -51,10 +51,13 @@ class AuthTest extends TestCase
     {
         // 正常路径：带 token 访问 me 返回用户与权限数组
         $token = $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])->json('data.token');
-        $this->withToken($token)->getJson('/api/v1/auth/me')
-            ->assertJsonPath('code', 0)
+        $res = $this->withToken($token)->getJson('/api/v1/auth/me');
+        $res->assertJsonPath('code', 0)
             ->assertJsonPath('data.username', 'admin')
             ->assertJsonStructure(['data' => ['roles', 'permissions']]);
+        // 登录应持久化最后登录时间：非 null 且为日期时间字符串（防 mass assignment 丢弃与 Carbon 转换缺失回归）
+        $this->assertNotNull($res->json('data.last_login_at'));
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $res->json('data.last_login_at'));
     }
 
     public function test_me_without_token_returns_401(): void

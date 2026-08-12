@@ -15,13 +15,13 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
-    // 用户字段白名单：账号信息与状态（密码单独走 setter）
-    protected $fillable = ['name', 'username', 'email', 'password', 'status'];
+    // 用户字段白名单：账号信息、状态与最后登录时间（密码单独走 setter）
+    protected $fillable = ['name', 'username', 'email', 'password', 'status', 'last_login_at'];
 
-    // 密码统一 bcrypt 加密存储
+    // 密码统一 bcrypt 加密存储；last_login_at 转 Carbon 供资源层格式化
     protected function casts(): array
     {
-        return ['password' => 'hashed', 'status' => 'integer'];
+        return ['password' => 'hashed', 'status' => 'integer', 'last_login_at' => 'datetime'];
     }
 
     // 用户可挂多个角色（RBAC 多对多）
