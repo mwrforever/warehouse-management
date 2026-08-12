@@ -25,7 +25,8 @@ class InventoryMovement extends Model
         'check_out' => '盘亏',
     ];
 
-    protected $fillable = ['product_id', 'warehouse_id', 'location_id', 'direction', 'quantity', 'balance_after', 'source_type', 'source_id', 'source_no', 'remark', 'operator_id'];
+    // created_at 允许指定（历史流水补录/审计回填场景，未传则走自动时间戳）
+    protected $fillable = ['product_id', 'warehouse_id', 'location_id', 'direction', 'quantity', 'balance_after', 'source_type', 'source_id', 'source_no', 'remark', 'operator_id', 'created_at'];
 
     protected function casts(): array
     {
