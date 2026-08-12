@@ -95,6 +95,25 @@ class BomTest extends TestCase
         ])->assertJsonPath('code', 1120);
     }
 
+    public function test_store_generates_next_sequence_after_existing_today_code(): void
+    {
+        // 边界路径：当日已有单号时流水顺延（count+1 单号生成路径不崩，不撞唯一索引）
+        $today = now()->format('Ymd');
+        BomHeader::create([
+            'code' => "BOM{$today}-001",
+            'product_id' => $this->finished->id,
+            'version' => 'v0',
+            'quantity' => 1,
+            'status' => 0,
+        ]);
+        $res = $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->finished->id, 'version' => 'v1', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ]);
+        $res->assertJsonPath('code', 0);
+        $this->assertSame("BOM{$today}-002", $res->json('data.code'));
+    }
+
     public function test_store_disabled_version_succeeds_even_when_enabled_exists(): void
     {
         // 边界路径：同成品已启用时，以停用状态建新版本允许

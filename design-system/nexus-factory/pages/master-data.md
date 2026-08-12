@@ -4,7 +4,7 @@
 
 ## 页面通用规范
 
-- 页面结构：`页面标题（h2, Fira Sans 600）+ 白色卡片容器 .page-card（radius 8px、--shadow-sm、padding 20px）`；工具栏在卡片顶部，表格在卡片内
+- 页面结构：`页面标题（h2, Fira Sans 600）+ 白色卡片容器 .page-card（radius 8px、--shadow-sm、padding 24px（--space-2xl））`；工具栏在卡片顶部，表格在卡片内
 - 工具栏：搜索输入框（220px，clearable，Enter 触发）+「新 建」主按钮（.btn-primary 语义色 #059669）
 - 表格：`el-table` + `el-pagination`（每页 10，layout: total, prev, pager, next）
 - 弹窗：新建/编辑统一 `el-dialog`；表单项全部 `el-form-item label` 可见标签（禁止 placeholder-only）；提交按钮 `:loading` 反馈；保存成功 `ElMessage.success`、后端业务错误 `ElMessage.error` 就近提示
@@ -29,7 +29,7 @@
 
 ## 扫枪交互（商品页）
 
-- 新建弹窗条码输入框 `autofocus`；聚焦条码框输入后按 Enter → 触发 `productApi.byBarcode` 即时校验：命中 → `ElMessage.success('条码匹配：{name}')` 并回填编码/名称；未命中 → `ElMessage.error('条码未匹配到商品')` 且**不清空输入**（便于修正重扫）
+- 新建弹窗条码输入框 `autofocus`；聚焦条码框输入后按 Enter → 触发 `productApi.byBarcode` 即时校验：命中 → `ElMessage.success('条码匹配：{name}')` 并在弹窗内显示匹配提示行（含名称与编码）；未命中 → `ElMessage.error('条码未匹配到商品')` 且**不清空输入**（便于修正重扫）
 - 命中信息同时展示在弹窗内（如条码框下方提示行），满足 E2E TC-MST-08「页面显示匹配商品信息」
 
 ## 安全库存校验（商品页）

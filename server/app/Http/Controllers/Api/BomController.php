@@ -1,6 +1,6 @@
 <?php
 
-// BOM 控制器：单头+明细事务维护、启用版本唯一、启用切换、删除保护
+// BOM 控制器：单头+明细事务维护、启用版本唯一（事务内成品行锁串行化）、单号冲突重试、启用切换、删除保护
 
 namespace App\Http\Controllers\Api;
 
@@ -9,6 +9,7 @@ use App\Models\BomHeader;
 use App\Models\Product;
 use App\Support\ApiResponse;
 use App\Support\DeletionGuard;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -37,32 +38,52 @@ class BomController extends Controller
         ]);
     }
 
-    /** 新建 BOM：单头+明细一次提交（事务）；启用版本唯一、成品/物料类型校验 */
+    /** 新建 BOM：单头+明细一次提交（事务+单号冲突重试）；启用版本唯一、成品/物料类型校验 */
     public function store(Request $request)
     {
-        $data = $this->validateBom($request, null);
+        $data = $this->validateBom($request);
 
-        return DB::transaction(function () use ($data) {
-            // 生成单号：BOM{yyyyMMdd}-{3位流水}
-            $date = now()->format('Ymd');
-            $seq = BomHeader::where('code', 'like', "BOM{$date}-%")->count() + 1;
-            $code = "BOM{$date}-" . str_pad((string) $seq, 3, '0', STR_PAD_LEFT);
+        // 单号生成 count+1 非原子：并发同日创建可能撞同号，唯一冲突时整体重试（最多 3 次）
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            try {
+                return DB::transaction(function () use ($data) {
+                    // 先锁成品行串行化同成品并发创建，再查启用版本，守住「同成品启用版本唯一」核心不变式
+                    Product::whereKey($data['product_id'])->lockForUpdate()->first();
+                    if ($data['status'] === 1 && $this->hasEnabledVersion($data['product_id'], null)) {
+                        return $this->fail(1120, '该成品已有启用版本的 BOM');
+                    }
+                    // 生成单号：BOM{yyyyMMdd}-{3位流水}，流水 = 当日已有单号数 + 1
+                    $date = now()->format('Ymd');
+                    $seq = BomHeader::where('code', 'like', "BOM{$date}-%")->count() + 1;
+                    $code = "BOM{$date}-" . str_pad((string) $seq, 3, '0', STR_PAD_LEFT);
 
-            $bom = BomHeader::create([
-                'code' => $code, 'product_id' => $data['product_id'], 'version' => $data['version'],
-                'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'] ?? null,
-            ]);
-            $bom->items()->createMany($data['items']);
-            return $this->ok(['id' => $bom->id, 'code' => $code]);
-        });
+                    $bom = BomHeader::create([
+                        'code' => $code, 'product_id' => $data['product_id'], 'version' => $data['version'],
+                        'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'] ?? null,
+                    ]);
+                    $bom->items()->createMany($data['items']);
+                    return $this->ok(['id' => $bom->id, 'code' => $code]);
+                });
+            } catch (QueryException $e) {
+                // 仅单号唯一冲突（SQLSTATE 23000 / MySQL 1062）可重试；其余异常或已达上限原样抛出
+                if ($attempt === 3 || $e->errorInfo[0] !== '23000' || $e->errorInfo[1] !== 1062) {
+                    throw $e;
+                }
+            }
+        }
     }
 
     /** 更新 BOM：明细全量替换（事务）；启用版本唯一（排除自身） */
     public function update(Request $request, BomHeader $bom)
     {
-        $data = $this->validateBom($request, $bom->id);
+        $data = $this->validateBom($request);
 
         return DB::transaction(function () use ($data, $bom) {
+            // 先锁成品行串行化同成品并发更新，再查启用版本（排除自身 id）
+            Product::whereKey($data['product_id'])->lockForUpdate()->first();
+            if ($data['status'] === 1 && $this->hasEnabledVersion($data['product_id'], $bom->id)) {
+                return $this->fail(1120, '该成品已有启用版本的 BOM');
+            }
             $bom->update([
                 'product_id' => $data['product_id'], 'version' => $data['version'],
                 'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'] ?? null,
@@ -113,8 +134,8 @@ class BomController extends Controller
         return $this->ok();
     }
 
-    // BOM 表单校验：格式 422 + 业务码（1118 成品类型/1119 物料类型/1120 启用版本唯一/1123 重复物料）
-    private function validateBom(Request $request, ?int $ignoreId): array
+    // BOM 表单校验：格式 422 + 业务码（1118 成品类型/1119 物料类型/1123 重复物料；1120 启用唯一在事务内配合成品行锁检查）
+    private function validateBom(Request $request): array
     {
         $data = $request->validate([
             'product_id' => 'required|exists:products,id',
@@ -146,17 +167,8 @@ class BomController extends Controller
             abort(response()->json(['code' => 1123, 'message' => 'BOM 明细存在重复物料', 'data' => null], 200));
         }
 
-        // 启用版本唯一 1120（status 为空默认 1=启用）
+        // 启用状态：status 为空默认 1=启用（1120 唯一性检查在事务内配合成品行锁执行）
         $status = (int) ($data['status'] ?? 1);
-        if ($status === 1) {
-            $query = BomHeader::where('product_id', $data['product_id'])->where('status', 1);
-            if ($ignoreId) {
-                $query->where('id', '!=', $ignoreId);
-            }
-            if ($query->exists()) {
-                abort(response()->json(['code' => 1120, 'message' => '该成品已有启用版本的 BOM', 'data' => null], 200));
-            }
-        }
 
         return [
             'product_id' => $data['product_id'], 'version' => $data['version'],
@@ -166,5 +178,15 @@ class BomController extends Controller
                 'material_id' => $i['material_id'], 'quantity' => $i['quantity'], 'unit_id' => $i['unit_id'],
             ], $data['items']),
         ];
+    }
+
+    // 同成品是否存在启用版本（更新场景排除自身 id）
+    private function hasEnabledVersion(int $productId, ?int $ignoreId): bool
+    {
+        $query = BomHeader::where('product_id', $productId)->where('status', 1);
+        if ($ignoreId) {
+            $query->where('id', '!=', $ignoreId);
+        }
+        return $query->exists();
     }
 }

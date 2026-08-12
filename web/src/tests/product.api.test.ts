@@ -28,4 +28,11 @@ describe('product api', () => {
     await productApi.byBarcode('888888')
     expect(http.get).toHaveBeenCalledWith('/products/barcode/888888')
   })
+
+  it('list 响应透传 remark 字段（编辑回填数据源）', async () => {
+    // 正常路径：列表项携带 remark，编辑弹窗据此回填（备注静默丢失回归保护）
+    ;(http.get as any).mockResolvedValue({ data: { code: 0, data: { items: [{ id: 1, name: '铝材', code: 'MAT-001', remark: '备用料' }], total: 1, page: 1, per_page: 10 } } })
+    const res = await productApi.list({ page: 1 })
+    expect(res.items[0].remark).toBe('备用料')
+  })
 })

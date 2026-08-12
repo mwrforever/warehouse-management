@@ -2,11 +2,8 @@
 // 基础资料数据模型测试：表结构、种子完整性、引用保护守卫（核心数据结构，100% 覆盖）
 namespace Tests\Feature;
 
-use App\Models\Category;
 use App\Models\Permission;
-use App\Models\Product;
 use App\Models\Role;
-use App\Models\Unit;
 use App\Support\DeletionGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;

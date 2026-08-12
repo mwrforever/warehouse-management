@@ -18,6 +18,7 @@ export interface ProductItem {
   safety_min: number
   safety_max: number
   status: number
+  remark: string | null
 }
 
 export const productApi = {

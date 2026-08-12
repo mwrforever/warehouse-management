@@ -145,7 +145,7 @@ function openCreate() {
   dialogVisible.value = true
 }
 function openEdit(row: ProductItem) {
-  Object.assign(form, { id: row.id, name: row.name, code: row.code, type: row.type, category_id: row.category_id, unit_id: row.unit_id, spec: row.spec, barcode: row.barcode, safety_min: row.safety_min, safety_max: row.safety_max, status: row.status, remark: '' })
+  Object.assign(form, { id: row.id, name: row.name, code: row.code, type: row.type, category_id: row.category_id, unit_id: row.unit_id, spec: row.spec, barcode: row.barcode, safety_min: row.safety_min, safety_max: row.safety_max, status: row.status, remark: row.remark })
   scanHint.value = ''
   dialogVisible.value = true
 }

@@ -65,6 +65,17 @@ class CategoryTest extends TestCase
         $this->assertDatabaseHas('categories', ['id' => $b->id, 'name' => 'B2', 'parent_id' => $a->id]);
     }
 
+    public function test_update_moving_parent_with_children_under_top_level_fails_with_1124(): void
+    {
+        // 异常路径：含子分类的分类移动到另一顶级下会使子分类成为第三级，1124 且父级不变
+        $a = Category::create(['name' => 'A', 'parent_id' => 0]);
+        $b = Category::create(['name' => 'B', 'parent_id' => 0]);
+        Category::create(['name' => 'B1', 'parent_id' => $b->id]);
+        $this->withToken($this->token)->putJson("/api/v1/categories/{$b->id}", ['name' => 'B', 'parent_id' => $a->id])
+            ->assertJsonPath('code', 1124);
+        $this->assertDatabaseHas('categories', ['id' => $b->id, 'parent_id' => 0]);
+    }
+
     public function test_destroy_with_children_fails_with_1101(): void
     {
         // 异常路径：含子分类不可删

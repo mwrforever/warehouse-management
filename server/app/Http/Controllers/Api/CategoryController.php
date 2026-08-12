@@ -70,6 +70,10 @@ class CategoryController extends Controller
 
         $parentId = (int) ($data['parent_id'] ?? 0);
         if ($parentId > 0) {
+            // 含子分类的分类只能保持顶级：移动会使子分类成为第三级，违反「分类最多两级」1124
+            if ($category->children()->exists()) {
+                return $this->fail(1124, '分类最多支持两级');
+            }
             // 防环：不能挂到自身或自身子分类下
             $hasSelfDescendant = Category::where('parent_id', $category->id)->where('id', $parentId)->exists();
             if ($parentId === $category->id || $hasSelfDescendant) {

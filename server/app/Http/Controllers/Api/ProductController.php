@@ -53,7 +53,7 @@ class ProductController extends Controller
             'unit_id' => $p->unit_id, 'unit_name' => $p->unit?->name,
             'spec' => $p->spec, 'barcode' => $p->barcode,
             'safety_min' => (float) $p->safety_min, 'safety_max' => (float) $p->safety_max,
-            'status' => $p->status,
+            'status' => $p->status, 'remark' => $p->remark,
         ];
     }
 

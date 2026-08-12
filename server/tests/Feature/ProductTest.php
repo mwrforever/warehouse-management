@@ -85,6 +85,17 @@ class ProductTest extends TestCase
         ])->assertJsonPath('code', 1122);
     }
 
+    public function test_store_min_greater_than_zero_max_ok_when_max_is_zero(): void
+    {
+        // 边界路径：上限 0=不预警该侧，下限可大于上限，创建成功（与 1122 拦截用例互补）
+        $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '只设下限', 'code' => 'MAT-004', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id,
+            'safety_min' => 500, 'safety_max' => 0, 'status' => 1,
+        ])->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('products', ['code' => 'MAT-004', 'safety_min' => '500.00', 'safety_max' => '0.00']);
+    }
+
     public function test_update_product_keeps_unit_name(): void
     {
         // 正常路径：更新规格与上下限
