@@ -1,0 +1,66 @@
+<?php
+
+// 库存数据模型测试：表结构、权限种子、流水类型枚举、联合唯一索引（核心数据结构，100% 覆盖）
+
+namespace Tests\Feature;
+
+use App\Models\InventoryBalance;
+use App\Models\InventoryMovement;
+use App\Models\Location;
+use App\Models\Permission;
+use App\Models\Role;
+use Illuminate\Database\QueryException;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Tests\TestCase;
+
+class InventoryStructureTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // 种子：RBAC + 基础资料主数据（本模块种子 InventorySeeder 在 Task 2 注册）
+        $this->seed();
+    }
+
+    public function test_all_inventory_tables_exist(): void
+    {
+        // 正常路径：4 张库存表全部建立
+        foreach (['inventory_balances', 'inventory_movements', 'inventory_checks', 'inventory_check_items'] as $table) {
+            $this->assertTrue(Schema::hasTable($table), "表 {$table} 不存在");
+        }
+    }
+
+    public function test_inventory_permissions_seeded_for_admin(): void
+    {
+        // 正常路径：库存管理 5 项权限已注册且 admin 角色全量持有（盘点审核复用 check.update）
+        $this->assertSame(5, Permission::where('group', '库存管理')->count());
+        $admin = Role::where('code', 'admin')->first();
+        $this->assertSame(2, $admin->permissions()->whereIn('code', ['inventory.list', 'check.update'])->count());
+    }
+
+    public function test_movement_source_types_cover_spec_enum(): void
+    {
+        // 正常路径：9 种来源类型与中文标签一一映射（采购/销售/生产模块将复用）
+        $this->assertSame(
+            ['purchase_inbound', 'sales_outbound', 'pick', 'return', 'finished_inbound', 'outsourcing_out', 'outsourcing_in', 'check_in', 'check_out'],
+            InventoryMovement::SOURCE_TYPES
+        );
+        $this->assertSame('采购入库', InventoryMovement::SOURCE_TYPE_LABELS['purchase_inbound']);
+        $this->assertSame('盘盈', InventoryMovement::SOURCE_TYPE_LABELS['check_in']);
+        $this->assertSame('盘亏', InventoryMovement::SOURCE_TYPE_LABELS['check_out']);
+    }
+
+    public function test_balance_unique_index_blocks_duplicate_row(): void
+    {
+        // 边界路径：联合唯一索引兜底并发首次入库（重复行插入被 DB 拒绝）
+        // 库位种子归 Task 2 InventorySeeder 提供，此处测试内自建以满足外键约束
+        Location::create(['warehouse_id' => 1, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        InventoryBalance::create(['product_id' => 1, 'warehouse_id' => 1, 'location_id' => 1, 'quantity' => 1]);
+        $this->expectException(QueryException::class);
+        DB::table('inventory_balances')->insert(['product_id' => 1, 'warehouse_id' => 1, 'location_id' => 1, 'quantity' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    }
+}

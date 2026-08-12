@@ -4,13 +4,15 @@
 
 namespace Tests\Feature;
 
+use App\Models\Category;
+use App\Models\InventoryBalance;
 use App\Models\Location;
+use App\Models\Product;
 use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class WarehouseTest extends TestCase
@@ -113,38 +115,38 @@ class WarehouseTest extends TestCase
 
     public function test_destroy_with_balances_table_reference_fails(): void
     {
-        // 边界路径：inventory_balances 表存在且有引用时，仓库删除被拒 1106（临时表验证守卫联动）
+        // 边界路径：真实 inventory_balances 表存在引用时，仓库删除被拒 1106（库存模块表落地后守卫自动生效）
+        $p = $this->createBalanceProduct();
         $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
-        Schema::create('inventory_balances', function ($table) {
-            $table->id();
-            $table->unsignedBigInteger('warehouse_id');
-            $table->unsignedBigInteger('location_id')->nullable();
-        });
-        DB::table('inventory_balances')->insert(['warehouse_id' => $w->id, 'location_id' => null]);
-        try {
-            $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
-                ->assertJsonPath('code', 1106);
-        } finally {
-            Schema::dropIfExists('inventory_balances');
-        }
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        InventoryBalance::create(['product_id' => $p->id, 'warehouse_id' => $w->id, 'location_id' => $l->id, 'quantity' => 1]);
+        $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
+            ->assertJsonPath('code', 1106);
     }
 
     public function test_destroy_location_with_balances_table_reference_fails(): void
     {
-        // 边界路径：inventory_balances 表存在且有 location_id 引用时，库位删除被拒 1107（临时表验证守卫联动）
+        // 边界路径：真实 inventory_balances 表存在 location_id 引用时，库位删除被拒 1107（库存模块表落地后守卫自动生效）
+        $p = $this->createBalanceProduct();
         $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
         $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
-        Schema::create('inventory_balances', function ($table) {
-            $table->id();
-            $table->unsignedBigInteger('warehouse_id');
-            $table->unsignedBigInteger('location_id')->nullable();
-        });
-        DB::table('inventory_balances')->insert(['warehouse_id' => $w->id, 'location_id' => $l->id]);
-        try {
-            $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
-                ->assertJsonPath('code', 1107);
-        } finally {
-            Schema::dropIfExists('inventory_balances');
-        }
+        InventoryBalance::create(['product_id' => $p->id, 'warehouse_id' => $w->id, 'location_id' => $l->id, 'quantity' => 1]);
+        $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+            ->assertJsonPath('code', 1107);
+    }
+
+    /**
+     * 构造余额引用所需商品（分类/单位外键齐全），供真实余额表的守卫测试复用
+     */
+    private function createBalanceProduct(): Product
+    {
+        $category = Category::create(['name' => '原材料', 'parent_id' => 0, 'sort' => 1, 'status' => 1]);
+        $unit = Unit::create(['name' => '个', 'code' => 'pc', 'status' => 1]);
+
+        return Product::create([
+            'name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'spec' => '1mm',
+            'barcode' => null, 'safety_min' => 10, 'safety_max' => 100, 'status' => 1,
+        ]);
     }
 }
