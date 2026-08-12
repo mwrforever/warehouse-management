@@ -149,4 +149,24 @@ class InventoryBalanceTest extends TestCase
         $token = $u->createToken('api')->plainTextToken;
         $this->withToken($token)->getJson('/api/v1/inventory/balances')->assertStatus(403);
     }
+
+    public function test_alerts_ordered_by_product_id(): void
+    {
+        // 边界路径：多个预警商品时按商品 ID 升序（顺序稳定不抖动）
+        $cat = Category::where('name', '原材料')->first() ?? Category::create(['name' => '原材料', 'parent_id' => 0]);
+        $unit = Unit::where('code', 'pc')->first() ?? Unit::create(['name' => '个', 'code' => 'pc']);
+        $semi = Product::create([
+            'name' => '半成品A', 'code' => 'SEMI-001', 'type' => 'semi_finished', 'category_id' => $cat->id,
+            'unit_id' => $unit->id, 'safety_min' => 10, 'safety_max' => 200, 'status' => 1,
+        ]);
+        InventoryBalance::create([
+            'product_id' => $semi->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->a01->id,
+            'quantity' => 5, 'safety_min' => 10, 'safety_max' => 200,
+        ]);
+        InventoryBalance::query()->where('product_id', $this->mat->id)->update(['quantity' => 40]);
+        $res = $this->withToken($this->token)->getJson('/api/v1/inventory/alerts');
+        $codes = array_column($res->json('data.items'), 'product_code');
+        // MAT-001 id 小在前，SEMI-001 在后（product_id 升序）
+        $this->assertSame(['MAT-001', 'SEMI-001'], $codes);
+    }
 }

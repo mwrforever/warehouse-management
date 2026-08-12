@@ -151,6 +151,11 @@ const dateShortcuts = [
   { text: '近 30 天', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] },
 ]
 
+// 本地日期拼接（toISOString 为 UTC，东八区凌晨会偏移一天）
+function toLocalDateString(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 async function load() {
   loading.value = true
   try {
@@ -162,8 +167,8 @@ async function load() {
       warehouse_id: query.warehouse_id,
       source_type: query.source_type,
       direction: query.direction,
-      date_from: from ? from.toISOString().slice(0, 10) : undefined,
-      date_to: to ? to.toISOString().slice(0, 10) : undefined,
+      date_from: from ? toLocalDateString(from) : undefined,
+      date_to: to ? toLocalDateString(to) : undefined,
     })
     rows.value = res.items
     total.value = res.total

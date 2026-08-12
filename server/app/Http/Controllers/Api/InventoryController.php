@@ -133,6 +133,7 @@ class InventoryController extends Controller
                 '(products.safety_min > 0 AND inventory_balances.quantity < products.safety_min) '
                 .'OR (products.safety_max > 0 AND inventory_balances.quantity > products.safety_max)'
             )
+            ->orderBy('inventory_balances.product_id')
             ->get();
 
         $items = $rows->map(fn ($r) => [

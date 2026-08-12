@@ -243,4 +243,25 @@ class BomTest extends TestCase
             'items' => [['material_id' => $this->material->id, 'quantity' => 0, 'unit_id' => $this->unit->id]],
         ])->assertStatus(422);
     }
+
+    public function test_bom_code_sequence_does_not_regress_after_delete(): void
+    {
+        // 正常路径：删除 BOM 后单号不回退（旧 count+1 会复用已删单号撞现存单号 500）
+        $first = $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->finished->id, 'version' => 'v1', 'quantity' => 1, 'status' => 0,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0)->json('data.code');
+        $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->finished->id, 'version' => 'v2', 'quantity' => 1, 'status' => 0,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0)->json('data.code');
+        // 删除第一张（草稿可删），再建 → 必须取新号（不回退到已删 -001）
+        $list = $this->withToken($this->token)->getJson('/api/v1/boms?keyword='.$first);
+        $this->withToken($this->token)->deleteJson('/api/v1/boms/'.$list->json('data.items.0.id'))->assertJsonPath('code', 0);
+        $third = $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->finished->id, 'version' => 'v3', 'quantity' => 1, 'status' => 0,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0)->json('data.code');
+        $this->assertMatchesRegularExpression('/BOM\d{8}-003$/', $third);
+    }
 }

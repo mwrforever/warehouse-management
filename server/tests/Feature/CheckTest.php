@@ -402,4 +402,13 @@ class CheckTest extends TestCase
             ->postJson("/api/v1/checks/{$check->id}/approve")
             ->assertStatus(403);
     }
+
+    public function test_store_rejects_duplicate_product_location_with_422(): void
+    {
+        // 异常路径：同商品×库位 出现两次 → 422（防扫码/粘贴重复行）
+        $items = $this->payload()['items'];
+        $items[] = ['product_id' => $this->mat->id, 'location_id' => $this->a01->id, 'actual_qty' => 99];
+        $this->withToken($this->token)->postJson('/api/v1/checks', ['warehouse_id' => $this->wh->id, 'items' => $items])
+            ->assertJsonPath('code', 422);
+    }
 }
