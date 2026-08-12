@@ -55,8 +55,9 @@
           </el-radio-group>
           <div v-if="form.type === 'finished'" class="hint">成品可为其维护 BOM（基础资料 → BOM 管理）</div>
         </el-form-item>
+        <!-- 分类树选择：node-key 必须与数据 id 字段一致，否则选择无法绑定 category_id（E2E TC-MST-07 回归） -->
         <el-form-item label="分类" required>
-          <el-tree-select v-model="form.category_id" :data="categoryTree" :props="{ label: 'name', children: 'children' }" check-strictly style="width: 100%" placeholder="选择分类" />
+          <el-tree-select v-model="form.category_id" :data="categoryTree" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly style="width: 100%" placeholder="选择分类" />
         </el-form-item>
         <el-form-item label="单位" required>
           <el-select v-model="form.unit_id" style="width: 100%">

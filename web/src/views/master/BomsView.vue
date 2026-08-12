@@ -44,7 +44,7 @@
         <el-form-item label="物料明细">
           <div class="items-wrap">
             <div v-for="(row, idx) in form.items" :key="idx" class="item-row">
-              <el-select v-model="row.material_id" filterable placeholder="物料（原料/半成品）" style="width: 260px">
+              <el-select v-model="row.material_id" filterable placeholder="物料（原料/半成品）" style="width: 260px" @change="(id: number) => applyMaterialUnit(row, id)">
                 <el-option v-for="m in materialProducts" :key="m.id" :label="`${m.code} ${m.name}`" :value="m.id" />
               </el-select>
               <el-input-number v-model="row.quantity" :min="0.01" :precision="2" placeholder="用量" style="width: 120px" />
@@ -132,9 +132,14 @@ async function openEdit(row: BomRow) {
   }
 }
 
-// 动态行：默认单位取第一个单位
+// 动态行：默认单位取第一个单位（选择物料后由 applyMaterialUnit 带出该物料单位）
 function newRow() {
   return { material_id: null, quantity: 1, unit_id: units.value[0]?.id ?? null }
+}
+// 选择物料后自动带出其计量单位（spec §5.7：单位自动带出；E2E TC-MST-09 回归）
+function applyMaterialUnit(row: { unit_id: number | null }, materialId: number) {
+  const m = materialProducts.value.find((p) => p.id === materialId)
+  row.unit_id = m?.unit_id ?? null
 }
 function addItem() {
   form.items.push(newRow())
