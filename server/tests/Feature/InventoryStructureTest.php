@@ -4,10 +4,10 @@
 
 namespace Tests\Feature;
 
-use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\Location;
 use App\Models\Permission;
+use App\Models\Product;
 use App\Models\Role;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -57,10 +57,13 @@ class InventoryStructureTest extends TestCase
     public function test_balance_unique_index_blocks_duplicate_row(): void
     {
         // 边界路径：联合唯一索引兜底并发首次入库（重复行插入被 DB 拒绝）
-        // 库位种子归 Task 2 InventorySeeder 提供，此处测试内自建以满足外键约束
-        Location::create(['warehouse_id' => 1, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
-        InventoryBalance::create(['product_id' => 1, 'warehouse_id' => 1, 'location_id' => 1, 'quantity' => 1]);
+        // 库位与余额行由 InventorySeeder 提供，直接复用种子行验证索引
+        $loc = Location::where('code', 'A-01')->firstOrFail();
+        $mat = Product::where('code', 'MAT-001')->firstOrFail();
         $this->expectException(QueryException::class);
-        DB::table('inventory_balances')->insert(['product_id' => 1, 'warehouse_id' => 1, 'location_id' => 1, 'quantity' => 2, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('inventory_balances')->insert([
+            'product_id' => $mat->id, 'warehouse_id' => $loc->warehouse_id, 'location_id' => $loc->id,
+            'quantity' => 2, 'created_at' => now(), 'updated_at' => now(),
+        ]);
     }
 }
