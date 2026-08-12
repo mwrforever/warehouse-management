@@ -30,6 +30,12 @@ http.interceptors.response.use(
       localStorage.removeItem('token')
       window.location.href = '/login'
     }
+    // 其余错误：解出统一响应体中的后端 message 抛出（如 422 重复用户名 1002、403 无权限操作），
+    // 供页面 ElMessage.error 展示，避免露出原始 axios 错误文案
+    const body = err.response?.data
+    if (body && typeof body.message === 'string' && body.message) {
+      return Promise.reject(new Error(body.message))
+    }
     return Promise.reject(err)
   }
 )
