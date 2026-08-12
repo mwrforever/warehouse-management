@@ -151,6 +151,25 @@ class CheckTest extends TestCase
         $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no);
     }
 
+    public function test_store_sequence_initializes_from_legacy_numbers(): void
+    {
+        // 回归（审查修复）：老库无序列记录但已有当日历史 CK 单号段时，新单不得从 -001 起步撞历史单
+        // 缺陷背景：序列行首次初始化 seq=0，若历史已有 -001/-002/-003，新单逐号碰撞、
+        // 3 次重试耗尽直接 500；初始化须衔接既有号段最大值 → 新单取 -004 且不复用缺失号段
+        foreach (['-001', '-002', '-003'] as $suffix) {
+            InventoryCheck::create([
+                'no' => 'CK'.date('Ymd').$suffix,
+                'warehouse_id' => $this->wh->id,
+                'status' => InventoryCheck::STATUS_DRAFT,
+            ]);
+        }
+        $no = $this->createCheck($this->payload());
+        $this->assertSame(sprintf('CK%s-004', date('Ymd')), $no);
+        // 序列行已初始化：再建一单继续 -005（持久序列单调不回退）
+        $no2 = $this->createCheck($this->payload());
+        $this->assertSame(sprintf('CK%s-005', date('Ymd')), $no2);
+    }
+
     public function test_store_sequence_does_not_regress_after_delete(): void
     {
         // 回归（缺陷修复）：删除中间号段单据后，新单号不回退

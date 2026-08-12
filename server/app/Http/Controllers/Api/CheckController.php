@@ -315,6 +315,19 @@ class CheckController extends Controller
                     ['type' => DocumentSequence::TYPE_CHECK, 'date' => $date],
                     ['seq' => 0],
                 );
+                // 锁内衔接老库：序列行首次初始化（seq=0）时，起点取当日既有 CK 单号段最大值。
+                // 老库无序列记录但已有 -001/-002/-003 等历史单时，seq=0 起步会逐号撞历史单、
+                // 3 次重试耗尽直接 500；取 max 而非 count——历史号段可能缺号（如 -002 缺失），
+                // max=3 保证新单取 -004，不复用已用号（持久序列"删除不回退"语义）
+                if ((int) $seqRow->seq === 0) {
+                    $maxSeq = InventoryCheck::where('no', 'like', "CK{$date}-%")
+                        ->get('no')
+                        ->map(fn ($c) => (int) substr((string) $c->no, -3))
+                        ->max() ?? 0;
+                    if ($maxSeq > 0) {
+                        $seqRow->seq = $maxSeq;
+                    }
+                }
                 $seq = $seqRow->seq + 1;
                 $seqRow->seq = $seq;
                 $seqRow->save();
