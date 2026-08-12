@@ -6,6 +6,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -32,6 +33,16 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthorizationException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->json(['code' => 403, 'message' => '无权限操作', 'data' => null], 403);
+            }
+        });
+        // 表单校验失败统一返回 1002（HTTP 保持 422，message 取首条校验错误，避免前端拿不到错误信息）
+        $exceptions->render(function (ValidationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'code' => 1002,
+                    'message' => $e->validator->errors()->first(),
+                    'data' => null,
+                ], 422);
             }
         });
     })->create();

@@ -35,21 +35,20 @@ class RbacTest extends TestCase
         // 正常路径（bypass 分支）：admin 角色命中 $isAdmin 短路，跳过权限集合校验直接放行
         $token = $this->user->createToken('api')->plainTextToken;
         $this->withToken($token)
-            ->getJson('/api/v1/test-permission')  // 该路由挂 permission:user.create 中间件
+            ->getJson('/api/v1/users')  // 真实用户路由挂 permission:user.list 中间件
             ->assertJsonPath('code', 0);
     }
 
     public function test_user_without_permission_gets_403(): void
     {
-        // 异常路径（拒绝分支）：operator 角色仅 user.list，访问 user.create 被拒
-        $perm = Permission::where('code', 'user.list')->first();
+        // 异常路径（拒绝分支）：operator 角色无 user.list 权限，访问用户列表被拒
         $operator = Role::where('code', 'operator')->first();
-        $operator->permissions()->sync([$perm->id]);
+        $operator->permissions()->sync([]); // 清空权限：仅保留角色壳，验证中间件按权限集合拒绝
         $u = User::create(['name' => 'op', 'username' => 'op', 'email' => 'op@test.com', 'password' => 'p', 'status' => 1]);
         $u->roles()->sync([$operator->id]);
 
         $token = $u->createToken('api')->plainTextToken;
-        $this->withToken($token)->getJson('/api/v1/test-permission')
+        $this->withToken($token)->getJson('/api/v1/users')
             ->assertStatus(403)
             ->assertJsonPath('code', 403)
             ->assertJsonPath('message', '无权限操作');
@@ -57,13 +56,13 @@ class RbacTest extends TestCase
 
     public function test_user_with_permission_passes_permission_check(): void
     {
-        // 正常路径（授权放行分支）：非 admin 用户持有 user.list，请求 list 测试路由放行
+        // 正常路径（授权放行分支）：非 admin 用户持有 user.list，请求用户列表放行
         $operator = Role::where('code', 'operator')->first();
         $u = User::create(['name' => 'op', 'username' => 'op', 'email' => 'op@test.com', 'password' => 'p', 'status' => 1]);
         $u->roles()->sync([$operator->id]);
 
         $token = $u->createToken('api')->plainTextToken;
-        $this->withToken($token)->getJson('/api/v1/test-permission-list')->assertJsonPath('code', 0);
+        $this->withToken($token)->getJson('/api/v1/users')->assertJsonPath('code', 0);
     }
 
     public function test_user_permissions_method_returns_unique_codes(): void
