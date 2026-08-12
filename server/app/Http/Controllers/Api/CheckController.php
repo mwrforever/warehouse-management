@@ -11,6 +11,7 @@ use App\Models\InventoryCheck;
 use App\Models\InventoryCheckItem;
 use App\Services\InventoryService;
 use App\Support\ApiResponse;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -110,12 +111,8 @@ class CheckController extends Controller
             ];
         }
         $check = DB::transaction(function () use ($data, $items) {
-            $check = InventoryCheck::create([
-                'no' => $this->nextNo(),
-                'warehouse_id' => $data['warehouse_id'],
-                'status' => InventoryCheck::STATUS_DRAFT,
-                'remark' => $data['remark'] ?? null,
-            ]);
+            // 建单：单号在 nextNo 内生成并插入头记录（并发撞号 1062 由 nextNo 换号重试）
+            $check = $this->nextNo($data['warehouse_id'], $data['remark'] ?? null);
             foreach ($items as $i) {
                 InventoryCheckItem::create(['check_id' => $check->id] + $i);
             }
@@ -292,19 +289,29 @@ class CheckController extends Controller
         ]);
     }
 
-    // 单号生成：CK{yyyyMMdd}-{3位流水}；号段被并发占用时重试最多 3 次（唯一索引兜底防重复）
-    private function nextNo(): string
+    // 建单并返回：单号 CK{yyyyMMdd}-{3位流水}；INSERT 撞唯一索引(1062)则换号重试（最多 3 次）
+    private function nextNo(int $warehouseId, ?string $remark = null): InventoryCheck
     {
         $date = date('Ymd');
         for ($i = 0; $i < 3; $i++) {
             $seq = InventoryCheck::where('no', 'like', "CK{$date}-%")->count() + 1;
             $no = sprintf('CK%s-%03d', $date, $seq);
-            // 号段已被并发建单占用（count+1 竞态）：换下一号重试
-            if (! InventoryCheck::where('no', $no)->exists()) {
-                return $no;
+            try {
+                // 直接插头记录占号：并发同号由唯一索引拦截，catch 后换号重试
+                return InventoryCheck::create([
+                    'no' => $no,
+                    'warehouse_id' => $warehouseId,
+                    'status' => InventoryCheck::STATUS_DRAFT,
+                    'remark' => $remark,
+                ]);
+            } catch (QueryException $e) {
+                // 唯一冲突（1062）：并发建单撞号，换号重试；非 1062 原样抛出
+                if (($e->errorInfo[1] ?? null) !== 1062) {
+                    throw $e;
+                }
             }
         }
-        // 极端并发下 3 次仍撞号：记录日志并抛错（理论不可达，唯一索引兜底）
+        // 极端并发下 3 次仍撞号：记录日志并抛错（理论不可达）
         Log::warning('盘点单号生成连续冲突 3 次，请人工检查并发');
         throw new \RuntimeException('单号生成失败，请重试');
     }

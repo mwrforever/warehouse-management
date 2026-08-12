@@ -102,6 +102,18 @@ class CheckTest extends TestCase
         $this->assertDatabaseHas('inventory_check_items', ['check_id' => $check->id, 'product_id' => $this->mat->id, 'book_qty' => '100.00', 'actual_qty' => '100.00']);
     }
 
+    public function test_store_uses_next_sequence_when_no_collides(): void
+    {
+        // 边界路径：CK{date}-001 已被占用时（号段冲突），新单自动换号 -002
+        InventoryCheck::create([
+            'no' => 'CK'.date('Ymd').'-001',
+            'warehouse_id' => $this->wh->id,
+            'status' => InventoryCheck::STATUS_DRAFT,
+        ]);
+        $no = $this->createCheck($this->payload());
+        $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no);
+    }
+
     public function test_store_rejects_negative_actual_with_1201(): void
     {
         // 异常路径：实盘数为负 → 1201
