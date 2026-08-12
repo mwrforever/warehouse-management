@@ -91,4 +91,11 @@ class RoleManagementTest extends TestCase
             ->assertJsonPath('code', 0)
             ->assertJsonStructure(['data' => ['groups' => [['group', 'permissions']]]]);
     }
+
+    public function test_index_clamps_per_page_to_valid_range(): void
+    {
+        // 边界路径：per_page 钳制到 1-100——0 值防除零 500、超上限防超大分页
+        $this->withToken($this->token)->getJson('/api/v1/roles?per_page=0')->assertJsonPath('data.per_page', 1);
+        $this->withToken($this->token)->getJson('/api/v1/roles?per_page=1000')->assertJsonPath('data.per_page', 100);
+    }
 }

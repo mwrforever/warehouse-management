@@ -49,9 +49,14 @@ class UserController extends Controller
         return $this->ok(['id' => $user->id, 'name' => $user->name, 'username' => $user->username]);
     }
 
-    /** 更新用户：password 为空则不变更；重新分配角色 */
+    /** 更新用户：password 为空则不变更；重新分配角色；内置 admin 禁止改 username/status */
     public function update(UserUpdateRequest $request, User $user)
     {
+        // 内置管理员保护：禁止改 username（防改名后绕过删除保护）与 status（防禁用唯一管理员锁死系统）
+        if ($user->username === 'admin' && ($request->input('username') !== 'admin' || (int) $request->input('status') !== 1)) {
+            return $this->fail(1003, '内置管理员不可修改');
+        }
+
         // 排除空密码：避免覆盖原密码
         $data = $request->safe()->except('role_ids');
         if (empty($data['password'])) {
@@ -59,6 +64,12 @@ class UserController extends Controller
         }
         $user->update($data);
         $user->roles()->sync($request->input('role_ids', []));
+
+        // 修改了密码则撤销该用户全部旧 token：旧会话强制重新登录
+        if (! empty($data['password'])) {
+            $user->tokens()->delete();
+        }
+
         return $this->ok();
     }
 
@@ -72,11 +83,13 @@ class UserController extends Controller
         return $this->ok();
     }
 
-    /** 重置密码：仅更新密码字段 */
+    /** 重置密码：仅更新密码字段，并撤销该用户全部旧 token（旧会话强制重新登录） */
     public function resetPassword(Request $request, User $user)
     {
         $data = $request->validate(['password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/']]);
         $user->update(['password' => $data['password']]);
+        // 密码已变更：撤销全部 token，旧 token 调 /auth/me 返回 401
+        $user->tokens()->delete();
         return $this->ok();
     }
 }

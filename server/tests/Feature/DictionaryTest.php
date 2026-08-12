@@ -47,15 +47,23 @@ class DictionaryTest extends TestCase
         $this->withToken($this->token)->deleteJson("/api/v1/dictionaries/items/{$item->id}")->assertJsonPath('code', 0);
     }
 
-    public function test_get_items_returns_only_enabled(): void
+    public function test_get_items_returns_all_including_disabled(): void
     {
-        // 边界路径：items 列表仅返回 status=1 的项
+        // 正常路径：管理端 items 返回全部项（含停用，防禁用项在 UI 消失后无法恢复），按 sort 排序
         $d = Dictionary::create(['name' => 'd', 'code' => 'd1']);
         DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '启用', 'value' => 'on', 'sort' => 1, 'status' => 1]);
         DictionaryItem::create(['dictionary_id' => $d->id, 'label' => '停用', 'value' => 'off', 'sort' => 2, 'status' => 0]);
         $this->withToken($this->token)->getJson("/api/v1/dictionaries/{$d->id}/items")
+            ->assertJsonCount(2, 'data.items')
             ->assertJsonPath('data.items.0.value', 'on')
-            ->assertJsonCount(1, 'data.items');
+            ->assertJsonPath('data.items.1.value', 'off');
+    }
+
+    public function test_index_clamps_per_page_to_valid_range(): void
+    {
+        // 边界路径：per_page 钳制到 1-100——0 值防除零 500、超上限防超大分页
+        $this->withToken($this->token)->getJson('/api/v1/dictionaries?per_page=0')->assertJsonPath('data.per_page', 1);
+        $this->withToken($this->token)->getJson('/api/v1/dictionaries?per_page=1000')->assertJsonPath('data.per_page', 100);
     }
 
     public function test_get_by_code_returns_enabled_items(): void

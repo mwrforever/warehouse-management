@@ -23,7 +23,8 @@ class RoleController extends Controller
     /** 角色分页列表：每角色带权限 code 集合 */
     public function index(Request $request)
     {
-        $roles = Role::with('permissions')->orderByDesc('id')->paginate($request->integer('per_page', 10));
+        // per_page 钳制到 1-100：防 0 值除零 500 与超大分页拖垮性能
+        $roles = Role::with('permissions')->orderByDesc('id')->paginate(max(1, min(100, $request->integer('per_page', 10))));
         return $this->ok([
             'items' => $roles->map(fn ($r) => [
                 'id' => $r->id, 'name' => $r->name, 'code' => $r->code, 'remark' => $r->remark,
