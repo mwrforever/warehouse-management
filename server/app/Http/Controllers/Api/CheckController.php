@@ -294,7 +294,9 @@ class CheckController extends Controller
     {
         $date = date('Ymd');
         for ($i = 0; $i < 3; $i++) {
-            $seq = InventoryCheck::where('no', 'like', "CK{$date}-%")->count() + 1;
+            // 锁定读重算号段：REPEATABLE READ 下 count() 为快照读，撞号后看不到对端已提交行，
+            // 必须与 InventoryService::applyOne 的 lockForUpdate 当前读重查一致，重试换号才真实生效
+            $seq = InventoryCheck::where('no', 'like', "CK{$date}-%")->lockForUpdate()->count() + 1;
             $no = sprintf('CK%s-%03d', $date, $seq);
             try {
                 // 直接插头记录占号：并发同号由唯一索引拦截，catch 后换号重试
@@ -305,7 +307,7 @@ class CheckController extends Controller
                     'remark' => $remark,
                 ]);
             } catch (QueryException $e) {
-                // 唯一冲突（1062）：并发建单撞号，换号重试；非 1062 原样抛出
+                // 唯一冲突（1062）：并发建单撞号，下一轮锁定读重算换号；非 1062 原样抛出
                 if (($e->errorInfo[1] ?? null) !== 1062) {
                     throw $e;
                 }

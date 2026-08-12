@@ -104,7 +104,9 @@ class CheckTest extends TestCase
 
     public function test_store_uses_next_sequence_when_no_collides(): void
     {
-        // 边界路径：CK{date}-001 已被占用时（号段冲突），新单自动换号 -002
+        // 边界路径：CK{date}-001 已被占用时，新单自动换号 -002
+        // 注：本测试仅覆盖「号段占用 → count+1 换号」的换号语义；1062 撞号重试分支在 sqlite 下不可达
+        // （sqlite 唯一冲突错误码为 19 ≠ MySQL 1062），该分支需在 MySQL 集成环境补测并发建单
         InventoryCheck::create([
             'no' => 'CK'.date('Ymd').'-001',
             'warehouse_id' => $this->wh->id,
