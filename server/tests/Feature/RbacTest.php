@@ -28,7 +28,13 @@ class RbacTest extends TestCase
         $operator->permissions()->sync([$perm->id]);
 
         // email 为建表非空字段（脚手架默认），测试用户需补齐
-        $this->user = User::create(['name' => '测试', 'username' => 't', 'email' => 't@test.com', 'password' => 'p', 'status' => 1]);
+        $this->user = User::create([
+            'name' => '测试',
+            'username' => 't',
+            'email' => 't@test.com',
+            'password' => 'p',
+            'status' => 1,
+        ]);
         $this->user->roles()->sync([$admin->id]);
     }
 
@@ -46,7 +52,13 @@ class RbacTest extends TestCase
         // 异常路径（拒绝分支）：operator 角色无 user.list 权限，访问用户列表被拒
         $operator = Role::where('code', 'operator')->first();
         $operator->permissions()->sync([]); // 清空权限：仅保留角色壳，验证中间件按权限集合拒绝
-        $u = User::create(['name' => 'op', 'username' => 'op', 'email' => 'op@test.com', 'password' => 'p', 'status' => 1]);
+        $u = User::create([
+            'name' => 'op',
+            'username' => 'op',
+            'email' => 'op@test.com',
+            'password' => 'p',
+            'status' => 1,
+        ]);
         $u->roles()->sync([$operator->id]);
 
         $token = $u->createToken('api')->plainTextToken;
@@ -60,7 +72,13 @@ class RbacTest extends TestCase
     {
         // 正常路径（授权放行分支）：非 admin 用户持有 user.list，请求用户列表放行
         $operator = Role::where('code', 'operator')->first();
-        $u = User::create(['name' => 'op', 'username' => 'op', 'email' => 'op@test.com', 'password' => 'p', 'status' => 1]);
+        $u = User::create([
+            'name' => 'op',
+            'username' => 'op',
+            'email' => 'op@test.com',
+            'password' => 'p',
+            'status' => 1,
+        ]);
         $u->roles()->sync([$operator->id]);
 
         $token = $u->createToken('api')->plainTextToken;

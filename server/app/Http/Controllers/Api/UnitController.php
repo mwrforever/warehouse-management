@@ -20,7 +20,12 @@ class UnitController extends Controller
         $units = Unit::orderByDesc('id')->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
 
         return $this->ok([
-            'items' => $units->map(fn ($u) => ['id' => $u->id, 'name' => $u->name, 'code' => $u->code, 'status' => $u->status]),
+            'items' => $units->map(fn ($u) => [
+                'id' => $u->id,
+                'name' => $u->name,
+                'code' => $u->code,
+                'status' => $u->status,
+            ]),
             'total' => $units->total(), 'page' => $units->currentPage(), 'per_page' => $units->perPage(),
         ]);
     }

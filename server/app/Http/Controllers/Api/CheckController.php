@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exceptions\InventoryException;
 use App\Http\Controllers\Controller;
+use App\Models\DocumentSequence;
 use App\Models\InventoryBalance;
 use App\Models\InventoryCheck;
 use App\Models\InventoryCheckItem;
@@ -61,9 +62,11 @@ class CheckController extends Controller
             ->join('products', 'products.id', '=', 'inventory_balances.product_id')
             ->join('locations', 'locations.id', '=', 'inventory_balances.location_id')
             ->select(
-                'inventory_balances.product_id', 'inventory_balances.location_id',
+                'inventory_balances.product_id',
+                'inventory_balances.location_id',
                 'inventory_balances.quantity as book_qty',
-                'products.name as product_name', 'products.code as product_code',
+                'products.name as product_name',
+                'products.code as product_code',
                 'locations.name as location_name'
             )
             ->orderBy('inventory_balances.product_id')
@@ -289,31 +292,48 @@ class CheckController extends Controller
         ]);
     }
 
-    // 建单并返回：单号 CK{yyyyMMdd}-{3位流水}；INSERT 撞唯一索引(1062)则换号重试（最多 3 次）
+    /**
+     * 生成并占号盘点单号 CK{date}-{seq}（seq 取自持久序列，单据删除不回退号段）
+     *
+     * 取号规则：序号来自 document_sequences 持久序列（按 类型+日期 原子自增），
+     * 与 inventory_checks 存量行数解耦——删除草稿后序号不回退，
+     * 杜绝旧实现"按当日存量 count+1 生成 → 删除后 count 回落 → 复用已存在单号 → 唯一索引冲突 500"的撞号缺陷。
+     * 并发安全：与建单同一外层事务内对序列行 FOR UPDATE 当前读（MySQL），
+     * 撞号（唯一索引 MySQL 1062 / SQLite 19）由循环换号重试兜底。
+     *
+     * @param  int  $warehouseId  仓库ID
+     * @param  string|null  $remark  备注（可空）
+     * @return InventoryCheck 已占号插入的草稿头记录
+     */
     private function nextNo(int $warehouseId, ?string $remark = null): InventoryCheck
     {
         $date = date('Ymd');
         for ($i = 0; $i < 3; $i++) {
-            // 锁定读重算号段：REPEATABLE READ 下 count() 为快照读，撞号后看不到对端已提交行，
-            // 必须与 InventoryService::applyOne 的 lockForUpdate 当前读重查一致，重试换号才真实生效
-            $seq = InventoryCheck::where('no', 'like', "CK{$date}-%")->lockForUpdate()->count() + 1;
-            $no = sprintf('CK%s-%03d', $date, $seq);
             try {
-                // 直接插头记录占号：并发同号由唯一索引拦截，catch 后换号重试
+                // 原子取号：序列行不存在则创建（并发下由唯一索引拦截后换号重试）
+                $seqRow = DocumentSequence::lockForUpdate()->firstOrCreate(
+                    ['type' => DocumentSequence::TYPE_CHECK, 'date' => $date],
+                    ['seq' => 0],
+                );
+                $seq = $seqRow->seq + 1;
+                $seqRow->seq = $seq;
+                $seqRow->save();
+
+                // 占号：插入头记录，若与历史遗留单号冲突由唯一索引拦截后换号重试
                 return InventoryCheck::create([
-                    'no' => $no,
+                    'no' => sprintf('CK%s-%03d', $date, $seq),
                     'warehouse_id' => $warehouseId,
                     'status' => InventoryCheck::STATUS_DRAFT,
                     'remark' => $remark,
                 ]);
             } catch (QueryException $e) {
-                // 唯一冲突（1062）：并发建单撞号，下一轮锁定读重算换号；非 1062 原样抛出
-                if (($e->errorInfo[1] ?? null) !== 1062) {
+                // 唯一冲突（MySQL 1062 / SQLite 19）：并发建序列行或单号撞号，换号重试；其余异常原样抛出
+                if (! in_array($e->errorInfo[1] ?? null, [1062, 19], true)) {
                     throw $e;
                 }
             }
         }
-        // 极端并发下 3 次仍撞号：记录日志并抛错（理论不可达）
+        // 极端并发下 3 次仍冲突：记录日志并抛错（理论不可达）
         Log::warning('盘点单号生成连续冲突 3 次，请人工检查并发');
         throw new \RuntimeException('单号生成失败，请重试');
     }

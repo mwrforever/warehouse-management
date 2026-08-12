@@ -19,7 +19,10 @@ class UserUpdateRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:50'],
             // 排除自身：更新时用户名不变也应通过唯一校验
-            'username' => ['required', 'string', 'max:50', Rule::unique('users', 'username')->ignore($this->route('user'))],
+            'username' => [
+                'required', 'string', 'max:50',
+                Rule::unique('users', 'username')->ignore($this->route('user')),
+            ],
             'password' => ['nullable', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/'],
             'email' => ['nullable', 'email'],
             'status' => ['required', 'in:0,1'],

@@ -200,7 +200,12 @@ class ProductTest extends TestCase
             'quantity' => 1,
             'status' => 1,
         ]);
-        BomItem::create(['bom_header_id' => $bom->id, 'material_id' => $material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]);
+        BomItem::create([
+            'bom_header_id' => $bom->id,
+            'material_id' => $material->id,
+            'quantity' => 2,
+            'unit_id' => $this->unit->id,
+        ]);
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$material->id}")
             ->assertJsonPath('code', 1116);
     }

@@ -20,7 +20,8 @@ class WarehouseController extends Controller
     {
         $query = Warehouse::orderByDesc('id');
         if ($keyword = $request->input('keyword')) {
-            $query->where(fn ($q) => $q->where('name', 'like', "%{$keyword}%")->orWhere('code', 'like', "%{$keyword}%"));
+            $query->where(fn ($q) => $q->where('name', 'like', "%{$keyword}%")
+                ->orWhere('code', 'like', "%{$keyword}%"));
         }
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
@@ -54,8 +55,11 @@ class WarehouseController extends Controller
             return $this->fail(1105, '仓库编码已存在');
         }
         $warehouse = Warehouse::create([
-            'name' => $data['name'], 'code' => $data['code'],
-            'address' => $data['address'] ?? null, 'manager' => $data['manager'] ?? null, 'status' => $data['status'] ?? 1,
+            'name' => $data['name'],
+            'code' => $data['code'],
+            'address' => $data['address'] ?? null,
+            'manager' => $data['manager'] ?? null,
+            'status' => $data['status'] ?? 1,
         ]);
 
         return $this->ok(['id' => $warehouse->id]);
@@ -111,7 +115,11 @@ class WarehouseController extends Controller
             'code' => 'required|string|max:50|unique:locations,code',
             'status' => 'nullable|in:0,1',
         ]);
-        $location = $warehouse->locations()->create(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? 1]);
+        $location = $warehouse->locations()->create([
+            'name' => $data['name'],
+            'code' => $data['code'],
+            'status' => $data['status'] ?? 1,
+        ]);
 
         return $this->ok(['id' => $location->id]);
     }
@@ -124,7 +132,11 @@ class WarehouseController extends Controller
             'code' => 'required|string|max:50|unique:locations,code,'.$location->id,
             'status' => 'nullable|in:0,1',
         ]);
-        $location->update(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? $location->status]);
+        $location->update([
+            'name' => $data['name'],
+            'code' => $data['code'],
+            'status' => $data['status'] ?? $location->status,
+        ]);
 
         return $this->ok();
     }

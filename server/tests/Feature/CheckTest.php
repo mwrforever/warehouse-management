@@ -48,13 +48,44 @@ class CheckTest extends TestCase
 
         // 主仓 + A-01/B-01 库位 + 3 商品（MAT-001=100、SEMI-001=30、FIN-002=20）
         $this->wh = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
-        $this->a01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
-        $this->b01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
+        $this->a01 = Location::create([
+            'warehouse_id' => $this->wh->id,
+            'name' => 'A-01',
+            'code' => 'A-01',
+            'status' => 1,
+        ]);
+        $this->b01 = Location::create([
+            'warehouse_id' => $this->wh->id,
+            'name' => 'B-01',
+            'code' => 'B-01',
+            'status' => 1,
+        ]);
         $cat = Category::create(['name' => '原材料', 'parent_id' => 0]);
         $unit = Unit::create(['name' => '个', 'code' => 'pc']);
-        $this->mat = Product::create(['name' => '测试铝材', 'code' => 'MAT-001', 'type' => 'raw_material', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
-        $this->semi = Product::create(['name' => '半成品A', 'code' => 'SEMI-001', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
-        $this->fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
+        $this->mat = Product::create([
+            'name' => '测试铝材',
+            'code' => 'MAT-001',
+            'type' => 'raw_material',
+            'category_id' => $cat->id,
+            'unit_id' => $unit->id,
+            'status' => 1,
+        ]);
+        $this->semi = Product::create([
+            'name' => '半成品A',
+            'code' => 'SEMI-001',
+            'type' => 'semi_finished',
+            'category_id' => $cat->id,
+            'unit_id' => $unit->id,
+            'status' => 1,
+        ]);
+        $this->fin = Product::create([
+            'name' => '成品B',
+            'code' => 'FIN-002',
+            'type' => 'finished',
+            'category_id' => $cat->id,
+            'unit_id' => $unit->id,
+            'status' => 1,
+        ]);
         $this->balance($this->mat, $this->a01, 100);
         $this->balance($this->semi, $this->a01, 30);
         $this->balance($this->fin, $this->b01, 20);
@@ -99,14 +130,18 @@ class CheckTest extends TestCase
         $this->assertMatchesRegularExpression('/^CK\d{8}-001$/', $no);
         $check = InventoryCheck::where('no', $no)->first();
         $this->assertSame(InventoryCheck::STATUS_DRAFT, $check->status);
-        $this->assertDatabaseHas('inventory_check_items', ['check_id' => $check->id, 'product_id' => $this->mat->id, 'book_qty' => '100.00', 'actual_qty' => '100.00']);
+        $this->assertDatabaseHas('inventory_check_items', [
+            'check_id' => $check->id,
+            'product_id' => $this->mat->id,
+            'book_qty' => '100.00',
+            'actual_qty' => '100.00',
+        ]);
     }
 
     public function test_store_uses_next_sequence_when_no_collides(): void
     {
-        // 边界路径：CK{date}-001 已被占用时，新单自动换号 -002
-        // 注：本测试仅覆盖「号段占用 → count+1 换号」的换号语义；1062 撞号重试分支在 sqlite 下不可达
-        // （sqlite 唯一冲突错误码为 19 ≠ MySQL 1062），该分支需在 MySQL 集成环境补测并发建单
+        // 边界路径：CK{date}-001 已被占用（历史遗留行）时，新单自动换号 -002
+        // 注：撞号重试分支现已兼容 MySQL 1062 与 SQLite 19，本用例在 sqlite 下即覆盖「占号冲突 → 换号重试」路径
         InventoryCheck::create([
             'no' => 'CK'.date('Ymd').'-001',
             'warehouse_id' => $this->wh->id,
@@ -114,6 +149,26 @@ class CheckTest extends TestCase
         ]);
         $no = $this->createCheck($this->payload());
         $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no);
+    }
+
+    public function test_store_sequence_does_not_regress_after_delete(): void
+    {
+        // 回归（缺陷修复）：删除中间号段单据后，新单号不回退
+        // 缺陷背景：旧实现按当日存量 count+1 生成号段，删除 CK-001 后 count 回落，
+        // 新单复用仍存在的 CK-002 → 唯一索引冲突 500（E2E TC-INV-08 实测暴露）
+        // 修复后序号来自持久序列 document_sequences，与存量行数解耦，删除不回退
+        $no1 = $this->createCheck($this->payload());
+        $this->assertMatchesRegularExpression('/^CK\d{8}-001$/', $no1);
+        $no2 = $this->createCheck($this->payload());
+        $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no2);
+        // 删除 -001 草稿后，新单必须为 -003（不得复用仍存在的 -002）
+        $check1 = InventoryCheck::where('no', $no1)->firstOrFail();
+        $this->withToken($this->token)->deleteJson("/api/v1/checks/{$check1->id}")->assertJsonPath('code', 0);
+        $no3 = $this->createCheck($this->payload());
+        $this->assertSame(sprintf('CK%s-003', date('Ymd')), $no3);
+        // 持久序列按日单调：同日继续取号 -004
+        $no4 = $this->createCheck($this->payload());
+        $this->assertSame(sprintf('CK%s-004', date('Ymd')), $no4);
     }
 
     public function test_store_rejects_negative_actual_with_1201(): void
@@ -149,12 +204,22 @@ class CheckTest extends TestCase
         $check = InventoryCheck::where('no', $no)->first();
         $items = $this->payload()['items'];
         $items[0]['actual_qty'] = 105;
-        $this->withToken($this->token)->putJson("/api/v1/checks/{$check->id}", ['warehouse_id' => $this->wh->id, 'remark' => '改后', 'items' => $items])
+        $this->withToken($this->token)
+            ->putJson("/api/v1/checks/{$check->id}", [
+                'warehouse_id' => $this->wh->id,
+                'remark' => '改后',
+                'items' => $items,
+            ])
             ->assertJsonPath('code', 0);
-        $this->assertDatabaseHas('inventory_check_items', ['check_id' => $check->id, 'product_id' => $this->mat->id, 'actual_qty' => '105.00']);
+        $this->assertDatabaseHas('inventory_check_items', [
+            'check_id' => $check->id,
+            'product_id' => $this->mat->id,
+            'actual_qty' => '105.00',
+        ]);
         // 异常路径：已审核不可改 → 1202
         $check->update(['status' => InventoryCheck::STATUS_APPROVED]);
-        $this->withToken($this->token)->putJson("/api/v1/checks/{$check->id}", ['warehouse_id' => $this->wh->id, 'items' => $items])
+        $this->withToken($this->token)
+            ->putJson("/api/v1/checks/{$check->id}", ['warehouse_id' => $this->wh->id, 'items' => $items])
             ->assertJsonPath('code', 1202);
     }
 
@@ -203,9 +268,17 @@ class CheckTest extends TestCase
             'product_id' => $this->mat->id, 'direction' => 1, 'quantity' => '5.00', 'balance_after' => '105.00',
             'source_type' => 'check_in', 'source_no' => $no,
         ]);
-        $this->assertDatabaseHas('inventory_check_items', ['check_id' => $check->id, 'product_id' => $this->mat->id, 'diff_qty' => '5.00']);
+        $this->assertDatabaseHas('inventory_check_items', [
+            'check_id' => $check->id,
+            'product_id' => $this->mat->id,
+            'diff_qty' => '5.00',
+        ]);
         // 单据状态 + 审核人
-        $this->assertDatabaseHas('inventory_checks', ['id' => $check->id, 'status' => InventoryCheck::STATUS_APPROVED, 'checker' => '管理员']);
+        $this->assertDatabaseHas('inventory_checks', [
+            'id' => $check->id,
+            'status' => InventoryCheck::STATUS_APPROVED,
+            'checker' => '管理员',
+        ]);
         $this->assertNotNull(InventoryCheck::find($check->id)->check_time);
     }
 

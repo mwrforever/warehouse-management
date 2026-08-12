@@ -81,7 +81,8 @@ class InventoryMovementTest extends TestCase
     public function test_filters_by_date_range(): void
     {
         // 边界路径：日期范围筛选（date_from/date_to 闭区间）
-        $this->withToken($this->token)->getJson('/api/v1/inventory/movements?date_from='.now()->toDateString().'&date_to='.now()->toDateString())
+        $this->withToken($this->token)
+            ->getJson('/api/v1/inventory/movements?date_from='.now()->toDateString().'&date_to='.now()->toDateString())
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.items.0.source_no', 'CK20260812-001');
     }

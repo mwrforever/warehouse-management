@@ -30,7 +30,12 @@ class DictionaryController extends Controller
         $items = Dictionary::orderByDesc('id')->paginate(max(1, min(100, $request->integer('per_page', 10))));
 
         return $this->ok([
-            'items' => $items->map(fn ($d) => ['id' => $d->id, 'name' => $d->name, 'code' => $d->code, 'remark' => $d->remark]),
+            'items' => $items->map(fn ($d) => [
+                'id' => $d->id,
+                'name' => $d->name,
+                'code' => $d->code,
+                'remark' => $d->remark,
+            ]),
             'total' => $items->total(), 'page' => $items->currentPage(), 'per_page' => $items->perPage(),
         ]);
     }
@@ -38,7 +43,11 @@ class DictionaryController extends Controller
     /** 新建字典：编码唯一 */
     public function store(Request $request)
     {
-        $data = $request->validate(['name' => 'required|string|max:50', 'code' => 'required|string|max:50', 'remark' => 'nullable|string']);
+        $data = $request->validate([
+            'name' => 'required|string|max:50',
+            'code' => 'required|string|max:50',
+            'remark' => 'nullable|string',
+        ]);
         // 编码重复属业务错误，返回 1005（不能用 unique 校验，否则被统一渲染为 422）
         if (Dictionary::where('code', $data['code'])->exists()) {
             return $this->fail(1005, '字典编码已存在');

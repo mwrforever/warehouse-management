@@ -99,15 +99,18 @@ class UserManagementTest extends TestCase
         $u = User::create(['name' => '重置', 'username' => 'rp', 'password' => 'Old@12345', 'status' => 1]);
         $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}/reset-password", ['password' => 'New@12345'])
             ->assertJsonPath('code', 0);
-        $this->postJson('/api/v1/auth/login', ['username' => 'rp', 'password' => 'New@12345'])->assertJsonPath('code', 0);
-        $this->postJson('/api/v1/auth/login', ['username' => 'rp', 'password' => 'Old@12345'])->assertJsonPath('code', 1001);
+        $this->postJson('/api/v1/auth/login', ['username' => 'rp', 'password' => 'New@12345'])
+            ->assertJsonPath('code', 0);
+        $this->postJson('/api/v1/auth/login', ['username' => 'rp', 'password' => 'Old@12345'])
+            ->assertJsonPath('code', 1001);
     }
 
     public function test_update_without_password_keeps_old_password(): void
     {
         // 边界路径：更新不带 password 时跳过密码变更分支，旧密码与旧 token 均保持有效
         $u = User::create(['name' => '保密', 'username' => 'keep', 'password' => 'Old@12345', 'status' => 1]);
-        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])->json('data.token');
+        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])
+            ->json('data.token');
         $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", [
             'name' => '保密改',
             'username' => 'keep',
@@ -115,7 +118,8 @@ class UserManagementTest extends TestCase
             'role_ids' => [],
         ])
             ->assertJsonPath('code', 0);
-        $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])->assertJsonPath('code', 0);
+        $this->postJson('/api/v1/auth/login', ['username' => 'keep', 'password' => 'Old@12345'])
+            ->assertJsonPath('code', 0);
         // 未改密码不得误撤销旧 token（防止误伤在线会话）
         $this->app['auth']->forgetGuards();
         $this->withToken($oldToken)->getJson('/api/v1/auth/me')->assertJsonPath('code', 0);
@@ -125,21 +129,24 @@ class UserManagementTest extends TestCase
     {
         // 安全路径：重置密码后旧 token 全部失效（/auth/me 返回 401，需重新登录）
         $u = User::create(['name' => '重置', 'username' => 'rp2', 'password' => 'Old@12345', 'status' => 1]);
-        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'rp2', 'password' => 'Old@12345'])->json('data.token');
+        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'rp2', 'password' => 'Old@12345'])
+            ->json('data.token');
         $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}/reset-password", ['password' => 'New@12345'])
             ->assertJsonPath('code', 0);
         // 旧 token 立即失效：需重新登录才能继续访问
         $this->app['auth']->forgetGuards();
         $this->withToken($oldToken)->getJson('/api/v1/auth/me')->assertStatus(401);
         // 新密码可正常登录签发新 token
-        $this->postJson('/api/v1/auth/login', ['username' => 'rp2', 'password' => 'New@12345'])->assertJsonPath('code', 0);
+        $this->postJson('/api/v1/auth/login', ['username' => 'rp2', 'password' => 'New@12345'])
+            ->assertJsonPath('code', 0);
     }
 
     public function test_update_with_password_revokes_old_tokens(): void
     {
         // 安全路径：编辑用户时若携带 password，旧 token 一并失效
         $u = User::create(['name' => '改密', 'username' => 'chpw', 'password' => 'Old@12345', 'status' => 1]);
-        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'chpw', 'password' => 'Old@12345'])->json('data.token');
+        $oldToken = $this->postJson('/api/v1/auth/login', ['username' => 'chpw', 'password' => 'Old@12345'])
+            ->json('data.token');
         $this->withToken($this->token)->putJson("/api/v1/users/{$u->id}", [
             'name' => '改密', 'username' => 'chpw', 'password' => 'New@12345', 'status' => 1, 'role_ids' => [],
         ])->assertJsonPath('code', 0);
@@ -190,7 +197,11 @@ class UserManagementTest extends TestCase
         // 正常路径：新建用户挂角色后，列表返回的 roles 数组含对应角色
         $role = Role::create(['name' => '操作员', 'code' => 'operator']);
         $this->withToken($this->token)->postJson('/api/v1/users', [
-            'name' => '角色员', 'username' => 'withrole', 'password' => 'Test@12345', 'status' => 1, 'role_ids' => [$role->id],
+            'name' => '角色员',
+            'username' => 'withrole',
+            'password' => 'Test@12345',
+            'status' => 1,
+            'role_ids' => [$role->id],
         ])->assertJsonPath('code', 0);
         $this->withToken($this->token)->getJson('/api/v1/users?keyword=withrole')
             ->assertJsonPath('data.items.0.roles.0.id', $role->id)

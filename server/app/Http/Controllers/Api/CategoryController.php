@@ -34,7 +34,10 @@ class CategoryController extends Controller
             'sort' => $category->sort,
             'status' => $category->status,
         ];
-        $children = $all->where('parent_id', $category->id)->values()->map(fn ($c) => $this->withChildren($c, $all))->values();
+        $children = $all->where('parent_id', $category->id)
+            ->values()
+            ->map(fn ($c) => $this->withChildren($c, $all))
+            ->values();
         if ($children->isNotEmpty()) {
             $node['children'] = $children;
         }

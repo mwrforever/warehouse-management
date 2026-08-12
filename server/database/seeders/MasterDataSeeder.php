@@ -25,7 +25,10 @@ class MasterDataSeeder extends Seeder
         Unit::firstOrCreate(['code' => 'kg'], ['name' => '千克', 'status' => 1]);
 
         // 仓库：主仓
-        Warehouse::firstOrCreate(['code' => 'WH01'], ['name' => '主仓', 'address' => '厂区A', 'manager' => '张三', 'status' => 1]);
+        Warehouse::firstOrCreate(
+            ['code' => 'WH01'],
+            ['name' => '主仓', 'address' => '厂区A', 'manager' => '张三', 'status' => 1]
+        );
 
         // 商品：原料铝材 + 成品A（供 BOM 与后续库存模块演示）
         Product::firstOrCreate(['code' => 'RAW-001'], [
@@ -40,6 +43,9 @@ class MasterDataSeeder extends Seeder
         ]);
 
         // 工序：下料
-        Process::firstOrCreate(['code' => 'PROC-01'], ['name' => '下料', 'sort' => 1, 'description' => '原料切割下料', 'status' => 1]);
+        Process::firstOrCreate(
+            ['code' => 'PROC-01'],
+            ['name' => '下料', 'sort' => 1, 'description' => '原料切割下料', 'status' => 1]
+        );
     }
 }

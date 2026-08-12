@@ -188,7 +188,11 @@ class BomTest extends TestCase
             'items' => [['material_id' => $other->id, 'quantity' => 5, 'unit_id' => $this->unit->id]],
         ])->assertJsonPath('code', 0);
         $this->assertSame(1, $bom->items()->count());
-        $this->assertDatabaseHas('bom_items', ['bom_header_id' => $bom->id, 'material_id' => $other->id, 'quantity' => '5.00']);
+        $this->assertDatabaseHas('bom_items', [
+            'bom_header_id' => $bom->id,
+            'material_id' => $other->id,
+            'quantity' => '5.00',
+        ]);
     }
 
     public function test_toggle_enable_auto_disables_other_versions(): void
@@ -208,7 +212,9 @@ class BomTest extends TestCase
             'quantity' => 1,
             'status' => 0,
         ]);
-        $this->withToken($this->token)->putJson("/api/v1/boms/{$v2->id}/toggle", ['status' => 1])->assertJsonPath('code', 0);
+        $this->withToken($this->token)
+            ->putJson("/api/v1/boms/{$v2->id}/toggle", ['status' => 1])
+            ->assertJsonPath('code', 0);
         $this->assertDatabaseHas('bom_headers', ['id' => $v2->id, 'status' => 1]);
         $this->assertDatabaseHas('bom_headers', ['id' => $v1->id, 'status' => 0]);
     }
