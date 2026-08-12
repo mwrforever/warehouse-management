@@ -30,6 +30,11 @@ jobs:
       - name: 安装依赖
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: 准备 .env（生成 APP_KEY，测试库由 phpunit.xml 的 sqlite 覆盖）
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
       - name: Pint 格式检查（PHP-CS-Fixer）
         run: ./vendor/bin/pint --test
 
