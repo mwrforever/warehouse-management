@@ -35,10 +35,10 @@ jobs:
 
       - name: PHPCS 编码规范（PSR-12）
         # 退出码语义（PHPCS 4）：0=通过，1=有 error，2=仅有 warning（行长软限制提示），3=error+warning
-        # warning 仅提示不阻断，只按 error 阻断
+        # warning 仅提示不阻断，只按 error 阻断（GitHub Actions 默认 set -e，用 || 赋值保留真实退出码）
         run: |
-          ./vendor/bin/phpcs -q
-          PHPCS_STATUS=$?
+          PHPCS_STATUS=0
+          ./vendor/bin/phpcs -q || PHPCS_STATUS=$?
           if [ "$PHPCS_STATUS" -ne 0 ] && [ "$PHPCS_STATUS" -ne 2 ]; then
             exit "$PHPCS_STATUS"
           fi
