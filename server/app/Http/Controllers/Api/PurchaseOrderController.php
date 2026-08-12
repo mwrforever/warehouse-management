@@ -1,0 +1,331 @@
+<?php
+
+// 采购订单控制器：草稿 CRUD + 审核 + 关闭 + 可入库订单列表 + 订单入库记录
+
+namespace App\Http\Controllers\Api;
+
+use App\Exceptions\PurchaseException;
+use App\Http\Controllers\Controller;
+use App\Models\DocumentSequence;
+use App\Models\PurchaseInbound;
+use App\Models\PurchaseOrder;
+use App\Models\PurchaseOrderItem;
+use App\Services\DocumentSequenceService;
+use App\Services\PurchaseOrderService;
+use App\Support\ApiResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class PurchaseOrderController extends Controller
+{
+    use ApiResponse;
+
+    public function __construct(
+        private PurchaseOrderService $orderService,
+        private DocumentSequenceService $sequenceService,
+    ) {}
+
+    /** 分页列表：单号/供应商/状态/日期范围 筛选；含供应商名与状态中文标签 */
+    public function index(Request $request)
+    {
+        $query = PurchaseOrder::query()
+            ->join('suppliers', 'suppliers.id', '=', 'purchase_orders.supplier_id')
+            ->leftJoin('users', 'users.id', '=', 'purchase_orders.created_by')
+            ->select(
+                'purchase_orders.*',
+                'suppliers.name as supplier_name',
+                'users.name as created_by_name',
+            )
+            ->orderByDesc('purchase_orders.id');
+
+        if ($keyword = $request->input('keyword')) {
+            $query->where('purchase_orders.no', 'like', "%{$keyword}%");
+        }
+        if ($request->filled('supplier_id')) {
+            $query->where('purchase_orders.supplier_id', $request->input('supplier_id'));
+        }
+        if ($request->filled('status')) {
+            $query->where('purchase_orders.status', (int) $request->input('status'));
+        }
+        // 日期范围闭区间筛选（下单日期）
+        if ($request->filled('date_from')) {
+            $query->whereDate('purchase_orders.order_date', '>=', $request->input('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('purchase_orders.order_date', '<=', $request->input('date_to'));
+        }
+
+        $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+
+        return $this->ok([
+            // join 别名列经 getAttribute 读取（PHPStan 静态分析可识别）
+            'items' => $rows->map(fn (PurchaseOrder $o) => [
+                'id' => $o->id,
+                'no' => $o->no,
+                'supplier_id' => $o->supplier_id,
+                'supplier_name' => $o->getAttribute('supplier_name'),
+                'order_date' => $o->order_date,
+                'expected_date' => $o->expected_date,
+                'total_amount' => $o->total_amount,
+                'status' => (int) $o->status,
+                'status_label' => PurchaseOrder::STATUS_LABELS[$o->status] ?? '未知',
+                'created_by' => $o->created_by,
+                'created_by_name' => $o->getAttribute('created_by_name'),
+                'approved_at' => $o->approved_at?->toDateTimeString(),
+            ]),
+            'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
+        ]);
+    }
+
+    /** 可入库订单列表：已审核/部分入库、未关闭、有剩余量（「从订单生成」下拉数据源） */
+    public function available()
+    {
+        $orders = PurchaseOrder::query()
+            ->whereIn('status', [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL])
+            ->with(['supplier', 'items'])
+            ->orderByDesc('id')
+            ->get()
+            // 过滤：必须存在未入完的明细行（剩余量 > 0）
+            ->filter(fn ($o) => $o->items->contains(
+                fn ($i) => bccomp((string) $i->received_qty, (string) $i->quantity, 2) < 0
+            ))
+            ->values();
+
+        return $this->ok([
+            'items' => $orders->map(fn ($o) => [
+                'id' => $o->id,
+                'no' => $o->no,
+                'supplier_name' => $o->supplier?->name,
+                'order_date' => $o->order_date,
+            ]),
+            'total' => $orders->count(),
+        ]);
+    }
+
+    /** 新建草稿：单号持久序列；金额 bcmath；明细非空 1301 / 数量>0 1302 / 负价 1311 / 重复商品 1312 */
+    public function store(Request $request)
+    {
+        $data = $this->validatePayload($request);
+        // 业务码校验（422 仅格式层，业务冲突走业务码）
+        if (empty($data['items'])) {
+            return $this->fail(1301, '请至少添加一条明细');
+        }
+        foreach ($data['items'] as $item) {
+            if ((float) $item['quantity'] <= 0) {
+                return $this->fail(1302, '数量必须大于 0');
+            }
+            if ((float) $item['price'] < 0) {
+                return $this->fail(1311, '价格不能为负数');
+            }
+        }
+        if ($this->hasDuplicateProduct($data['items'])) {
+            return $this->fail(1312, '明细存在重复商品');
+        }
+
+        $order = DB::transaction(function () use ($data) {
+            // 单号走持久序列（撞号自动换号；删除不回退；老库 max 衔接）
+            $order = $this->sequenceService->nextNo(
+                DocumentSequence::TYPE_PO,
+                'PO',
+                fn (string $no) => PurchaseOrder::create([
+                    'no' => $no,
+                    'supplier_id' => $data['supplier_id'],
+                    'order_date' => $data['order_date'],
+                    'expected_date' => $data['expected_date'] ?? null,
+                    'status' => PurchaseOrder::STATUS_DRAFT,
+                    'total_amount' => $this->orderService->calculateTotal($data['items']),
+                    'remark' => $data['remark'] ?? null,
+                    'created_by' => auth()->id(),
+                ]),
+                fn () => (int) (PurchaseOrder::where('no', 'like', 'PO'.date('Ymd').'-%')
+                    ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+            );
+            $order->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+                'price' => $i['price'],
+                'received_qty' => 0,
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+            ], $data['items']));
+
+            return $order;
+        });
+
+        return $this->ok(['no' => $order->no]);
+    }
+
+    /** 详情：头信息 + 明细（商品名/订购数/已入库/单价/金额） */
+    public function show(PurchaseOrder $order)
+    {
+        return $this->ok([
+            'id' => $order->id,
+            'no' => $order->no,
+            'supplier_id' => $order->supplier_id,
+            'supplier_name' => $order->supplier?->name,
+            'order_date' => $order->order_date,
+            'expected_date' => $order->expected_date,
+            'status' => (int) $order->status,
+            'status_label' => PurchaseOrder::STATUS_LABELS[$order->status] ?? '未知',
+            'total_amount' => $order->total_amount,
+            'remark' => $order->remark,
+            'created_by' => $order->created_by,
+            'approved_at' => $order->approved_at?->toDateTimeString(),
+            'closed_at' => $order->closed_at?->toDateTimeString(),
+            'items' => $order->items()->with('product')->get()->map(fn (PurchaseOrderItem $i) => [
+                'id' => $i->id,
+                'product_id' => $i->product_id,
+                'product_name' => $i->product?->name,
+                'product_code' => $i->product?->code,
+                'quantity' => $i->quantity,
+                'received_qty' => $i->received_qty,
+                'price' => $i->price,
+                'amount' => $i->amount,
+            ]),
+        ]);
+    }
+
+    /** 更新草稿：仅草稿（1303）；items 全量替换；金额重算 */
+    public function update(Request $request, PurchaseOrder $order)
+    {
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1303, '已审核订单不可修改');
+        }
+        $data = $this->validatePayload($request);
+        if (empty($data['items'])) {
+            return $this->fail(1301, '请至少添加一条明细');
+        }
+        foreach ($data['items'] as $item) {
+            if ((float) $item['quantity'] <= 0) {
+                return $this->fail(1302, '数量必须大于 0');
+            }
+            if ((float) $item['price'] < 0) {
+                return $this->fail(1311, '价格不能为负数');
+            }
+        }
+        if ($this->hasDuplicateProduct($data['items'])) {
+            return $this->fail(1312, '明细存在重复商品');
+        }
+
+        DB::transaction(function () use ($order, $data) {
+            $order->update([
+                'supplier_id' => $data['supplier_id'],
+                'order_date' => $data['order_date'],
+                'expected_date' => $data['expected_date'] ?? null,
+                'total_amount' => $this->orderService->calculateTotal($data['items']),
+                'remark' => $data['remark'] ?? $order->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建）
+            $order->items()->delete();
+            $order->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+                'price' => $i['price'],
+                'received_qty' => 0,
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+            ], $data['items']));
+        });
+
+        return $this->ok();
+    }
+
+    /** 删除草稿：仅草稿（1304） */
+    public function destroy(PurchaseOrder $order)
+    {
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1304, '已审核订单不可删除');
+        }
+        $order->delete();
+
+        return $this->ok();
+    }
+
+    /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人 */
+    public function approve(PurchaseOrder $order)
+    {
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1305, '该订单已审核');
+        }
+        DB::transaction(function () use ($order) {
+            // 锁订单行：同一订单重复审核在此判重（幂等）
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
+                throw new PurchaseException('该订单已审核', 1305);
+            }
+            $locked->status = PurchaseOrder::STATUS_APPROVED;
+            $locked->approved_at = now();
+            $locked->created_by = $locked->created_by ?? auth()->id();
+            $locked->save();
+        });
+
+        return $this->ok(['no' => $order->no]);
+    }
+
+    /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单 */
+    public function close(PurchaseOrder $order)
+    {
+        if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+            return $this->fail(1306, '当前状态不可关闭');
+        }
+        DB::transaction(function () use ($order) {
+            // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+                throw new PurchaseException('当前状态不可关闭', 1306);
+            }
+            $locked->status = PurchaseOrder::STATUS_CLOSED;
+            $locked->closed_at = now();
+            $locked->save();
+        });
+
+        return $this->ok();
+    }
+
+    /** 该订单的入库单列表（详情页「入库记录」tab） */
+    public function inbounds(PurchaseOrder $order)
+    {
+        $rows = PurchaseInbound::where('order_id', $order->id)
+            ->with('supplier')->orderByDesc('id')->get();
+
+        return $this->ok([
+            'items' => $rows->map(fn (PurchaseInbound $i) => [
+                'id' => $i->id,
+                'no' => $i->no,
+                'status' => (int) $i->status,
+                'status_label' => PurchaseInbound::STATUS_LABELS[$i->status] ?? '未知',
+                'inbound_at' => $i->inbound_at?->toDateTimeString(),
+                'operator' => $i->operator,
+                'total_amount' => $i->total_amount,
+            ]),
+        ]);
+    }
+
+    // 载荷格式校验（422 仅格式层）；业务码在方法内检查
+    private function validatePayload(Request $request): array
+    {
+        return $request->validate([
+            'supplier_id' => 'required|integer|exists:suppliers,id',
+            'order_date' => 'required|date',
+            'expected_date' => 'nullable|date',
+            'remark' => 'nullable|string|max:200',
+            // 注意：items 不加 required——空数组 [] 走 1301 业务码（422 仅拦缺失字段与类型错误）
+            'items' => 'array',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity' => 'required|numeric',
+            'items.*.price' => 'required|numeric',
+        ]);
+    }
+
+    // 明细查重：同商品只允许一行
+    private function hasDuplicateProduct(array $items): bool
+    {
+        $seen = [];
+        foreach ($items as $item) {
+            if (isset($seen[$item['product_id']])) {
+                return true;
+            }
+            $seen[$item['product_id']] = true;
+        }
+
+        return false;
+    }
+}

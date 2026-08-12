@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $order_id
  * @property int $status
  * @property string $total_amount
- * @property string|null $inbound_at
+ * @property Carbon|null $inbound_at
  * @property string|null $operator
  * @property string|null $remark
  */
