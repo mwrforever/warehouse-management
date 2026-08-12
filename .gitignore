@@ -9,3 +9,6 @@
 server/pint.json
 server/phpcs.xml
 server/phpstan.neon
+
+# playwright-cli 登录态（本地测试产物）
+auth.json
