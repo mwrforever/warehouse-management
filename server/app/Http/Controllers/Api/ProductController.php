@@ -145,7 +145,7 @@ class ProductController extends Controller
         return $this->ok();
     }
 
-    /** 删除商品：被 BOM 头/明细、库存流水、采购/销售明细、生产工单引用不可删 1116 */
+    /** 删除商品：被 BOM 头/明细、库存流水、采购/销售明细、生产工单/工单物料快照引用不可删 1116 */
     public function destroy(Product $product)
     {
         // 本模块表（BOM）直接检查；下游模块表经守卫（未建自动放行，建后自动生效）
@@ -156,7 +156,8 @@ class ProductController extends Controller
             || DeletionGuard::referenced('purchase_inbound_items', 'product_id', $product->id)
             || DeletionGuard::referenced('sales_order_items', 'product_id', $product->id)
             || DeletionGuard::referenced('sales_outbound_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('production_orders', 'product_id', $product->id);
+            || DeletionGuard::referenced('production_orders', 'product_id', $product->id)
+            || DeletionGuard::referenced('production_order_materials', 'material_id', $product->id);
         if ($referencedByBom || $referencedByOther) {
             return $this->fail(1116, '商品已被业务单据使用，不可删除');
         }

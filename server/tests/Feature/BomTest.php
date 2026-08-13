@@ -11,6 +11,7 @@ use App\Models\Role;
 use App\Models\Unit;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class BomTest extends TestCase
@@ -263,5 +264,20 @@ class BomTest extends TestCase
             'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
         ])->assertJsonPath('code', 0)->json('data.code');
         $this->assertMatchesRegularExpression('/BOM\d{8}-003$/', $third);
+    }
+
+    public function test_destroy_referenced_by_production_order_fails_with_1121(): void
+    {
+        // 边界路径：production_orders 引用该 BOM 时删除被拒 1121（生产表落地后自动生效）
+        $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
+        $fin = Product::create(['name' => '成品B', 'code' => 'FIN-003', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $bom = BomHeader::create(['code' => 'BOM-TEST-001', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        DB::table('production_orders')->insert([
+            'no' => 'MO-TEST-001', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/boms/{$bom->id}")
+            ->assertJsonPath('code', 1121);
     }
 }

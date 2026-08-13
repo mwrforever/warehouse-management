@@ -4,10 +4,15 @@
 
 namespace Tests\Feature;
 
+use App\Models\BomHeader;
+use App\Models\Category;
 use App\Models\Process;
+use App\Models\Product;
 use App\Models\Role;
+use App\Models\Unit;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class ProcessTest extends TestCase
@@ -71,5 +76,27 @@ class ProcessTest extends TestCase
         $p = Process::create(['name' => '测试工序', 'code' => 'PROC-99', 'sort' => 99, 'status' => 1]);
         $this->withToken($this->token)->deleteJson("/api/v1/processes/{$p->id}")->assertJsonPath('code', 0);
         $this->assertDatabaseMissing('processes', ['id' => $p->id]);
+    }
+
+    public function test_destroy_referenced_by_work_order_operation_fails_with_1113(): void
+    {
+        // 边界路径：work_order_operations 引用该工序时删除被拒 1113（生产表落地后自动生效）
+        $p = Process::create(['name' => '下料', 'code' => 'PROC-01', 'sort' => 1, 'status' => 1]);
+        $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
+        $unit = Unit::create(['name' => '个', 'code' => 'pc']);
+        $fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
+        $bom = BomHeader::create(['code' => 'BOM-TEST-001', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        $orderId = DB::table('production_orders')->insertGetId([
+            'no' => 'MO-TEST-001', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('work_order_operations')->insert([
+            'order_id' => $orderId, 'process_id' => $p->id, 'seq' => 1, 'status' => 0,
+            'qualified_qty' => 0, 'defective_qty' => 0, 'hours' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/processes/{$p->id}")
+            ->assertJsonPath('code', 1113);
     }
 }

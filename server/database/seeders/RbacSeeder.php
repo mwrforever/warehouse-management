@@ -85,6 +85,15 @@ class RbacSeeder extends Seeder
             ['name' => '销售出库单创建', 'code' => 'sales.outbound.create', 'group' => '销售管理'],
             ['name' => '销售出库单更新', 'code' => 'sales.outbound.update', 'group' => '销售管理'],
             ['name' => '销售出库单删除', 'code' => 'sales.outbound.delete', 'group' => '销售管理'],
+            // 生产管理模块权限（工单 + 报工 各四动作，group=生产管理；下达/开工/完工/关闭复用 update，报工提交复用 report.create）
+            ['name' => '生产工单列表', 'code' => 'production.order.list', 'group' => '生产管理'],
+            ['name' => '生产工单创建', 'code' => 'production.order.create', 'group' => '生产管理'],
+            ['name' => '生产工单更新', 'code' => 'production.order.update', 'group' => '生产管理'],
+            ['name' => '生产工单删除', 'code' => 'production.order.delete', 'group' => '生产管理'],
+            ['name' => '工序报工列表', 'code' => 'production.report.list', 'group' => '生产管理'],
+            ['name' => '工序报工创建', 'code' => 'production.report.create', 'group' => '生产管理'],
+            ['name' => '工序报工更新', 'code' => 'production.report.update', 'group' => '生产管理'],
+            ['name' => '工序报工删除', 'code' => 'production.report.delete', 'group' => '生产管理'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
