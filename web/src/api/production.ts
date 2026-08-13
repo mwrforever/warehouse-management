@@ -371,6 +371,31 @@ export const productionApi = {
     const { data } = await http.get('/production/returns', { params: { per_page: 10, ...params } })
     return data.data as PageResult<ReturnItem>
   },
+  // 退料单详情（编辑草稿回填）
+  async returnsDetail(id: number) {
+    const { data } = await http.get(`/production/returns/${id}`)
+    return data.data as {
+      id: number
+      no: string
+      order_id: number
+      order_no: string
+      pick_id: number | null
+      status: number
+      status_label: string
+      warehouse_id: number
+      warehouse_name: string
+      location_id: number
+      location_name: string
+      remark: string | null
+      items: {
+        id: number
+        product_id: number
+        product_name: string
+        product_code: string
+        quantity: number
+      }[]
+    }
+  },
   // 新建退料单（响应单号）
   async createReturn(payload: ReturnPayload) {
     const { data } = await http.post('/production/returns', payload)
