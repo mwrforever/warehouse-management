@@ -426,6 +426,25 @@ class ReportServiceTest extends TestCase
         $this->assertSame('MO20260813-003', $filtered['items'][0]['order_no']);
     }
 
+    public function test_production_totals_sum_full_window_independent_of_items_truncation(): void
+    {
+        // 正常路径：totals 对窗口内全部工单求和（KPI 口径=全区间，先于 items 截断计算——截断安全）
+        $fin = $this->makeProduct('FIN-A', 'finished', '成品');
+        $o1 = $this->makeOrder($fin, 'MO20260813-001', '10', '2026-08-13', 3, '8');
+        $o2 = $this->makeOrder($fin, 'MO20260813-002', '20.50', '2026-08-14', 3, '20.50');
+        $this->makeReport($o1, '7', '1', '2.00');   // 合格 7 不良 1
+        $this->makeReport($o2, '18', '2', '3.00');  // 合格 18 不良 2
+
+        $res = $this->service->production('2026-08-01', '2026-08-31');
+
+        $this->assertSame(2, $res['totals']['order_count']);
+        $this->assertSame('30.50', $res['totals']['total_plan']); // 10 + 20.50
+        $this->assertSame('28.50', $res['totals']['total_completed']); // 8 + 20.50
+        $this->assertSame('25', $res['totals']['total_qualified']); // 7 + 18（剥离 '.00' 尾零）
+        $this->assertSame('3', $res['totals']['total_defective']); // 1 + 2
+        $this->assertFalse($res['truncated']);
+    }
+
     public function test_production_excludes_draft_documents_from_material_used(): void
     {
         // 边界路径：草稿领料不参与耗用（仅已审核单据；审核才写流水）

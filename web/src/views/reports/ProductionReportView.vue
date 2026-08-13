@@ -26,7 +26,7 @@
     <div class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-label">工单数</div>
-        <div class="kpi-value font-code">{{ items.length }}</div>
+        <div class="kpi-value font-code">{{ totals.order_count }}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">总计划数</div>
@@ -108,7 +108,7 @@
 // 生产统计：计划日期窗口 + 成品筛选；KPI 平均达成率=Σ完工/Σ计划（加权）、平均良率=Σ合格/(Σ合格+Σ不良)
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { reportApi, type ProductionStatItem } from '../../api/report'
+import { reportApi, type ProductionStatItem, type ProductionTotal } from '../../api/report'
 import { productApi } from '../../api/product'
 import { formatThousand, toLocalDateString } from '../../utils/format'
 
@@ -119,6 +119,14 @@ const dateRange = ref<[string, string]>([
 const productId = ref<number | undefined>(undefined)
 const products = ref<{ id: number; name: string }[]>([])
 const items = ref<ProductionStatItem[]>([])
+// KPI 数据源=后端全区间 totals（>500 工单截断时 items 失真，totals 先于截断计算）
+const totals = ref<ProductionTotal>({
+  order_count: 0,
+  total_plan: '0',
+  total_completed: '0',
+  total_qualified: '0',
+  total_defective: '0',
+})
 const loading = ref(false)
 
 const dateShortcuts = [
@@ -127,19 +135,19 @@ const dateShortcuts = [
   { text: '近 30 天', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] },
 ]
 
-// 总计划数（KPI）
-const totalPlan = computed(() => items.value.reduce((s, i) => s + Number(i.quantity), 0).toFixed(2))
+// 总计划数（KPI；取后端全区间 totals，截断安全）
+const totalPlan = computed(() => totals.value.total_plan)
 // 平均达成率（加权口径：Σ完工/Σ计划；计划 0 防御 0.00）
 const avgAchievement = computed(() => {
-  const plan = items.value.reduce((s, i) => s + Number(i.quantity), 0)
-  const done = items.value.reduce((s, i) => s + Number(i.completed_qty), 0)
+  const plan = Number(totals.value.total_plan)
+  const done = Number(totals.value.total_completed)
   if (plan <= 0) return '0.00'
   return ((done / plan) * 100).toFixed(2)
 })
 // 平均良率（Σ合格/(Σ合格+Σ不良)；无不良→100.00）
 const avgYield = computed(() => {
-  const q = items.value.reduce((s, i) => s + Number(i.qualified_qty), 0)
-  const d = items.value.reduce((s, i) => s + Number(i.defective_qty), 0)
+  const q = Number(totals.value.total_qualified)
+  const d = Number(totals.value.total_defective)
   if (q + d <= 0) return '100.00'
   return ((q / (q + d)) * 100).toFixed(2)
 })
@@ -160,6 +168,7 @@ async function load() {
       product_id: productId.value,
     })
     items.value = res.items
+    totals.value = res.totals
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
