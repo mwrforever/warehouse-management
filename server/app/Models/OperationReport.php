@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * 工序报工记录
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $qualified_qty
  * @property string $defective_qty
  * @property string $hours
- * @property string $report_time
+ * @property Carbon $report_time
  * @property string|null $remark
  */
 class OperationReport extends Model
