@@ -183,12 +183,14 @@ function reload() {
   load()
 }
 
-// 流水单号点击：盘点来源跳盘点详情；采购入库来源跳采购入库单详情；其余提示模块未开放
+// 流水单号点击：盘点来源跳盘点详情；采购入库来源跳采购入库单详情；销售出库来源跳销售出库单详情；其余提示模块未开放
 function gotoSource(row: MovementItem) {
   if (row.source_type === 'check_in' || row.source_type === 'check_out') {
     router.push(`/inventory/checks/${row.source_id}`)
   } else if (row.source_type === 'purchase_inbound') {
     router.push(`/purchase/inbounds/${row.source_id}`)
+  } else if (row.source_type === 'sales_outbound') {
+    router.push(`/sales/outbounds/${row.source_id}`)
   } else {
     ElMessage.info(`${row.source_type_label}单据页随对应模块实施后开放`)
   }

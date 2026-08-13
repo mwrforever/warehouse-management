@@ -78,6 +78,10 @@ class InventoryController extends Controller
         if ($request->filled('source_type')) {
             $query->where('inventory_movements.source_type', $request->input('source_type'));
         }
+        // 来源单号筛选（E2E 断言「超卖/回滚无流水」按单号核对）
+        if ($request->filled('source_no')) {
+            $query->where('inventory_movements.source_no', $request->input('source_no'));
+        }
         if ($request->filled('direction')) {
             $query->where('inventory_movements.direction', (int) $request->input('direction'));
         }

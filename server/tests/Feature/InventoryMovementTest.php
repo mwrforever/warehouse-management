@@ -78,6 +78,18 @@ class InventoryMovementTest extends TestCase
             ->assertJsonPath('data.total', 0);
     }
 
+    public function test_filters_by_source_no(): void
+    {
+        // 正常路径：来源单号筛选命中唯一流水
+        $this->withToken($this->token)->getJson('/api/v1/inventory/movements?source_no=PO20260812-001')
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.items.0.source_no', 'PO20260812-001');
+        // 边界路径：不存在的单号 → 0 条（E2E 超卖回滚断言依赖该筛选）
+        $this->withToken($this->token)->getJson('/api/v1/inventory/movements?source_no=SOUT20990101-999')
+            ->assertJsonPath('data.total', 0);
+    }
+
     public function test_filters_by_date_range(): void
     {
         // 边界路径：日期范围筛选（date_from/date_to 闭区间）
