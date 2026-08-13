@@ -118,6 +118,18 @@ const router = createRouter({
           meta: { permission: 'purchase.inbound.list' },
         },
         {
+          path: 'sales/orders',
+          name: 'sales-orders',
+          component: () => import('../views/sales/OrdersView.vue'),
+          meta: { permission: 'sales.order.list' },
+        },
+        {
+          path: 'sales/outbounds/:id?',
+          name: 'sales-outbounds',
+          component: () => import('../views/sales/OutboundsView.vue'),
+          meta: { permission: 'sales.outbound.list' },
+        },
+        {
           path: 'master/boms',
           name: 'master-boms',
           component: () => import('../views/master/BomsView.vue'),

@@ -63,6 +63,13 @@
           class="menu-item"
           >采购入库</RouterLink
         >
+        <div class="menu-group">销售管理</div>
+        <RouterLink v-if="auth.has('sales.order.list')" to="/sales/orders" class="menu-item"
+          >销售订单</RouterLink
+        >
+        <RouterLink v-if="auth.has('sales.outbound.list')" to="/sales/outbounds" class="menu-item"
+          >销售出库</RouterLink
+        >
       </nav>
     </aside>
     <div class="main">
