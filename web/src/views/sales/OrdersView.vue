@@ -1,0 +1,664 @@
+<!-- 销售订单页：筛选列表 + 新建/编辑弹窗（900px 明细/扫码/实时合计）+ 详情弹窗（含出库记录） -->
+<script setup lang="ts">
+import { nextTick, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  salesApi,
+  type OrderOutboundItem,
+  type SalesOrderDetail,
+  type SalesOrderItem,
+} from '../../api/sales'
+import { customerApi, type CustomerItem } from '../../api/customer'
+import { productApi } from '../../api/product'
+import { useAuthStore } from '../../stores/auth'
+import { formatYuan, toLocalDateString } from '../../utils/format'
+
+const auth = useAuthStore()
+const loading = ref(false)
+const saving = ref(false)
+const list = ref<SalesOrderItem[]>([])
+const total = ref(0)
+const customers = ref<CustomerItem[]>([])
+// 可售商品：仅成品/半成品（原料禁售 SAL-10，两次调用合并）
+const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
+
+// 列表筛选
+const query = reactive({
+  keyword: '',
+  customer_id: undefined as number | undefined,
+  status: undefined as number | undefined,
+  page: 1,
+  per_page: 10,
+})
+
+// 弹窗状态
+const dialogVisible = ref(false)
+const editing = ref(false)
+const editingId = ref<number | null>(null)
+const detailVisible = ref(false)
+const detail = ref<SalesOrderDetail | null>(null)
+const outboundRows = ref<OrderOutboundItem[]>([])
+const form = reactive({
+  customer_id: undefined as number | undefined,
+  order_date: toLocalDateString(new Date()),
+  expected_date: undefined as string | undefined,
+  remark: '',
+  items: [] as { product_id: number | undefined; quantity: number; price: number }[],
+})
+// 扫码输入值（v-model 绑定，扫枪回车后清空并重新聚焦）
+const barcode = ref('')
+const barcodeInput = ref<{ focus: () => void } | null>(null)
+
+// 状态标签语义色（sales.md 五态：草稿灰/已审核绿/部分出库蓝/已完成深绿/关闭红）
+function statusTagType(status: number) {
+  if (status === 0) return 'info'
+  if (status === 1) return 'success'
+  if (status === 2) return 'primary'
+  if (status === 3) return 'success'
+  return 'danger'
+}
+
+// 明细合计（元，实时计算：Σ 数量×单价元）
+function lineAmountYuan(item: { quantity: number; price: number }): number {
+  return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
+}
+function totalYuan(): string {
+  return form.items
+    .reduce((sum, i) => sum + lineAmountYuan(i), 0)
+    .toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+// 行金额（分→元展示，仅读列）
+function rowAmountFen(item: { product_id?: number; quantity: number; price: number }): string {
+  return formatYuan(Math.round(Number(item.quantity) * Number(item.price) * 100))
+}
+
+// 添加明细行
+function addRow() {
+  form.items.push({ product_id: undefined, quantity: 1, price: 0 })
+}
+
+// 删除明细行
+function removeRow(index: number) {
+  form.items.splice(index, 1)
+}
+
+// 商品选择（重复商品即时拦截）
+function onProductChange(row: { product_id: number | undefined }, index: number) {
+  const dup = form.items.findIndex((i, idx) => idx !== index && i.product_id === row.product_id)
+  if (dup >= 0) {
+    ElMessage.warning('明细存在重复商品')
+    form.items[index].product_id = undefined
+  }
+}
+
+// 扫码添加商品行（扫枪回车 → 条码匹配 → 命中追加行，未命中提示）
+async function scanAdd() {
+  const code = barcode.value.trim()
+  if (!code) return
+  try {
+    const p = await productApi.byBarcode(code)
+    if (form.items.some((i) => i.product_id === p.id)) {
+      ElMessage.warning('明细存在重复商品')
+    } else {
+      form.items.push({ product_id: p.id, quantity: 1, price: 0 })
+    }
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    // 清空扫码框并保持焦点，便于连续扫码
+    barcode.value = ''
+    barcodeInput.value?.focus()
+  }
+}
+
+async function loadList() {
+  loading.value = true
+  try {
+    const res = await salesApi.orders(query)
+    list.value = res.items
+    total.value = res.total
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    loading.value = false
+  }
+}
+
+function search() {
+  query.page = 1
+  loadList()
+}
+
+// 新建/编辑弹窗
+function openCreate() {
+  editing.value = false
+  editingId.value = null
+  Object.assign(form, {
+    customer_id: undefined,
+    order_date: toLocalDateString(new Date()),
+    expected_date: undefined,
+    remark: '',
+    items: [],
+  })
+  form.items.push({ product_id: undefined, quantity: 1, price: 0 })
+  dialogVisible.value = true
+  // 弹窗挂载后聚焦扫码框（nextTick 与采购订单页扫码交互一致）
+  nextTick(() => barcodeInput.value?.focus())
+}
+
+async function openEdit(row: SalesOrderItem) {
+  try {
+    const d = await salesApi.orderDetail(row.id)
+    editing.value = true
+    editingId.value = row.id
+    Object.assign(form, {
+      customer_id: d.customer_id,
+      order_date: d.order_date,
+      expected_date: d.expected_date ?? undefined,
+      remark: d.remark ?? '',
+      items: d.items.map((i) => ({
+        product_id: i.product_id,
+        quantity: Number(i.quantity),
+        price: Number(i.price) / 100,
+      })),
+    })
+    dialogVisible.value = true
+    // 弹窗挂载后聚焦扫码框（nextTick 与采购订单页扫码交互一致）
+    nextTick(() => barcodeInput.value?.focus())
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+async function save() {
+  if (!form.customer_id) {
+    ElMessage.warning('请选择客户')
+    return
+  }
+  if (!form.items.length) {
+    ElMessage.warning('请至少添加一条明细')
+    return
+  }
+  if (form.items.some((i) => !i.product_id)) {
+    ElMessage.warning('请选择商品')
+    return
+  }
+  if (form.items.some((i) => Number(i.quantity) <= 0)) {
+    ElMessage.warning('数量必须大于 0')
+    return
+  }
+  if (form.items.some((i) => Number(i.price) < 0)) {
+    ElMessage.warning('价格不能为负数')
+    return
+  }
+  // 载荷：价格 元 → 分（×100 取整）；数量原样（2 位小数）
+  const payload = {
+    customer_id: form.customer_id!,
+    order_date: form.order_date,
+    expected_date: form.expected_date,
+    remark: form.remark,
+    items: form.items.map((i) => ({
+      product_id: i.product_id!,
+      quantity: i.quantity,
+      price: Math.round(Number(i.price) * 100),
+    })),
+  }
+  saving.value = true
+  try {
+    if (editing.value && editingId.value) {
+      await salesApi.updateOrder(editingId.value, payload)
+    } else {
+      await salesApi.createOrder(payload)
+    }
+    ElMessage.success('保存成功')
+    dialogVisible.value = false
+    loadList()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function removeRowAction(row: SalesOrderItem) {
+  try {
+    await ElMessageBox.confirm(`确认删除订单 ${row.no}？删除后不可恢复`, '提示', {
+      type: 'warning',
+      confirmButtonText: '确 定',
+      cancelButtonText: '取 消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await salesApi.deleteOrder(row.id)
+    ElMessage.success('删除成功')
+    loadList()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+async function approveRow(row: SalesOrderItem) {
+  try {
+    await ElMessageBox.confirm(`确认审核订单 ${row.no}？审核后不可修改`, '提示', {
+      type: 'warning',
+      confirmButtonText: '确 定',
+      cancelButtonText: '取 消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await salesApi.approveOrder(row.id)
+    ElMessage.success('审核成功')
+    loadList()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+async function closeRow(row: SalesOrderItem) {
+  try {
+    await ElMessageBox.confirm(`确认关闭订单 ${row.no}？关闭后不可再出库`, '提示', {
+      type: 'warning',
+      confirmButtonText: '确 定',
+      cancelButtonText: '取 消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await salesApi.closeOrder(row.id)
+    ElMessage.success('关闭成功')
+    loadList()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+// 详情弹窗 + 出库记录 tab
+async function openDetail(row: SalesOrderItem) {
+  try {
+    detail.value = await salesApi.orderDetail(row.id)
+    outboundRows.value = (await salesApi.orderOutbounds(row.id)).items
+    detailVisible.value = true
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+onMounted(async () => {
+  loadList()
+  try {
+    const res = await customerApi.list({ per_page: 100, status: 1 })
+    customers.value = res.items
+    // 可售商品 = 成品 + 半成品（原料禁售；两次调用合并，per_page 100 覆盖全量）
+    const [fin, semi] = await Promise.all([
+      productApi.list({ per_page: 100, type: 'finished' }),
+      productApi.list({ per_page: 100, type: 'semi_finished' }),
+    ])
+    products.value = [...fin.items, ...semi.items]
+  } catch {
+    // 下拉加载失败不阻塞主流程
+  }
+})
+</script>
+<template>
+  <div class="page-card">
+    <div class="toolbar">
+      <span class="page-title">销售订单</span>
+      <el-input
+        v-model="query.keyword"
+        placeholder="单号"
+        clearable
+        style="width: 200px"
+        @keyup.enter="search"
+      />
+      <el-select v-model="query.customer_id" placeholder="客户" clearable style="width: 180px">
+        <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
+      </el-select>
+      <el-select v-model="query.status" placeholder="状态" clearable style="width: 130px">
+        <el-option label="草稿" :value="0" />
+        <el-option label="已审核" :value="1" />
+        <el-option label="部分出库" :value="2" />
+        <el-option label="已完成" :value="3" />
+        <el-option label="关闭" :value="4" />
+      </el-select>
+      <el-button class="btn-primary" @click="search">查 询</el-button>
+      <el-button v-if="auth.has('sales.order.create')" class="btn-primary" @click="openCreate"
+        >新 建</el-button
+      >
+    </div>
+
+    <el-table v-loading="loading" :data="list" class="data-table">
+      <el-table-column prop="no" label="单号" class-name="font-code" min-width="150" />
+      <el-table-column prop="customer_name" label="客户" min-width="140" />
+      <el-table-column prop="order_date" label="下单日期" width="110" />
+      <el-table-column label="金额合计" width="130" align="right">
+        <template #default="{ row }">
+          <span class="amount-cell">¥{{ formatYuan(row.total_amount) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag :type="statusTagType(row.status)" :class="{ 'tag-done': row.status === 3 }">{{
+            row.status_label
+          }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="created_by_name" label="创建人" width="90" />
+      <el-table-column label="操作" width="220" fixed="right">
+        <template #default="{ row }">
+          <el-button
+            v-if="row.status === 0 && auth.has('sales.order.update')"
+            link
+            type="primary"
+            @click="openEdit(row)"
+            >编 辑</el-button
+          >
+          <el-button
+            v-if="row.status === 0 && auth.has('sales.order.delete')"
+            link
+            type="danger"
+            @click="removeRowAction(row)"
+            >删 除</el-button
+          >
+          <el-button
+            v-if="row.status === 0 && auth.has('sales.order.update')"
+            link
+            type="success"
+            @click="approveRow(row)"
+            >审 核</el-button
+          >
+          <el-button
+            v-if="(row.status === 1 || row.status === 2) && auth.has('sales.order.update')"
+            link
+            type="warning"
+            @click="closeRow(row)"
+            >关 闭</el-button
+          >
+          <el-button v-if="row.status !== 0" link type="primary" @click="openDetail(row)"
+            >查 看</el-button
+          >
+        </template>
+      </el-table-column>
+    </el-table>
+    <div class="pager">
+      <el-pagination
+        v-model:current-page="query.page"
+        :page-size="query.per_page"
+        :total="total"
+        layout="total, prev, pager, next"
+        @current-change="loadList"
+      />
+    </div>
+
+    <!-- 新建/编辑弹窗 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editing ? '编辑订单' : '新 建订单'"
+      width="900px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="form" label-width="90px">
+        <div class="form-grid">
+          <el-form-item label="客户" required>
+            <el-select
+              v-model="form.customer_id"
+              placeholder="选择客户"
+              filterable
+              style="width: 100%"
+            >
+              <el-option
+                v-for="c in customers"
+                :key="c.id"
+                :label="`${c.name}（${c.code}）`"
+                :value="c.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="下单日期" required>
+            <el-date-picker
+              v-model="form.order_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item label="预计发货">
+            <el-date-picker
+              v-model="form.expected_date"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="form.remark" maxlength="200" />
+          </el-form-item>
+        </div>
+        <div class="barcode-row">
+          <el-input
+            ref="barcodeInput"
+            v-model="barcode"
+            placeholder="扫描条码回车添加商品"
+            clearable
+            style="width: 260px"
+            @keyup.enter="scanAdd"
+          />
+        </div>
+        <el-table :data="form.items" size="small" max-height="360" class="data-table">
+          <el-table-column label="商品" min-width="220">
+            <template #default="{ row, $index }">
+              <el-select
+                v-model="row.product_id"
+                placeholder="选择商品"
+                filterable
+                style="width: 100%"
+                @change="onProductChange(row, $index)"
+              >
+                <el-option
+                  v-for="p in products"
+                  :key="p.id"
+                  :label="`${p.name}（${p.code}）`"
+                  :value="p.id"
+                />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="数量" width="130">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.quantity"
+                :min="1"
+                :precision="2"
+                :controls="false"
+                style="width: 100%"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="单价（元）" width="150">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.price"
+                :min="0"
+                :precision="2"
+                :controls="false"
+                style="width: 100%"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="金额" width="130" align="right">
+            <template #default="{ row }">
+              <span class="amount-cell">¥{{ rowAmountFen(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="60">
+            <template #default="{ $index }">
+              <el-button link type="danger" @click="removeRow($index)">删 除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="add-row">
+          <el-button link type="primary" @click="addRow">+ 添加明细行</el-button>
+        </div>
+        <div class="total-bar">
+          合计：<span class="total-amount">¥{{ totalYuan() }}</span>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取 消</el-button>
+        <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 详情弹窗（含出库记录 tab） -->
+    <el-dialog v-model="detailVisible" title="订单详情" width="900px">
+      <template v-if="detail">
+        <el-descriptions :column="3" border size="small">
+          <el-descriptions-item label="单号">{{ detail.no }}</el-descriptions-item>
+          <el-descriptions-item label="客户">{{ detail.customer_name }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag
+              :type="statusTagType(detail.status)"
+              :class="{ 'tag-done': detail.status === 3 }"
+              >{{ detail.status_label }}</el-tag
+            >
+          </el-descriptions-item>
+          <el-descriptions-item label="下单日期">{{ detail.order_date }}</el-descriptions-item>
+          <el-descriptions-item label="预计发货">{{
+            detail.expected_date ?? '—'
+          }}</el-descriptions-item>
+          <el-descriptions-item label="金额合计">
+            <span class="amount-cell">¥{{ formatYuan(detail.total_amount) }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="审核时间">{{
+            detail.approved_at ?? '—'
+          }}</el-descriptions-item>
+          <el-descriptions-item label="备注" :span="2">{{
+            detail.remark ?? '—'
+          }}</el-descriptions-item>
+        </el-descriptions>
+        <el-tabs style="margin-top: 16px">
+          <el-tab-pane label="明细">
+            <el-table :data="detail.items" size="small" class="data-table">
+              <el-table-column
+                prop="product_code"
+                label="商品编码"
+                class-name="font-code"
+                min-width="110"
+              />
+              <el-table-column prop="product_name" label="商品名称" min-width="140" />
+              <el-table-column prop="quantity" label="订购数" align="right" width="100" />
+              <el-table-column prop="shipped_qty" label="已出库" align="right" width="100" />
+              <el-table-column label="单价" align="right" width="110">
+                <template #default="{ row }"
+                  ><span class="amount-cell">¥{{ formatYuan(row.price) }}</span></template
+                >
+              </el-table-column>
+              <el-table-column label="金额" align="right" width="120">
+                <template #default="{ row }"
+                  ><span class="amount-cell">¥{{ formatYuan(row.amount) }}</span></template
+                >
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane label="出库记录">
+            <el-table
+              v-if="outboundRows.length"
+              :data="outboundRows"
+              size="small"
+              class="data-table"
+            >
+              <el-table-column prop="no" label="出库单号" class-name="font-code" min-width="150" />
+              <el-table-column prop="status_label" label="状态" width="90" />
+              <el-table-column prop="outbound_at" label="出库时间" width="160" />
+              <el-table-column prop="operator" label="审核人" width="90" />
+              <el-table-column label="金额" align="right" width="120">
+                <template #default="{ row }"
+                  ><span class="amount-cell">¥{{ formatYuan(row.total_amount) }}</span></template
+                >
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无出库记录" />
+          </el-tab-pane>
+        </el-tabs>
+      </template>
+      <template #footer>
+        <el-button @click="detailVisible = false">关 闭</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+<style scoped>
+/* 销售订单页样式（nexus-factory）：骨架与采购订单页一致，销售特有样式见 pages/sales.md */
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-2xl);
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-foreground);
+  margin-right: var(--space-lg);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  opacity: 0.9;
+}
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-lg);
+}
+/* 金额列：Fira Code + 右对齐 + ¥ 前缀（sales.md §1） */
+.amount-cell {
+  font-family: 'Fira Code', monospace;
+  font-weight: 600;
+}
+/* 已完成深绿（与已审核绿同族但明度更低，防同态混淆） */
+.tag-done {
+  background: #ecfdf5 !important;
+  color: #047857 !important;
+  border-color: #047857 !important;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 var(--space-lg);
+}
+.barcode-row {
+  margin-bottom: var(--space-md);
+}
+.add-row {
+  margin: var(--space-md) 0;
+}
+.total-bar {
+  text-align: right;
+  font-size: 14px;
+  color: var(--color-foreground);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+}
+.total-amount {
+  font-family: 'Fira Code', monospace;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--color-accent);
+}
+</style>
