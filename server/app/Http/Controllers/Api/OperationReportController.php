@@ -26,16 +26,20 @@ class OperationReportController extends Controller
     public function store(Request $request, WorkOrderOperation $operation)
     {
         $data = $this->validatePayload($request);
+        // 归一化可空字段：defective_qty/hours 漏传时 validated 数据不含该 key（nullable 规则），
+        // 缺省按 0 处理，避免 Undefined array key / bcadd 空串 ValueError（E2E TC-PRD-04 载荷即漏传 defective_qty）
+        $defective = $data['defective_qty'] ?? 0;
+        $hours = $data['hours'] ?? 0;
         // 合格/不良负数走 422 值域（spec 码段满；工时负数有专属码 1512 走业务码）
-        if ((float) $data['qualified_qty'] < 0 || (float) $data['defective_qty'] < 0) {
+        if ((float) $data['qualified_qty'] < 0 || (float) $defective < 0) {
             return $this->fail(422, '合格数与不良数不能为负数');
         }
-        if ((float) $data['hours'] < 0) {
+        if ((float) $hours < 0) {
             return $this->fail(1512, '工时不能为负数');
         }
 
         try {
-            DB::transaction(function () use ($operation, $data) {
+            DB::transaction(function () use ($operation, $data, $defective, $hours) {
                 // 锁工序行：累计值并发安全（两次并发报工串行化后各自复核累计）
                 $op = WorkOrderOperation::whereKey($operation->id)->lockForUpdate()->firstOrFail();
                 if ($op->status !== WorkOrderOperation::STATUS_RUNNING) {
@@ -50,8 +54,8 @@ class OperationReportController extends Controller
                 }
                 // 累计语义：合格累计 + 本次不良 ≤ 计划数（不良仅按本次报工计入封顶，跨次不良不叠加；
                 // 与验收测试「不良数与工时累计」口径一致，避免累计合格+累计不良双重封顶误伤正常报工）
-                $defectSum = bcadd((string) $op->defective_qty, (string) $data['defective_qty'], 2);
-                $totalSum = bcadd($qualifiedSum, (string) $data['defective_qty'], 2);
+                $defectSum = bcadd((string) $op->defective_qty, (string) $defective, 2);
+                $totalSum = bcadd($qualifiedSum, (string) $defective, 2);
                 if (bccomp($totalSum, (string) $order->quantity, 2) > 0) {
                     throw new ProductionException('合格数与不良数合计不能超过工单计划数量', 1511);
                 }
@@ -59,7 +63,7 @@ class OperationReportController extends Controller
                 // 累计回写（bcmath）
                 $op->qualified_qty = $qualifiedSum;
                 $op->defective_qty = $defectSum;
-                $op->hours = bcadd((string) $op->hours, (string) $data['hours'], 2);
+                $op->hours = bcadd((string) $op->hours, (string) $hours, 2);
 
                 // 自动流转：累计合格 ≥ 计划数 → 本工序完成 + 下一工序进行中
                 if (bccomp($op->qualified_qty, (string) $order->quantity, 2) >= 0) {
@@ -82,8 +86,8 @@ class OperationReportController extends Controller
                     'order_id' => $order->id,
                     'operator' => $data['operator'] ?? auth()->user()->name ?? null,
                     'qualified_qty' => $data['qualified_qty'],
-                    'defective_qty' => $data['defective_qty'],
-                    'hours' => $data['hours'],
+                    'defective_qty' => $defective,
+                    'hours' => $hours,
                     'report_time' => now(),
                     'remark' => $data['remark'] ?? null,
                 ]);
