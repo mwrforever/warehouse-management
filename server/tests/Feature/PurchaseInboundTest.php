@@ -161,6 +161,48 @@ class PurchaseInboundTest extends TestCase
         $this->assertSame('500.00', $inbound->total_amount);
     }
 
+    public function test_store_rejects_empty_items_with_1301(): void
+    {
+        // 异常路径：明细为空数组 → 1301（业务码，与订单口径一致）
+        $body = $this->payload();
+        $body['items'] = [];
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1301);
+    }
+
+    public function test_store_rejects_order_item_ref_without_order_id_with_1308(): void
+    {
+        // 异常路径：明细带 order_item_id 但未携带 order_id → 1308（防绕过订单状态联动）
+        $body = $this->payload();
+        $body['order_id'] = null;
+        $body['items'] = [[
+            'product_id' => $this->mat->id,
+            'quantity' => 10,
+            'price' => 500,
+            'order_item_id' => $this->matItemId,
+        ]];
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1308);
+    }
+
+    public function test_store_rejects_supplier_mismatch_with_order_with_1308(): void
+    {
+        // 异常路径：入库单供应商与来源订单供应商不一致 → 1308（防跨供应商挂单）
+        $other = Supplier::create(['name' => '其他供应商', 'code' => 'SUP-002', 'status' => 1]);
+        $body = $this->payload(['supplier_id' => $other->id]);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1308);
+    }
+
+    public function test_store_rejects_scientific_notation_quantity_with_422(): void
+    {
+        // 异常路径：数量科学计数法 1e2 → 422（正则按字符串形态拦截，防 bcmul ValueError 500）
+        $body = $this->payload();
+        $body['items'][0]['quantity'] = '1e2';
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertStatus(422);
+    }
+
     public function test_approve_adds_inventory_and_writes_movement(): void
     {
         // 核心不变式：审核后余额+60、purchase_inbound 流水双写、balance_after 正确、回写 received_qty

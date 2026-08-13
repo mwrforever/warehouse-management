@@ -113,13 +113,13 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('code', 1302);
     }
 
-    public function test_store_rejects_negative_price_with_1311(): void
+    public function test_store_rejects_negative_price_with_422(): void
     {
-        // 异常路径：负价格 → 1311（价格 0 允许：赠品场景）
+        // 异常路径：负价格 → 422（正则限两位小数拦截负号，格式层；价格 0 允许：赠品场景）
         $items = $this->payload()['items'];
         $items[0]['price'] = -1;
         $this->withToken($this->token)->postJson('/api/v1/purchase/orders', ['supplier_id' => $this->supplier->id, 'order_date' => now()->toDateString(), 'items' => $items])
-            ->assertJsonPath('code', 1311);
+            ->assertStatus(422);
     }
 
     public function test_store_accepts_zero_price_for_gift(): void
@@ -129,6 +129,19 @@ class PurchaseOrderTest extends TestCase
             ['product_id' => $this->mat->id, 'quantity' => 10, 'price' => 0],
         ]]));
         $this->assertSame('0.00', PurchaseOrder::where('no', $no)->first()->total_amount);
+    }
+
+    public function test_store_rejects_scientific_notation_quantity_with_422(): void
+    {
+        // 异常路径：数量科学计数法 1e2 → 422（正则按字符串形态拦截，防 bcmul ValueError 500）
+        $items = $this->payload()['items'];
+        $items[0]['quantity'] = '1e2';
+        $this->withToken($this->token)->postJson('/api/v1/purchase/orders', [
+            'supplier_id' => $this->supplier->id,
+            'order_date' => now()->toDateString(),
+            'items' => $items,
+        ])
+            ->assertStatus(422);
     }
 
     public function test_store_rejects_duplicate_product_with_1312(): void

@@ -219,43 +219,53 @@ class PurchaseOrderController extends Controller
         return $this->ok();
     }
 
-    /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人 */
+    /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人；锁内复查抛错转业务码 */
     public function approve(PurchaseOrder $order)
     {
-        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-            return $this->fail(1305, '该订单已审核');
-        }
-        DB::transaction(function () use ($order) {
-            // 锁订单行：同一订单重复审核在此判重（幂等）
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                throw new PurchaseException('该订单已审核', 1305);
+        try {
+            if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+                return $this->fail(1305, '该订单已审核');
             }
-            $locked->status = PurchaseOrder::STATUS_APPROVED;
-            $locked->approved_at = now();
-            $locked->created_by = $locked->created_by ?? auth()->id();
-            $locked->save();
-        });
+            DB::transaction(function () use ($order) {
+                // 锁订单行：同一订单重复审核在此判重（幂等）
+                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
+                    throw new PurchaseException('该订单已审核', 1305);
+                }
+                $locked->status = PurchaseOrder::STATUS_APPROVED;
+                $locked->approved_at = now();
+                $locked->created_by = $locked->created_by ?? auth()->id();
+                $locked->save();
+            });
+        } catch (PurchaseException $e) {
+            // 1305 已审核（锁行复查与并发审核幂等拦截）
+            return $this->fail($e->getCode() ?: 1305, $e->getMessage());
+        }
 
         return $this->ok(['no' => $order->no]);
     }
 
-    /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单 */
+    /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单；锁内复查抛错转业务码 */
     public function close(PurchaseOrder $order)
     {
-        if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-            return $this->fail(1306, '当前状态不可关闭');
-        }
-        DB::transaction(function () use ($order) {
-            // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-                throw new PurchaseException('当前状态不可关闭', 1306);
+        try {
+            if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+                return $this->fail(1306, '当前状态不可关闭');
             }
-            $locked->status = PurchaseOrder::STATUS_CLOSED;
-            $locked->closed_at = now();
-            $locked->save();
-        });
+            DB::transaction(function () use ($order) {
+                // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
+                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+                    throw new PurchaseException('当前状态不可关闭', 1306);
+                }
+                $locked->status = PurchaseOrder::STATUS_CLOSED;
+                $locked->closed_at = now();
+                $locked->save();
+            });
+        } catch (PurchaseException $e) {
+            // 1306 状态不符（锁行复查与并发拦截）
+            return $this->fail($e->getCode() ?: 1306, $e->getMessage());
+        }
 
         return $this->ok();
     }
@@ -290,8 +300,9 @@ class PurchaseOrderController extends Controller
             // 注意：items 不加 required——空数组 [] 走 1301 业务码（422 仅拦缺失字段与类型错误）
             'items' => 'array',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|numeric',
-            'items.*.price' => 'required|numeric',
+            // 数量/单价限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError）
+            'items.*.quantity' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
+            'items.*.price' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
         ]);
     }
 

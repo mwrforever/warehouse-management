@@ -153,6 +153,7 @@ class ProductController extends Controller
             || BomHeader::where('product_id', $product->id)->exists();
         $referencedByOther = DeletionGuard::referenced('inventory_movements', 'product_id', $product->id)
             || DeletionGuard::referenced('purchase_order_items', 'product_id', $product->id)
+            || DeletionGuard::referenced('purchase_inbound_items', 'product_id', $product->id)
             || DeletionGuard::referenced('sales_order_items', 'product_id', $product->id)
             || DeletionGuard::referenced('production_orders', 'product_id', $product->id);
         if ($referencedByBom || $referencedByOther) {

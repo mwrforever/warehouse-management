@@ -141,9 +141,13 @@ class PurchaseInboundController extends Controller
         if ($this->hasDuplicateItem($data['items'])) {
             return $this->fail(1312, '明细存在重复商品');
         }
-        // 关联订单行校验：行归属/订单可入库/不超剩余量（草稿期即拦截，审核期再锁行复核）
+        // 明细带订单行引用但未携带 order_id → 1308（防绕过订单状态联动）
+        if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
+            return $this->fail(1308, '入库明细与订单行不一致');
+        }
+        // 关联订单行校验：行归属/订单可入库/供应商一致/不超剩余量（草稿期即拦截，审核期再锁行复核）
         if ($orderId = $data['order_id'] ?? null) {
-            $check = $this->validateOrderItems($orderId, $data['items']);
+            $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $data['items']);
             if ($check !== null) {
                 return $this->fail(1308, $check);
             }
@@ -213,67 +217,93 @@ class PurchaseInboundController extends Controller
         ]);
     }
 
-    /** 更新草稿：仅草稿（1309）；items 全量替换；订单行校验同 store */
+    /** 更新草稿：仅草稿（1309）；items 全量替换；订单行校验同 store；事务内锁行复查防并发 */
     public function update(Request $request, PurchaseInbound $inbound)
     {
-        if ($inbound->status !== PurchaseInbound::STATUS_DRAFT) {
-            return $this->fail(1309, '已审核单据不可修改');
-        }
-        $data = $this->validatePayload($request);
-        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-            return $this->fail(1307, '仓库与库位不能为空');
-        }
-        if (empty($data['items'])) {
-            return $this->fail(1301, '请至少添加一条明细');
-        }
-        foreach ($data['items'] as $item) {
-            if ((float) $item['quantity'] <= 0) {
-                return $this->fail(1302, '数量必须大于 0');
+        try {
+            if ($inbound->status !== PurchaseInbound::STATUS_DRAFT) {
+                return $this->fail(1309, '已审核单据不可修改');
             }
-            if ((float) $item['price'] < 0) {
-                return $this->fail(1311, '价格不能为负数');
+            $data = $this->validatePayload($request);
+            if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
+                return $this->fail(1307, '仓库与库位不能为空');
             }
-        }
-        if ($this->hasDuplicateItem($data['items'])) {
-            return $this->fail(1312, '明细存在重复商品');
-        }
-        if ($orderId = $data['order_id'] ?? null) {
-            $check = $this->validateOrderItems($orderId, $data['items']);
-            if ($check !== null) {
-                return $this->fail(1308, $check);
+            if (empty($data['items'])) {
+                return $this->fail(1301, '请至少添加一条明细');
             }
-        }
+            foreach ($data['items'] as $item) {
+                if ((float) $item['quantity'] <= 0) {
+                    return $this->fail(1302, '数量必须大于 0');
+                }
+                if ((float) $item['price'] < 0) {
+                    return $this->fail(1311, '价格不能为负数');
+                }
+            }
+            if ($this->hasDuplicateItem($data['items'])) {
+                return $this->fail(1312, '明细存在重复商品');
+            }
+            // 明细带订单行引用但未携带 order_id → 1308（防绕过订单状态联动）
+            if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
+                return $this->fail(1308, '入库明细与订单行不一致');
+            }
+            if ($orderId = $data['order_id'] ?? null) {
+                $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $data['items']);
+                if ($check !== null) {
+                    return $this->fail(1308, $check);
+                }
+            }
 
-        DB::transaction(function () use ($inbound, $data) {
-            $inbound->update([
-                'supplier_id' => $data['supplier_id'],
-                'warehouse_id' => $data['warehouse_id'],
-                'location_id' => $data['location_id'],
-                'order_id' => $data['order_id'] ?? null,
-                'total_amount' => $this->orderService->calculateTotal($data['items']),
-                'remark' => $data['remark'] ?? $inbound->remark,
-            ]);
-            // 明细全量替换（草稿单无流水引用，直接重建）
-            $inbound->items()->delete();
-            $inbound->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'quantity' => $i['quantity'],
-                'price' => $i['price'],
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
-                'order_item_id' => $i['order_item_id'] ?? null,
-            ], $data['items']));
-        });
+            DB::transaction(function () use ($inbound, $data) {
+                // 锁入库单行复查状态：与审核并发时防止改到正在审核的单（幂等 1309）
+                $locked = PurchaseInbound::whereKey($inbound->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== PurchaseInbound::STATUS_DRAFT) {
+                    throw new PurchaseException('已审核单据不可修改', 1309);
+                }
+                $locked->update([
+                    'supplier_id' => $data['supplier_id'],
+                    'warehouse_id' => $data['warehouse_id'],
+                    'location_id' => $data['location_id'],
+                    'order_id' => $data['order_id'] ?? null,
+                    'total_amount' => $this->orderService->calculateTotal($data['items']),
+                    'remark' => $data['remark'] ?? $locked->remark,
+                ]);
+                // 明细全量替换（草稿单无流水引用，直接重建）
+                $locked->items()->delete();
+                $locked->items()->createMany(array_map(fn ($i) => [
+                    'product_id' => $i['product_id'],
+                    'quantity' => $i['quantity'],
+                    'price' => $i['price'],
+                    'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+                    'order_item_id' => $i['order_item_id'] ?? null,
+                ], $data['items']));
+            });
+        } catch (PurchaseException $e) {
+            // 1309 已审核（锁行复查与并发审核幂等拦截）
+            return $this->fail($e->getCode() ?: 1309, $e->getMessage());
+        }
 
         return $this->ok();
     }
 
-    /** 删除草稿：仅草稿（1309） */
+    /** 删除草稿：仅草稿（1309）；事务内锁行复查防并发 */
     public function destroy(PurchaseInbound $inbound)
     {
-        if ($inbound->status !== PurchaseInbound::STATUS_DRAFT) {
-            return $this->fail(1309, '已审核单据不可删除');
+        try {
+            if ($inbound->status !== PurchaseInbound::STATUS_DRAFT) {
+                return $this->fail(1309, '已审核单据不可删除');
+            }
+            DB::transaction(function () use ($inbound) {
+                // 锁入库单行复查状态：与审核并发时防止删到正在审核的单（幂等 1309）
+                $locked = PurchaseInbound::whereKey($inbound->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== PurchaseInbound::STATUS_DRAFT) {
+                    throw new PurchaseException('已审核单据不可删除', 1309);
+                }
+                $locked->delete();
+            });
+        } catch (PurchaseException $e) {
+            // 1309 已审核（锁行复查与并发审核幂等拦截）
+            return $this->fail($e->getCode() ?: 1309, $e->getMessage());
         }
-        $inbound->delete();
 
         return $this->ok();
     }
@@ -360,10 +390,12 @@ class PurchaseInboundController extends Controller
             'location_id' => 'nullable|integer|exists:locations,id',
             'order_id' => 'nullable|integer|exists:purchase_orders,id',
             'remark' => 'nullable|string|max:200',
-            'items' => 'required|array',
+            // 注意：items 不加 required——空数组 [] 走 1301 业务码（422 仅拦缺失字段与类型错误）
+            'items' => 'array',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|numeric',
-            'items.*.price' => 'required|numeric',
+            // 数量/单价限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError）
+            'items.*.quantity' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
+            'items.*.price' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
             'items.*.order_item_id' => 'nullable|integer|exists:purchase_order_items,id',
         ]);
     }
@@ -383,12 +415,22 @@ class PurchaseInboundController extends Controller
         return false;
     }
 
-    // 订单行校验：行必须属于该订单、商品一致、订单可入库、不超剩余量（返回错误文案或 null）
-    private function validateOrderItems(int $orderId, array $items): ?string
+    // 明细是否带订单行引用（order_item_id 非空）
+    private function hasOrderItemRef(array $items): bool
+    {
+        return collect($items)->contains(fn ($i) => ! empty($i['order_item_id'] ?? null));
+    }
+
+    // 订单行校验：行必须属于该订单、商品一致、供应商一致、订单可入库、不超剩余量（返回错误文案或 null）
+    private function validateOrderItems(int $orderId, int $supplierId, array $items): ?string
     {
         $order = PurchaseOrder::with('items')->find($orderId);
         if (! $order || ! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
             return '该订单当前不可入库';
+        }
+        // 入库单供应商必须与来源订单一致（防跨供应商挂单，前端禁用选择器仅 UI 层）
+        if ((int) $order->supplier_id !== $supplierId) {
+            return '供应商与来源订单不一致';
         }
         foreach ($items as $item) {
             if (! isset($item['order_item_id'])) {

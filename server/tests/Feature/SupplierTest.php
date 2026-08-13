@@ -4,9 +4,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\Location;
 use App\Models\Role;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -89,6 +91,20 @@ class SupplierTest extends TestCase
         $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
         DB::table('purchase_orders')->insert([
             'no' => 'PO-TEST-001', 'supplier_id' => $s->id, 'order_date' => now()->toDateString(),
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
+            ->assertJsonPath('code', 1109);
+    }
+
+    public function test_destroy_with_purchase_inbound_reference_fails(): void
+    {
+        // 边界路径：purchase_inbounds 有引用时删除被拒 1109（入库单引用同码保护）
+        $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH01', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        DB::table('purchase_inbounds')->insert([
+            'no' => 'PI-TEST-001', 'supplier_id' => $s->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
             'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
