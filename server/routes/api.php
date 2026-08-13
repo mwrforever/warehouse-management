@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CheckController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
+use App\Http\Controllers\Api\FinishedInboundController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OperationReportController;
 use App\Http\Controllers\Api\OutsourcingController;
@@ -286,5 +287,15 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/approve', [OutsourcingController::class, 'approve']);
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'storeReceipt']);
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'receipts']);
+    });
+
+    // 成品入库单：CRUD + 审核（production.finished.*；审核复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:production.finished.list')->get('/production/finished-inbounds', [FinishedInboundController::class, 'index']);
+        Route::middleware('permission:production.finished.create')->post('/production/finished-inbounds', [FinishedInboundController::class, 'store']);
+        Route::middleware('permission:production.finished.list')->get('/production/finished-inbounds/{finishedInbound}', [FinishedInboundController::class, 'show']);
+        Route::middleware('permission:production.finished.update')->put('/production/finished-inbounds/{finishedInbound}', [FinishedInboundController::class, 'update']);
+        Route::middleware('permission:production.finished.delete')->delete('/production/finished-inbounds/{finishedInbound}', [FinishedInboundController::class, 'destroy']);
+        Route::middleware('permission:production.finished.update')->post('/production/finished-inbounds/{finishedInbound}/approve', [FinishedInboundController::class, 'approve']);
     });
 });

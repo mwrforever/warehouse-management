@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * 成品入库单
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $status
  * @property int $warehouse_id
  * @property int $location_id
- * @property string|null $approved_at
+ * @property Carbon|null $approved_at
  * @property string|null $operator
  * @property string|null $remark
  */
