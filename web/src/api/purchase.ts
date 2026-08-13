@@ -188,7 +188,7 @@ export const purchaseApi = {
   // 审核（响应单号）
   async approveOrder(id: number) {
     const { data } = await http.post(`/purchase/orders/${id}/approve`)
-    return data.data as { no: string }
+    return data.data.no
   },
   // 关闭
   async closeOrder(id: number) {
