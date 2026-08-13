@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * 委外加工单
@@ -20,7 +21,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $warehouse_id
  * @property int $location_id
  * @property string $quantity
- * @property string|null $approved_at
+ * @property Carbon|null $approved_at
  * @property string|null $operator
  * @property string|null $remark
  */
@@ -69,6 +70,20 @@ class OutsourcingOrder extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    /** @return BelongsTo<Warehouse, $this> */
+    // 发出仓库
+    public function warehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    /** @return BelongsTo<Location, $this> */
+    // 发出库位
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(Location::class);
     }
 
     /** @return HasMany<OutsourcingReceipt, $this> */
