@@ -222,7 +222,12 @@ async function openReset(row: UserItem) {
 
 onMounted(async () => {
   load()
-  roles.value = (await roleApi.list({ page: 1, per_page: 100 })).items
+  try {
+    roles.value = (await roleApi.list({ page: 1, per_page: 100 })).items
+  } catch (e) {
+    // 角色下拉加载失败提示：新建/编辑弹窗仍可用，仅角色选项缺失
+    ElMessage.error((e as Error).message)
+  }
 })
 </script>
 

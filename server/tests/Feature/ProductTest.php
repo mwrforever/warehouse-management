@@ -308,4 +308,119 @@ class ProductTest extends TestCase
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
             ->assertJsonPath('code', 1116);
     }
+
+    // ---------- B05 删除保护缺口：盘点明细与生产单据明细 4 表 ----------
+
+    public function test_destroy_referenced_by_check_item_fails_with_1116(): void
+    {
+        // 异常路径（B05）：被草稿盘点单明细引用的商品不可删 1116（守卫补齐 inventory_check_items）
+        $p = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH03', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $checkId = DB::table('inventory_checks')->insertGetId([
+            'no' => 'CK-TEST-001', 'warehouse_id' => $w->id, 'status' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('inventory_check_items')->insert([
+            'check_id' => $checkId, 'product_id' => $p->id, 'location_id' => $l->id,
+            'book_qty' => 0, 'actual_qty' => 5, 'diff_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    public function test_destroy_referenced_by_pick_list_item_fails_with_1116(): void
+    {
+        // 边界路径（B05）：被领料单明细引用的物料不可删 1116（生产单据表落地后守卫自动生效）
+        $p = $this->rawMaterial();
+        $orderId = $this->seedProductionOrder();
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH03', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $pickId = DB::table('pick_lists')->insertGetId([
+            'no' => 'PL-TEST-001', 'order_id' => $orderId, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'issue_status' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('pick_list_items')->insert([
+            'pick_id' => $pickId, 'product_id' => $p->id, 'required_qty' => 2, 'pick_qty' => 2,
+            'issued_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    public function test_destroy_referenced_by_return_list_item_fails_with_1116(): void
+    {
+        // 边界路径（B05）：被退料单明细引用的物料不可删 1116（生产单据表落地后守卫自动生效）
+        $p = $this->rawMaterial();
+        $orderId = $this->seedProductionOrder();
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH03', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $returnId = DB::table('return_lists')->insertGetId([
+            'no' => 'RL-TEST-001', 'order_id' => $orderId, 'pick_id' => null, 'warehouse_id' => $w->id,
+            'location_id' => $l->id, 'status' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('return_list_items')->insert([
+            'return_id' => $returnId, 'product_id' => $p->id, 'quantity' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    public function test_destroy_referenced_by_finished_inbound_item_fails_with_1116(): void
+    {
+        // 边界路径（B05）：被成品入库单明细引用的商品不可删 1116（生产单据表落地后守卫自动生效）
+        $p = $this->rawMaterial();
+        $orderId = $this->seedProductionOrder();
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH03', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
+        $inboundId = DB::table('finished_inbounds')->insertGetId([
+            'no' => 'FI-TEST-001', 'order_id' => $orderId, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('finished_inbound_items')->insert([
+            'finished_inbound_id' => $inboundId, 'product_id' => $p->id, 'quantity' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    /** 构造原料商品（分类/单位齐全），供生产单据明细引用测试复用 */
+    private function rawMaterial(): Product
+    {
+        return Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+    }
+
+    /** 构造成品 + BOM + 生产工单，返回工单 ID（生产单据外键链依赖） */
+    private function seedProductionOrder(): int
+    {
+        $fin = Product::create([
+            'name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished',
+            'category_id' => $this->finCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ]);
+        $bom = BomHeader::create([
+            'code' => 'BOM-TEST-002', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1,
+        ]);
+
+        return DB::table('production_orders')->insertGetId([
+            'no' => 'MO-TEST-002', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
 }

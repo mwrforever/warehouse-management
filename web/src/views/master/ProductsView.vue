@@ -323,8 +323,13 @@ async function remove(row: ProductItem) {
 
 onMounted(async () => {
   load()
-  categoryTree.value = await categoryApi.tree()
-  units.value = (await unitApi.list({ page: 1, per_page: 100 })).items
+  try {
+    categoryTree.value = await categoryApi.tree()
+    units.value = (await unitApi.list({ page: 1, per_page: 100 })).items
+  } catch (e) {
+    // 分类树/单位下拉加载失败提示：新建/编辑弹窗仍可用，仅下拉选项缺失
+    ElMessage.error((e as Error).message)
+  }
 })
 </script>
 

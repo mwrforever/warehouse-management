@@ -298,7 +298,12 @@ async function save() {
 async function openItems(row: BomRow) {
   currentBom.value = row
   itemsVisible.value = true
-  itemsRows.value = (await bomApi.items(row.id)).items
+  try {
+    itemsRows.value = (await bomApi.items(row.id)).items
+  } catch (e) {
+    // 加载失败提示：避免弹窗空白明细无提示（与其他请求风格一致）
+    ElMessage.error((e as Error).message)
+  }
 }
 
 // 启用/停用切换：后端保证同成品启用唯一

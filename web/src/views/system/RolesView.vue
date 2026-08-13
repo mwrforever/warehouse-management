@@ -95,6 +95,8 @@ interface PermTreeNode {
 const treeData = ref<PermTreeNode[]>([])
 // 编辑回填的已勾选权限 id 集合
 const checkedKeys = ref<number[]>([])
+// 权限树加载 Promise 缓存：列表与权限树并行加载，编辑弹窗回填前复用同一请求（防竞态丢勾选）
+let permTreePromise: Promise<void> | null = null
 
 // 加载角色列表
 async function load() {
@@ -109,13 +111,28 @@ async function load() {
 }
 
 // 加载权限清单并构造权限树（label 用权限 name）
-async function loadPermissions() {
-  const res = await roleApi.permissions()
-  treeData.value = res.groups.map((g) => ({
-    id: 'g-' + g.group,
-    label: g.group,
-    children: g.permissions.map((p: PermissionItem) => ({ id: p.id, label: p.name, code: p.code })),
-  }))
+function loadPermissions(): Promise<void> {
+  if (!permTreePromise) {
+    permTreePromise = roleApi
+      .permissions()
+      .then((res) => {
+        treeData.value = res.groups.map((g) => ({
+          id: 'g-' + g.group,
+          label: g.group,
+          children: g.permissions.map((p: PermissionItem) => ({
+            id: p.id,
+            label: p.name,
+            code: p.code,
+          })),
+        }))
+      })
+      // 失败清除缓存：下次重试重新请求，避免永久缓存 rejection
+      .catch((e) => {
+        permTreePromise = null
+        throw e
+      })
+  }
+  return permTreePromise
 }
 
 // 打开弹窗：新建清空；编辑回填已勾选权限（后端返回 code 集合，映射为树节点 id 后回填）
@@ -126,6 +143,13 @@ async function openEdit(row?: RoleItem) {
       ? { id: row.id, name: row.name, code: row.code, remark: row.remark }
       : { id: null, name: '', code: '', remark: '' },
   )
+  // 权限树未就绪时等待加载完成：确保 code→id 映射完整（否则空勾选保存会全量重挂、静默清空角色权限）
+  try {
+    await loadPermissions()
+  } catch {
+    ElMessage.error('权限清单加载失败，请重试')
+    return
+  }
   // 构建 code→id 映射：角色列表返回的是权限 code，而树 node-key 为权限 id（叶子节点必带 code）
   const codeToId = new Map<string, number>()
   treeData.value.forEach((g) =>
@@ -188,7 +212,11 @@ async function remove(row: RoleItem) {
 
 onMounted(async () => {
   load()
-  await loadPermissions()
+  try {
+    await loadPermissions()
+  } catch {
+    // 预加载失败不阻塞列表：编辑弹窗打开时会重新请求并提示
+  }
 })
 </script>
 

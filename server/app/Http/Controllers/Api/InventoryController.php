@@ -25,25 +25,26 @@ class InventoryController extends Controller
         ]);
     }
 
-    /** 余额导出 CSV：UTF-8 BOM + 中文表头（与当前筛选一致的全量行） */
+    /** 余额导出 CSV：UTF-8 BOM + 中文表头（与当前筛选一致的全量行）；流式输出不占内存 */
     public function exportBalances(Request $request)
     {
-        $rows = $this->balanceQuery($request)->get();
-        $csv = "\xEF\xBB\xBF"."商品编码,商品名称,仓库,库位,数量,下限,上限,状态\n";
-        foreach ($rows as $r) {
-            $level = $this->alertLevel($r);
-            $status = $level === 1 ? '低库存' : ($level === 2 ? '超上限' : '正常');
-            // CSV 字段统一加引号转义（防中文逗号破坏列结构）
-            $fields = [
-                $r->product_code, $r->product_name, $r->warehouse_name,
-                $r->location_name, $r->quantity, $r->safety_min, $r->safety_max, $status,
-            ];
-            $csv .= implode(',', array_map(fn ($f) => '"'.str_replace('"', '""', (string) $f).'"', $fields))."\n";
-        }
-
-        // 用流式响应输出 CSV（测试 streamedContent 依赖；且大文件导出不占内存）
-        return response()->stream(function () use ($csv): void {
-            echo $csv;
+        // 用流式响应输出 CSV（测试 streamedContent 依赖）：回调内游标逐行读取 + fputcsv 逐行写出，
+        // 避免 ->get() 全量装载 + 全量拼串导致的内存随行数线性增长
+        return response()->stream(function () use ($request): void {
+            // 表头保持无引号原样（导出测试按精确表头断言）
+            echo "\xEF\xBB\xBF"."商品编码,商品名称,仓库,库位,数量,下限,上限,状态\n";
+            $out = fopen('php://output', 'w');
+            // 游标逐行读取：单行内存驻留，与总行数无关
+            foreach ($this->balanceQuery($request)->cursor() as $r) {
+                $level = $this->alertLevel($r);
+                $status = $level === 1 ? '低库存' : ($level === 2 ? '超上限' : '正常');
+                // CSV 字段统一加引号转义（防中文逗号破坏列结构；fputcsv 默认全字段引号包裹）
+                fputcsv($out, [
+                    $r->product_code, $r->product_name, $r->warehouse_name,
+                    $r->location_name, $r->quantity, $r->safety_min, $r->safety_max, $status,
+                ]);
+            }
+            fclose($out);
         }, 200, [
             'Content-Type' => 'text/csv; charset=UTF-8',
             'Content-Disposition' => 'attachment; filename="balances_'.date('YmdHis').'.csv"',

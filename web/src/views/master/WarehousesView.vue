@@ -270,7 +270,12 @@ async function remove(row: WarehouseItem) {
 async function openLocations(row: WarehouseItem) {
   currentWarehouse.value = row
   locationVisible.value = true
-  locations.value = (await warehouseApi.locations(row.id)).items
+  try {
+    locations.value = (await warehouseApi.locations(row.id)).items
+  } catch (e) {
+    // 加载失败提示：避免弹窗空白列表无提示（与其他请求风格一致）
+    ElMessage.error((e as Error).message)
+  }
 }
 
 function openCreateLocation() {

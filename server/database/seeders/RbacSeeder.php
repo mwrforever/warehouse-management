@@ -124,9 +124,15 @@ class RbacSeeder extends Seeder
         $operator->permissions()->sync(Permission::where('code', 'like', '%.list')->pluck('id'));
 
         // 内置 admin 用户（不可删除），挂 admin 角色
+        // 密码支持 ADMIN_PASSWORD 环境变量覆盖（生产部署必须设置强口令；默认值仅限本地开发/E2E）
         $adminUser = User::firstOrCreate(
             ['username' => 'admin'],
-            ['name' => '管理员', 'email' => 'admin@php-design.local', 'password' => 'admin123', 'status' => 1]
+            [
+                'name' => '管理员',
+                'email' => 'admin@php-design.local',
+                'password' => env('ADMIN_PASSWORD', 'admin123'),
+                'status' => 1,
+            ]
         );
         $adminUser->roles()->syncWithoutDetaching([$admin->id]);
 

@@ -9,6 +9,7 @@ use App\Models\Location;
 use App\Models\Permission;
 use App\Models\Product;
 use App\Models\Role;
+use Database\Seeders\InventorySeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -79,5 +80,17 @@ class InventoryStructureTest extends TestCase
             $indexes->contains(fn ($i) => $i['columns'] === ['created_at']),
             'created_at 单列索引不存在'
         );
+    }
+
+    public function test_inventory_seeder_is_idempotent(): void
+    {
+        // 边界路径（B04）：重复执行库存种子不重复累加基线余额/流水（幂等保护，防 E2E 数值断言失效）
+        $mat = Product::where('code', 'MAT-001')->firstOrFail();
+        $movementCount = DB::table('inventory_movements')->where('product_id', $mat->id)->count();
+        // 第二次执行种子：余额行已存在时应跳过入账
+        $this->seed(InventorySeeder::class);
+        $balance = DB::table('inventory_balances')->where('product_id', $mat->id)->value('quantity');
+        $this->assertEquals(100, (float) $balance);
+        $this->assertSame($movementCount, DB::table('inventory_movements')->where('product_id', $mat->id)->count());
     }
 }

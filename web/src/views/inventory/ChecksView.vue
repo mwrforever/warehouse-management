@@ -338,6 +338,8 @@ async function scanAdd() {
       }
     }
     const book = books.value.find((b) => b.product_id === p.id)
+    // 无账面行的商品不可录盘：账外资产盘盈（book_qty=0 建账）功能暂不做，
+    // 裁决与实施改动点见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md
     if (!book) {
       ElMessage.error('商品在该仓库无库存，无需盘点')
       return
