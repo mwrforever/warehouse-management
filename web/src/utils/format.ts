@@ -14,3 +14,10 @@ export function formatYuan(fen: number | string): string {
 export function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+/** 千分位格式化（元金额/数量，后端已分转元）：'1234567.89' → '1,234,567.89'（NaN 防御返回 '0.00'） */
+export function formatThousand(value: number | string): string {
+  const n = Number(value)
+  if (Number.isNaN(n)) return '0.00'
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
