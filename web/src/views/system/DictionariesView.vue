@@ -192,8 +192,12 @@ async function save() {
 async function openItems(dict: DictionaryItem) {
   currentDict.value = dict
   itemDialogVisible.value = true
-  const res = await dictionaryApi.items(dict.id)
-  items.value = res.items
+  try {
+    items.value = (await dictionaryApi.items(dict.id)).items
+  } catch (e) {
+    // 加载失败提示：避免弹窗空白列表无提示（与其他请求风格一致）
+    ElMessage.error((e as Error).message)
+  }
 }
 
 // 删除字典：确认框提示引用风险（引用此字典的下拉将失效）

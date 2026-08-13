@@ -4,9 +4,14 @@
 
 namespace Tests\Feature;
 
+use App\Models\BomHeader;
+use App\Models\Category;
 use App\Models\Location;
+use App\Models\Process;
+use App\Models\Product;
 use App\Models\Role;
 use App\Models\Supplier;
+use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -109,5 +114,41 @@ class SupplierTest extends TestCase
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
             ->assertJsonPath('code', 1109);
+    }
+
+    public function test_destroy_with_outsourcing_order_reference_fails(): void
+    {
+        // 边界路径（B10）：outsourcing_orders 引用该供应商时删除被拒 1109（委外模块落地后守卫自动生效）
+        $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH01', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        // 委外单外键链：成品 → BOM → 工单 → 工序 → 委外单
+        $category = Category::create(['name' => '成品', 'parent_id' => 0, 'sort' => 1, 'status' => 1]);
+        $unit = Unit::create(['name' => '个', 'code' => 'pc', 'status' => 1]);
+        $fin = Product::create([
+            'name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $bom = BomHeader::create([
+            'code' => 'BOM-TEST-001', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1,
+        ]);
+        $orderId = DB::table('production_orders')->insertGetId([
+            'no' => 'MO-TEST-001', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $process = Process::create(['name' => '机加工', 'code' => 'P001', 'sort' => 1, 'status' => 1]);
+        $opId = DB::table('work_order_operations')->insertGetId([
+            'order_id' => $orderId, 'process_id' => $process->id, 'seq' => 1, 'status' => 0,
+            'qualified_qty' => 0, 'defective_qty' => 0, 'hours' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('outsourcing_orders')->insert([
+            'no' => 'OS-TEST-001', 'order_id' => $orderId, 'operation_id' => $opId, 'supplier_id' => $s->id,
+            'warehouse_id' => $w->id, 'location_id' => $l->id, 'status' => 0, 'quantity' => 5,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/suppliers/{$s->id}")
+            ->assertJsonPath('code', 1109);
+        $this->assertDatabaseHas('suppliers', ['id' => $s->id]);
     }
 }

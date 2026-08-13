@@ -100,4 +100,45 @@ class RoleManagementTest extends TestCase
         $this->withToken($this->token)->getJson('/api/v1/roles?per_page=0')->assertJsonPath('data.per_page', 1);
         $this->withToken($this->token)->getJson('/api/v1/roles?per_page=1000')->assertJsonPath('data.per_page', 100);
     }
+
+    // ---------- B02 保留码保护：admin 编码不可被占用/改出 ----------
+
+    public function test_store_reserved_admin_code_fails_with_422(): void
+    {
+        // 安全路径（B02）：admin 保留码不可被新建角色占用（与 roles.code 唯一约束双重保险）
+        $this->withToken($this->token)->postJson('/api/v1/roles', [
+            'name' => '伪管理员', 'code' => 'admin', 'remark' => '', 'permission_ids' => [],
+        ])->assertStatus(422)->assertJsonPath('code', 422);
+        $this->assertSame(1, Role::where('code', 'admin')->count());
+    }
+
+    public function test_update_role_to_admin_code_fails_with_422(): void
+    {
+        // 安全路径（B02）：普通角色不可改名占用 admin 保留码（防伪造第二个管理员角色）
+        $role = Role::create(['name' => '普通', 'code' => 'plain']);
+        $this->withToken($this->token)->putJson("/api/v1/roles/{$role->id}", [
+            'name' => '普通', 'code' => 'admin', 'permission_ids' => [],
+        ])->assertStatus(422)->assertJsonPath('code', 422);
+        $this->assertDatabaseHas('roles', ['id' => $role->id, 'code' => 'plain']);
+    }
+
+    public function test_update_admin_role_code_locked_fails_with_422(): void
+    {
+        // 安全路径（B02）：内置管理员角色编码锁定不可改出（防改名后重建 admin 角色架空删除保护与权限放行）
+        $adminRole = Role::where('code', 'admin')->firstOrFail();
+        $this->withToken($this->token)->putJson("/api/v1/roles/{$adminRole->id}", [
+            'name' => '管理员', 'code' => 'boss', 'permission_ids' => [],
+        ])->assertStatus(422)->assertJsonPath('code', 422);
+        $this->assertDatabaseHas('roles', ['id' => $adminRole->id, 'code' => 'admin']);
+    }
+
+    public function test_update_admin_role_keeps_code_succeeds(): void
+    {
+        // 正常路径：内置管理员角色保持编码 admin 时可正常更新名称与权限（保护不误伤管理员操作）
+        $adminRole = Role::where('code', 'admin')->firstOrFail();
+        $this->withToken($this->token)->putJson("/api/v1/roles/{$adminRole->id}", [
+            'name' => '系统管理员', 'code' => 'admin', 'permission_ids' => Permission::pluck('id')->all(),
+        ])->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('roles', ['id' => $adminRole->id, 'name' => '系统管理员']);
+    }
 }

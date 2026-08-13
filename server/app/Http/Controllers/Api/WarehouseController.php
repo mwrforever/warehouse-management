@@ -87,14 +87,21 @@ class WarehouseController extends Controller
         return $this->ok();
     }
 
-    /** 删除仓库：存在库存余额或入库/出库单引用 1106（余额表由库存模块创建，未建时守卫自动放行） */
+    /** 删除仓库：被库存余额/流水、盘点单、采购入库/销售出库、生产单据（领退料/委外/成品入库）引用 1106 */
     public function destroy(Warehouse $warehouse)
     {
-        // 库存余额 + 采购入库单 + 销售出库单引用均受保护（同码 1106）
+        // 覆盖全部 restrictOnDelete 引用表（未建自动放行，建后自动生效）
         if (
             DeletionGuard::referenced('inventory_balances', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('inventory_movements', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('inventory_checks', 'warehouse_id', $warehouse->id)
             || DeletionGuard::referenced('purchase_inbounds', 'warehouse_id', $warehouse->id)
             || DeletionGuard::referenced('sales_outbounds', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('pick_lists', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('return_lists', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('outsourcing_orders', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('outsourcing_receipts', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('finished_inbounds', 'warehouse_id', $warehouse->id)
         ) {
             return $this->fail(1106, '仓库存在库存，不可删除');
         }
@@ -146,14 +153,21 @@ class WarehouseController extends Controller
         return $this->ok();
     }
 
-    /** 删除库位：存在库存余额或入库/出库单引用 1107 */
+    /** 删除库位：被库存余额/流水、盘点明细、采购入库/销售出库、生产单据（领退料/委外/成品入库）引用 1107 */
     public function destroyLocation(Location $location)
     {
-        // 库存余额 + 采购入库单 + 销售出库单引用均受保护（同码 1107）
+        // 覆盖全部 restrictOnDelete 引用表（未建自动放行，建后自动生效）
         if (
             DeletionGuard::referenced('inventory_balances', 'location_id', $location->id)
+            || DeletionGuard::referenced('inventory_movements', 'location_id', $location->id)
+            || DeletionGuard::referenced('inventory_check_items', 'location_id', $location->id)
             || DeletionGuard::referenced('purchase_inbounds', 'location_id', $location->id)
             || DeletionGuard::referenced('sales_outbounds', 'location_id', $location->id)
+            || DeletionGuard::referenced('pick_lists', 'location_id', $location->id)
+            || DeletionGuard::referenced('return_lists', 'location_id', $location->id)
+            || DeletionGuard::referenced('outsourcing_orders', 'location_id', $location->id)
+            || DeletionGuard::referenced('outsourcing_receipts', 'location_id', $location->id)
+            || DeletionGuard::referenced('finished_inbounds', 'location_id', $location->id)
         ) {
             return $this->fail(1107, '库位存在库存，不可删除');
         }

@@ -4,6 +4,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -231,5 +232,122 @@ class UserManagementTest extends TestCase
         $u->roles()->sync([$role->id]);
         $this->withToken($u->createToken('api')->plainTextToken)
             ->getJson('/api/v1/users')->assertJsonPath('code', 403);
+    }
+
+    // ---------- B01 提权防护：仅持用户管理权限的角色不可接管管理员 ----------
+
+    public function test_non_admin_reset_admin_password_fails_with_1003(): void
+    {
+        // 安全路径（B01）：仅持 user.update 的角色不可重置内置 admin 密码（防改密登录接管）
+        $actor = $this->createUserManager();
+        $this->withToken($actor['token'])->putJson('/api/v1/users/'.$this->admin->id.'/reset-password', [
+            'password' => 'Hacked@123',
+        ])->assertJsonPath('code', 1003);
+        // 原密码未变：新密码不可登录，admin123 仍可登录
+        $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'Hacked@123'])
+            ->assertJsonPath('code', 1001);
+        $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->assertJsonPath('code', 0);
+    }
+
+    public function test_admin_can_reset_admin_password(): void
+    {
+        // 正常路径：管理员自身可重置内置 admin 密码（保护不误伤管理员正常操作）
+        $this->withToken($this->token)->putJson('/api/v1/users/'.$this->admin->id.'/reset-password', [
+            'password' => 'NewAdmin@123',
+        ])->assertJsonPath('code', 0);
+        $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'NewAdmin@123'])
+            ->assertJsonPath('code', 0);
+    }
+
+    public function test_non_admin_update_admin_user_fails_with_1003(): void
+    {
+        // 安全路径（B01）：非管理员不可修改内置 admin 的任何字段（含姓名/密码）
+        $actor = $this->createUserManager();
+        $this->withToken($actor['token'])->putJson('/api/v1/users/'.$this->admin->id, [
+            'name' => '被篡改', 'username' => 'admin', 'status' => 1, 'password' => 'Hacked@123', 'role_ids' => [],
+        ])->assertJsonPath('code', 1003);
+        $this->assertDatabaseHas('users', ['id' => $this->admin->id, 'name' => '管理员']);
+        $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->assertJsonPath('code', 0);
+    }
+
+    public function test_non_admin_grant_admin_role_via_update_fails_with_1003(): void
+    {
+        // 安全路径（B01）：非管理员不可给自己或他人挂 admin 角色（防自挂角色绕过权限校验）
+        $actor = $this->createUserManager();
+        $adminRoleId = Role::where('code', 'admin')->value('id');
+        $this->withToken($actor['token'])->putJson('/api/v1/users/'.$actor['user']->id, [
+            'name' => '人事员', 'username' => 'hr1', 'status' => 1, 'role_ids' => [$adminRoleId],
+        ])->assertJsonPath('code', 1003);
+        $this->assertDatabaseMissing('role_user', ['user_id' => $actor['user']->id, 'role_id' => $adminRoleId]);
+    }
+
+    public function test_non_admin_store_user_with_admin_role_fails_with_1003(): void
+    {
+        // 安全路径（B01）：非管理员不可新建挂 admin 角色的提权账号
+        $actor = $this->createUserManager();
+        $adminRoleId = Role::where('code', 'admin')->value('id');
+        $this->withToken($actor['token'])->postJson('/api/v1/users', [
+            'name' => '提权者', 'username' => 'evil', 'password' => 'Evil@12345', 'status' => 1,
+            'role_ids' => [$adminRoleId],
+        ])->assertJsonPath('code', 1003);
+        $this->assertDatabaseMissing('users', ['username' => 'evil']);
+    }
+
+    public function test_non_admin_delete_admin_account_fails_with_1003(): void
+    {
+        // 安全路径（B01）：非管理员不可删除管理员账号（含挂 admin 角色的非内置用户名用户）
+        $actor = $this->createUserManager();
+        $adminRoleId = Role::where('code', 'admin')->value('id');
+        $boss = User::create(['name' => '副管理员', 'username' => 'boss2', 'password' => 'Boss@12345', 'status' => 1]);
+        $boss->roles()->sync([$adminRoleId]);
+        $this->withToken($actor['token'])->deleteJson('/api/v1/users/'.$boss->id)
+            ->assertJsonPath('code', 1003);
+        $this->assertDatabaseHas('users', ['id' => $boss->id]);
+    }
+
+    public function test_non_admin_reset_password_of_admin_role_holder_fails_with_1003(): void
+    {
+        // 安全路径（B01）：非管理员不可重置已挂 admin 角色的账号密码（非内置用户名同样受保护）
+        $actor = $this->createUserManager();
+        $adminRoleId = Role::where('code', 'admin')->value('id');
+        $boss = User::create(['name' => '副管理员', 'username' => 'boss3', 'password' => 'Boss@12345', 'status' => 1]);
+        $boss->roles()->sync([$adminRoleId]);
+        $this->withToken($actor['token'])->putJson('/api/v1/users/'.$boss->id.'/reset-password', [
+            'password' => 'Hacked@123',
+        ])->assertJsonPath('code', 1003);
+        $this->postJson('/api/v1/auth/login', ['username' => 'boss3', 'password' => 'Boss@12345'])
+            ->assertJsonPath('code', 0);
+    }
+
+    public function test_non_admin_update_normal_user_succeeds(): void
+    {
+        // 非回归：仅持 user.update 的角色对普通用户的日常维护不受提权防护影响
+        $actor = $this->createUserManager();
+        $u = User::create(['name' => '员工', 'username' => 'staff1', 'password' => 'p', 'status' => 1]);
+        $this->withToken($actor['token'])->putJson("/api/v1/users/{$u->id}", [
+            'name' => '员工甲', 'username' => 'staff1', 'status' => 1, 'role_ids' => [],
+        ])->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('users', ['id' => $u->id, 'name' => '员工甲']);
+    }
+
+    /**
+     * 构造仅持用户管理权限的普通角色操作人（非 admin 角色），供提权防护用例复用
+     *
+     * @return array{token: string, user: User}
+     */
+    private function createUserManager(): array
+    {
+        $codes = ['user.list', 'user.create', 'user.update', 'user.delete'];
+        foreach ($codes as $code) {
+            Permission::firstOrCreate(['name' => $code, 'code' => $code, 'group' => '系统管理']);
+        }
+        $role = Role::create(['name' => '人事', 'code' => 'hr']);
+        $role->permissions()->sync(Permission::whereIn('code', $codes)->pluck('id'));
+        $u = User::create(['name' => '人事员', 'username' => 'hr1', 'password' => 'Hr@12345', 'status' => 1]);
+        $u->roles()->sync([$role->id]);
+
+        return ['token' => $u->createToken('api')->plainTextToken, 'user' => $u];
     }
 }

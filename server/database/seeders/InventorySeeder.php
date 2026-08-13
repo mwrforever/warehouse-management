@@ -5,6 +5,7 @@
 namespace Database\Seeders;
 
 use App\Models\Category;
+use App\Models\InventoryBalance;
 use App\Models\Location;
 use App\Models\Product;
 use App\Models\Unit;
@@ -61,6 +62,15 @@ class InventorySeeder extends Seeder
     // 通过统一引擎注入采购入库流水（种子同样满足余额=流水恒等式）
     private function inbound(InventoryService $svc, Product $product, Location $location, float $qty): void
     {
+        // 幂等保护：该商品×仓库×库位已存在余额行（重复 db:seed）则跳过入账，防基线余额/流水翻倍
+        if (
+            InventoryBalance::where('product_id', $product->id)
+                ->where('warehouse_id', $location->warehouse_id)
+                ->where('location_id', $location->id)
+                ->exists()
+        ) {
+            return;
+        }
         $svc->apply([[
             'product_id' => $product->id,
             'warehouse_id' => $location->warehouse_id,

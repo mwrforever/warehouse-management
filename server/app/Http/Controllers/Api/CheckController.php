@@ -106,7 +106,8 @@ class CheckController extends Controller
             if ((float) $item['actual_qty'] < 0) {
                 return $this->fail(1201, '实盘数量不能为负数');
             }
-            // 仅限该仓库存在余额的商品×库位（无余额商品不可录盘）
+            // 无余额商品不可录盘（1205）：账外资产盘盈（book_qty=0 建账）属功能需求，
+            // 用户 2026-08-13 裁决暂不做——实施改动点见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md
             $balance = InventoryBalance::where('product_id', $item['product_id'])
                 ->where('warehouse_id', $data['warehouse_id'])
                 ->where('location_id', $item['location_id'])
@@ -191,6 +192,8 @@ class CheckController extends Controller
                 if ((float) $item['actual_qty'] < 0) {
                     return $this->fail(1201, '实盘数量不能为负数');
                 }
+                // 无余额商品不可录盘（1205）：与 store 同口径
+                // 账外盘盈暂不做，裁决与实施改动点见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md
                 $balance = InventoryBalance::where('product_id', $item['product_id'])
                     ->where('warehouse_id', $data['warehouse_id'])
                     ->where('location_id', $item['location_id'])
@@ -278,6 +281,9 @@ class CheckController extends Controller
                         ->where('location_id', $item->location_id)
                         ->lockForUpdate()
                         ->first();
+                    // ! $balance 为防御性分支：余额行只增不删，账面快照存在时理论不可达（1205 已拦无账商品）；
+                    // 若未来支持账外盘盈（暂不做，见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md），
+                    // 此处须改为按「无余额行=账面 0」比对放行盘盈
                     if (! $balance || abs((float) $balance->quantity - (float) $item->book_qty) > 0.005) {
                         throw new InventoryException('库存已变动，请重新盘点', 1206);
                     }

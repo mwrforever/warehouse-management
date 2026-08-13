@@ -4,6 +4,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\BomHeader;
 use App\Models\Category;
 use App\Models\Customer;
 use App\Models\InventoryBalance;
@@ -217,6 +218,88 @@ class WarehouseTest extends TestCase
             'name' => '铝材', 'code' => 'RAW-001', 'type' => 'raw_material',
             'category_id' => $category->id, 'unit_id' => $unit->id, 'spec' => '1mm',
             'barcode' => null, 'safety_min' => 10, 'safety_max' => 100, 'status' => 1,
+        ]);
+    }
+
+    // ---------- B08 删除保护缺口：盘点单与生产单据引用表 ----------
+
+    public function test_destroy_warehouse_with_check_reference_fails(): void
+    {
+        // 异常路径（B08）：被草稿盘点单引用的仓库不可删 1106（守卫补齐 inventory_checks）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        DB::table('inventory_checks')->insert([
+            'no' => 'CK-TEST-001', 'warehouse_id' => $w->id, 'status' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
+            ->assertJsonPath('code', 1106);
+        $this->assertDatabaseHas('warehouses', ['id' => $w->id]);
+    }
+
+    public function test_destroy_location_with_check_item_reference_fails(): void
+    {
+        // 异常路径（B08）：被盘点明细引用的库位不可删 1107（守卫补齐 inventory_check_items）
+        $p = $this->createBalanceProduct();
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $checkId = DB::table('inventory_checks')->insertGetId([
+            'no' => 'CK-TEST-001', 'warehouse_id' => $w->id, 'status' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('inventory_check_items')->insert([
+            'check_id' => $checkId, 'product_id' => $p->id, 'location_id' => $l->id,
+            'book_qty' => 0, 'actual_qty' => 1, 'diff_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+            ->assertJsonPath('code', 1107);
+        $this->assertDatabaseHas('locations', ['id' => $l->id]);
+    }
+
+    public function test_destroy_warehouse_with_pick_list_reference_fails(): void
+    {
+        // 边界路径（B08）：被领料单引用的仓库不可删 1106（生产单据表落地后守卫自动生效）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $orderId = $this->seedProductionOrder();
+        DB::table('pick_lists')->insert([
+            'no' => 'PL-TEST-001', 'order_id' => $orderId, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'issue_status' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
+            ->assertJsonPath('code', 1106);
+    }
+
+    public function test_destroy_location_with_finished_inbound_reference_fails(): void
+    {
+        // 边界路径（B08）：被成品入库单引用的库位不可删 1107（生产单据表落地后守卫自动生效）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
+        $orderId = $this->seedProductionOrder();
+        DB::table('finished_inbounds')->insert([
+            'no' => 'FI-TEST-001', 'order_id' => $orderId, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+            ->assertJsonPath('code', 1107);
+    }
+
+    /** 构造成品 + BOM + 生产工单，返回工单 ID（生产单据外键链依赖） */
+    private function seedProductionOrder(): int
+    {
+        $category = Category::create(['name' => '成品', 'parent_id' => 0, 'sort' => 2, 'status' => 1]);
+        $unit = Unit::create(['name' => '个', 'code' => 'pc2', 'status' => 1]);
+        $fin = Product::create([
+            'name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $bom = BomHeader::create([
+            'code' => 'BOM-TEST-002', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1,
+        ]);
+
+        return DB::table('production_orders')->insertGetId([
+            'no' => 'MO-TEST-002', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
         ]);
     }
 }

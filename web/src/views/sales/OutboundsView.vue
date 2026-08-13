@@ -138,6 +138,11 @@ async function scanAdd() {
   if (!code) return
   try {
     const p = await productApi.byBarcode(code)
+    // 原料不可销售：与后端 422「原料商品不可销售」口径一致（商品下拉已过滤，扫码入口补齐）
+    if (p.type === 'raw_material') {
+      ElMessage.error('原料商品不可销售')
+      return
+    }
     if (form.items.some((i) => i.product_id === p.id)) {
       ElMessage.warning('明细存在重复商品')
     } else {

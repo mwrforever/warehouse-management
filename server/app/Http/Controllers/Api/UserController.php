@@ -45,24 +45,36 @@ class UserController extends Controller
         ]);
     }
 
-    /** 新建用户：校验后创建并分配角色 */
+    /** 新建用户：校验后创建并分配角色；admin 角色仅限管理员分配（防自建提权账号） */
     public function store(UserStoreRequest $request)
     {
+        // 提权保护：非管理员不得给新用户挂管理员角色（防借新建账号提权）
+        if (! $this->actorIsAdmin($request) && $this->containsAdminRole($request->input('role_ids', []))) {
+            return $this->fail(1003, '仅管理员可分配管理员角色');
+        }
         $user = User::create($request->safe()->except('role_ids'));
         $user->roles()->sync($request->input('role_ids', []));
 
         return $this->ok(['id' => $user->id, 'name' => $user->name, 'username' => $user->username]);
     }
 
-    /** 更新用户：password 为空则不变更；重新分配角色；内置 admin 禁止改 username/status */
+    /** 更新用户：password 为空则不变更；重新分配角色；内置 admin 禁止改 username/status；管理员账号与角色仅限管理员操作 */
     public function update(UserUpdateRequest $request, User $user)
     {
+        // 提权保护：非管理员不可修改管理员账号（内置 admin 或已挂管理员角色者），防改密/挂角色接管
+        if (! $this->actorIsAdmin($request) && $this->isAdminUser($user)) {
+            return $this->fail(1003, '仅管理员可修改管理员账号');
+        }
         // 内置管理员保护：禁止改 username（防改名后绕过删除保护）与 status（防禁用唯一管理员锁死系统）
         if (
             $user->username === 'admin'
             && ($request->input('username') !== 'admin' || (int) $request->input('status') !== 1)
         ) {
             return $this->fail(1003, '内置管理员不可修改');
+        }
+        // 提权保护：非管理员不得给任何用户授予管理员角色（防自挂 admin 角色绕过全部权限校验）
+        if (! $this->actorIsAdmin($request) && $this->containsAdminRole($request->input('role_ids', []))) {
+            return $this->fail(1003, '仅管理员可分配管理员角色');
         }
 
         // 排除空密码：避免覆盖原密码
@@ -81,9 +93,13 @@ class UserController extends Controller
         return $this->ok();
     }
 
-    /** 删除用户：内置 admin（username=admin）保护 */
-    public function destroy(User $user)
+    /** 删除用户：内置 admin（username=admin）保护；管理员账号仅限管理员删除 */
+    public function destroy(Request $request, User $user)
     {
+        // 提权保护：非管理员不可删除管理员账号（含非内置用户名但已挂管理员角色者）
+        if (! $this->actorIsAdmin($request) && $this->isAdminUser($user)) {
+            return $this->fail(1003, '仅管理员可删除管理员账号');
+        }
         if ($user->username === 'admin') {
             return $this->fail(1003, '内置管理员不可删除');
         }
@@ -92,9 +108,13 @@ class UserController extends Controller
         return $this->ok();
     }
 
-    /** 重置密码：仅更新密码字段，并撤销该用户全部旧 token（旧会话强制重新登录） */
+    /** 重置密码：仅更新密码字段，并撤销该用户全部旧 token（旧会话强制重新登录）；管理员账号密码仅限管理员重置 */
     public function resetPassword(Request $request, User $user)
     {
+        // 提权保护：非管理员不可重置管理员账号密码（防借重置密码登录接管全系统）
+        if (! $this->actorIsAdmin($request) && $this->isAdminUser($user)) {
+            return $this->fail(1003, '仅管理员可重置管理员密码');
+        }
         $data = $request->validate([
             'password' => ['required', 'string', 'min:8', 'regex:/[A-Za-z]/', 'regex:/[0-9]/'],
         ]);
@@ -103,5 +123,25 @@ class UserController extends Controller
         $user->tokens()->delete();
 
         return $this->ok();
+    }
+
+    /** 当前操作人是否持有 admin 角色（中间件同口径：admin 角色全量放行） */
+    private function actorIsAdmin(Request $request): bool
+    {
+        return $request->user()->roles()->where('code', 'admin')->exists();
+    }
+
+    /** 目标用户是否属管理员账号（内置 admin 用户名或已挂管理员角色） */
+    private function isAdminUser(User $user): bool
+    {
+        return $user->username === 'admin' || $user->roles()->where('code', 'admin')->exists();
+    }
+
+    /** 请求的角色 id 列表是否包含管理员角色（防提权链：自挂/互挂 admin 角色） */
+    private function containsAdminRole(array $roleIds): bool
+    {
+        $adminRoleId = Role::where('code', 'admin')->value('id');
+
+        return $adminRoleId !== null && in_array($adminRoleId, array_map('intval', $roleIds), true);
     }
 }
