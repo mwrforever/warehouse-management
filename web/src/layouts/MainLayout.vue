@@ -104,6 +104,22 @@
           class="menu-item"
           >成品入库</RouterLink
         >
+        <div class="menu-group">统计报表</div>
+        <RouterLink v-if="auth.has('report.inventory')" to="/reports/inventory" class="menu-item"
+          >库存报表</RouterLink
+        >
+        <RouterLink v-if="auth.has('report.movements')" to="/reports/movements" class="menu-item"
+          >出入库汇总</RouterLink
+        >
+        <RouterLink v-if="auth.has('report.production')" to="/reports/production" class="menu-item"
+          >生产统计</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('report.purchase_sales')"
+          to="/reports/purchase-sales"
+          class="menu-item"
+          >采购销售汇总</RouterLink
+        >
       </nav>
     </aside>
     <div class="main">
