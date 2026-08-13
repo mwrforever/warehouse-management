@@ -70,6 +70,40 @@
         <RouterLink v-if="auth.has('sales.outbound.list')" to="/sales/outbounds" class="menu-item"
           >销售出库</RouterLink
         >
+        <div class="menu-group">生产管理</div>
+        <RouterLink
+          v-if="auth.has('production.order.list')"
+          to="/production/orders"
+          class="menu-item"
+          >生产工单</RouterLink
+        >
+        <RouterLink v-if="auth.has('production.pick.list')" to="/production/picks" class="menu-item"
+          >领料单</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('production.return.list')"
+          to="/production/returns"
+          class="menu-item"
+          >退料单</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('production.report.list')"
+          to="/production/reports"
+          class="menu-item"
+          >工序报工</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('production.outsource.list')"
+          to="/production/outsourcings"
+          class="menu-item"
+          >委外加工</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('production.finished.list')"
+          to="/production/finished-inbounds"
+          class="menu-item"
+          >成品入库</RouterLink
+        >
       </nav>
     </aside>
     <div class="main">

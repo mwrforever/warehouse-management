@@ -130,6 +130,42 @@ const router = createRouter({
           meta: { permission: 'sales.outbound.list' },
         },
         {
+          path: 'production/orders',
+          name: 'production-orders',
+          component: () => import('../views/production/OrdersView.vue'),
+          meta: { permission: 'production.order.list' },
+        },
+        {
+          path: 'production/reports',
+          name: 'production-reports',
+          component: () => import('../views/production/ReportsView.vue'),
+          meta: { permission: 'production.report.list' },
+        },
+        {
+          path: 'production/picks',
+          name: 'production-picks',
+          component: () => import('../views/production/PicksView.vue'),
+          meta: { permission: 'production.pick.list' },
+        },
+        {
+          path: 'production/returns',
+          name: 'production-returns',
+          component: () => import('../views/production/ReturnsView.vue'),
+          meta: { permission: 'production.return.list' },
+        },
+        {
+          path: 'production/outsourcings',
+          name: 'production-outsourcings',
+          component: () => import('../views/production/OutsourcingsView.vue'),
+          meta: { permission: 'production.outsource.list' },
+        },
+        {
+          path: 'production/finished-inbounds',
+          name: 'production-finished-inbounds',
+          component: () => import('../views/production/FinishedInboundsView.vue'),
+          meta: { permission: 'production.finished.list' },
+        },
+        {
           path: 'master/boms',
           name: 'master-boms',
           component: () => import('../views/master/BomsView.vue'),
