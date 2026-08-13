@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductionOrderController;
 use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
+use App\Http\Controllers\Api\ReturnListController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SalesOrderController;
 use App\Http\Controllers\Api\SalesOutboundController;
@@ -262,5 +263,15 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.pick.delete')->delete('/production/picks/{pick}', [PickListController::class, 'destroy']);
         Route::middleware('permission:production.pick.update')->post('/production/picks/{pick}/approve', [PickListController::class, 'approve']);
         Route::middleware('permission:production.pick.update')->post('/production/picks/{pick}/issue', [PickListController::class, 'issue']);
+    });
+
+    // 退料单：CRUD + 审核（production.return.*；审核复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:production.return.list')->get('/production/returns', [ReturnListController::class, 'index']);
+        Route::middleware('permission:production.return.create')->post('/production/returns', [ReturnListController::class, 'store']);
+        Route::middleware('permission:production.return.list')->get('/production/returns/{return}', [ReturnListController::class, 'show']);
+        Route::middleware('permission:production.return.update')->put('/production/returns/{return}', [ReturnListController::class, 'update']);
+        Route::middleware('permission:production.return.delete')->delete('/production/returns/{return}', [ReturnListController::class, 'destroy']);
+        Route::middleware('permission:production.return.update')->post('/production/returns/{return}/approve', [ReturnListController::class, 'approve']);
     });
 });
