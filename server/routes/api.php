@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SalesOrderController;
+use App\Http\Controllers\Api\SalesOutboundController;
 use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\UserController;
@@ -213,5 +214,17 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:sales.order.update')->post('/sales/orders/{order}/close', [SalesOrderController::class, 'close']);
         Route::middleware('permission:sales.order.delete')->delete('/sales/orders/{order}', [SalesOrderController::class, 'destroy']);
         Route::middleware('permission:sales.order.list')->get('/sales/orders/{order}/outbounds', [SalesOrderController::class, 'outbounds']);
+    });
+
+    // 销售出库单：CRUD + from-order 预填 + 审核 + 当日出库汇总（sales.outbound.*；审核复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:sales.outbound.list')->get('/sales/outbounds/from-order/{orderId}', [SalesOutboundController::class, 'fromOrder']);
+        Route::middleware('permission:sales.outbound.list')->get('/sales/outbounds/today-summary', [SalesOutboundController::class, 'todaySummary']);
+        Route::middleware('permission:sales.outbound.list')->get('/sales/outbounds', [SalesOutboundController::class, 'index']);
+        Route::middleware('permission:sales.outbound.create')->post('/sales/outbounds', [SalesOutboundController::class, 'store']);
+        Route::middleware('permission:sales.outbound.list')->get('/sales/outbounds/{outbound}', [SalesOutboundController::class, 'show']);
+        Route::middleware('permission:sales.outbound.update')->put('/sales/outbounds/{outbound}', [SalesOutboundController::class, 'update']);
+        Route::middleware('permission:sales.outbound.delete')->delete('/sales/outbounds/{outbound}', [SalesOutboundController::class, 'destroy']);
+        Route::middleware('permission:sales.outbound.update')->post('/sales/outbounds/{outbound}/approve', [SalesOutboundController::class, 'approve']);
     });
 });
