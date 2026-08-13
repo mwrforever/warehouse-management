@@ -162,6 +162,9 @@ test.describe('库存管理模块', () => {
     await dialog2.locator('.check-toolbar').getByText('盘点仓库', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '主仓' }).click()
     await dialog2.getByRole('button', { name: /加\s*载账面数/ }).click()
+    // 等待账面数异步加载完成再保存：items 未就绪时 save() 会以「请先加载账面数」警告拦截且弹窗不关闭，
+    // 而下一条「保存成功」断言会误匹配上一步编辑保存的残留消息（TC-INV-05 同款等待，此处补齐）
+    await expect(dialog2.locator('.el-table__row')).toHaveCount(3)
     await dialog2.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success').last()).toContainText('保存成功')
     const approvedRow = page.locator('.el-table__row', { hasText: '草稿' }).first()

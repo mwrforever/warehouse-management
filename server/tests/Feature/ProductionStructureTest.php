@@ -136,8 +136,12 @@ class ProductionStructureTest extends TestCase
     public function test_production_document_tables_exist(): void
     {
         // 正常路径：单据域 8 张表全部建立
-        foreach (['pick_lists', 'pick_list_items', 'return_lists', 'return_list_items',
-            'outsourcing_orders', 'outsourcing_receipts', 'finished_inbounds', 'finished_inbound_items'] as $table) {
+        foreach (
+            [
+                'pick_lists', 'pick_list_items', 'return_lists', 'return_list_items',
+                'outsourcing_orders', 'outsourcing_receipts', 'finished_inbounds', 'finished_inbound_items',
+            ] as $table
+        ) {
             $this->assertTrue(Schema::hasTable($table), "表 {$table} 不存在");
         }
     }
