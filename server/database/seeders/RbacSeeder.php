@@ -94,6 +94,23 @@ class RbacSeeder extends Seeder
             ['name' => '工序报工创建', 'code' => 'production.report.create', 'group' => '生产管理'],
             ['name' => '工序报工更新', 'code' => 'production.report.update', 'group' => '生产管理'],
             ['name' => '工序报工删除', 'code' => 'production.report.delete', 'group' => '生产管理'],
+            // 生产单据域权限（领料/退料/委外/成品入库 各四动作，group=生产管理；审核复用 update，发料/回收复用 create）
+            ['name' => '生产领料列表', 'code' => 'production.pick.list', 'group' => '生产管理'],
+            ['name' => '生产领料创建', 'code' => 'production.pick.create', 'group' => '生产管理'],
+            ['name' => '生产领料更新', 'code' => 'production.pick.update', 'group' => '生产管理'],
+            ['name' => '生产领料删除', 'code' => 'production.pick.delete', 'group' => '生产管理'],
+            ['name' => '生产退料列表', 'code' => 'production.return.list', 'group' => '生产管理'],
+            ['name' => '生产退料创建', 'code' => 'production.return.create', 'group' => '生产管理'],
+            ['name' => '生产退料更新', 'code' => 'production.return.update', 'group' => '生产管理'],
+            ['name' => '生产退料删除', 'code' => 'production.return.delete', 'group' => '生产管理'],
+            ['name' => '委外加工列表', 'code' => 'production.outsource.list', 'group' => '生产管理'],
+            ['name' => '委外加工创建', 'code' => 'production.outsource.create', 'group' => '生产管理'],
+            ['name' => '委外加工更新', 'code' => 'production.outsource.update', 'group' => '生产管理'],
+            ['name' => '委外加工删除', 'code' => 'production.outsource.delete', 'group' => '生产管理'],
+            ['name' => '成品入库列表', 'code' => 'production.finished.list', 'group' => '生产管理'],
+            ['name' => '成品入库创建', 'code' => 'production.finished.create', 'group' => '生产管理'],
+            ['name' => '成品入库更新', 'code' => 'production.finished.update', 'group' => '生产管理'],
+            ['name' => '成品入库删除', 'code' => 'production.finished.delete', 'group' => '生产管理'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
