@@ -9,7 +9,9 @@ import {
   type ProductionOrderDetail,
   type ProductionOrderItem,
 } from '../../api/production'
+import { useAuthStore } from '../../stores/auth'
 
+const auth = useAuthStore()
 const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
@@ -227,7 +229,14 @@ onMounted(async () => {
         </el-form-item>
       </el-form>
       <div class="footer-bar">
-        <el-button class="btn-primary" :loading="saving" @click="submitReport">提 交报工</el-button>
+        <!-- 无报工提交权限则不展示提交入口（页面只读） -->
+        <el-button
+          v-if="auth.has('production.report.create')"
+          class="btn-primary"
+          :loading="saving"
+          @click="submitReport"
+          >提 交报工</el-button
+        >
       </div>
     </div>
     <el-empty v-else-if="operations.length" description="工序已全部完成" />

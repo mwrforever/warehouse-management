@@ -41,11 +41,6 @@ const query = reactive({
 // 新建/编辑弹窗状态
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null) // 当前编辑草稿 id（null 表示新建）
-// 委外详情接口缺仓库/库位 id，本地补全供编辑回填
-type OutsourcingDetailData = Awaited<ReturnType<typeof productionApi.outsourcingDetail>> & {
-  warehouse_id: number
-  location_id: number
-}
 const form = reactive({
   order_id: undefined as number | undefined,
   operation_id: undefined as number | undefined,
@@ -153,10 +148,10 @@ function openCreate(orderId?: number) {
   }
 }
 
-// 编辑草稿：详情回填（接口缺仓库/库位 id，本地补全）+ 工单详情取工序与计划数
+// 编辑草稿：详情回填（含仓库/库位 id）+ 工单详情取工序与计划数
 async function openEdit(row: OutsourcingItem) {
   try {
-    const d = (await productionApi.outsourcingDetail(row.id)) as OutsourcingDetailData
+    const d = await productionApi.outsourcingDetail(row.id)
     await onOrderChange(d.order_id)
     editingId.value = row.id
     form.order_id = d.order_id
@@ -375,7 +370,13 @@ onMounted(async () => {
         style="width: 200px"
         @keyup.enter="search"
       />
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="loadList"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
         <el-option label="已回收" :value="2" />

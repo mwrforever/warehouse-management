@@ -47,12 +47,6 @@ const form = reactive({
   }[],
 })
 
-// 成品入库详情接口缺仓库/库位 id，本地补全供编辑回填
-type InboundDetailData = Awaited<ReturnType<typeof productionApi.finishedInboundDetail>> & {
-  warehouse_id: number
-  location_id: number
-}
-
 // 成品入库单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
@@ -138,10 +132,10 @@ function openCreate(orderId?: number) {
   }
 }
 
-// 编辑草稿：详情回填（含剩余产量）
+// 编辑草稿：详情回填（含剩余产量与仓库/库位 id）
 async function openEdit(row: FinishedInboundItem) {
   try {
-    const d = (await productionApi.finishedInboundDetail(row.id)) as InboundDetailData
+    const d = await productionApi.finishedInboundDetail(row.id)
     editingId.value = row.id
     formRemaining.value = Number(d.remaining_qty)
     form.order_id = d.order_id
@@ -276,7 +270,13 @@ onMounted(async () => {
         style="width: 200px"
         @keyup.enter="search"
       />
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="loadList"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>

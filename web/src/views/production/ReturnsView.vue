@@ -11,9 +11,8 @@ const auth = useAuthStore()
 const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
-// 列表行（后端列表返回仓库名，TS 接口未声明，本地补全）
-type ReturnRow = ReturnItem & { warehouse_name: string }
-const list = ref<ReturnRow[]>([])
+// 列表行（ReturnItem 含仓库/库位名，直接来自 production.ts 类型）
+const list = ref<ReturnItem[]>([])
 const total = ref(0)
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
@@ -55,7 +54,7 @@ async function loadList() {
   loading.value = true
   try {
     const res = await productionApi.returns(query)
-    list.value = res.items as ReturnRow[]
+    list.value = res.items
     total.value = res.total
   } catch (e) {
     ElMessage.error((e as Error).message)
@@ -130,7 +129,7 @@ function openCreate(orderId?: number) {
 }
 
 // 编辑草稿：详情回填 + fromOrderPicks 取已领量（退料详情接口不含已领字段，按 product_id 合并）
-async function openEdit(row: ReturnRow) {
+async function openEdit(row: ReturnItem) {
   try {
     const d = await productionApi.returnsDetail(row.id)
     const pre = await productionApi.fromOrderPicks(d.order_id)
@@ -205,7 +204,7 @@ async function save() {
   }
 }
 
-async function removeRowAction(row: ReturnRow) {
+async function removeRowAction(row: ReturnItem) {
   try {
     await ElMessageBox.confirm(`确认删除退料单 ${row.no}？删除后不可恢复`, '提示', {
       type: 'warning',
@@ -225,7 +224,7 @@ async function removeRowAction(row: ReturnRow) {
 }
 
 // 审核：确认后库存将增加并冲销已领（失败 http 层红色提示后端精确消息）
-async function approveRow(row: ReturnRow) {
+async function approveRow(row: ReturnItem) {
   try {
     await ElMessageBox.confirm(`确认审核退料单 ${row.no}？审核后库存将增加并冲销已领`, '提示', {
       type: 'warning',
@@ -271,7 +270,13 @@ onMounted(async () => {
         style="width: 200px"
         @keyup.enter="search"
       />
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="loadList"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>

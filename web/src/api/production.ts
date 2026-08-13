@@ -94,6 +94,33 @@ export interface PickItem {
   created_at: string
 }
 
+export interface PickDetail {
+  id: number
+  no: string
+  order_id: number
+  order_no: string
+  status: number
+  status_label: string
+  issue_status: number
+  issue_status_label: string
+  warehouse_id: number
+  warehouse_name: string
+  location_id: number
+  location_name: string
+  approved_at: string | null
+  operator: string | null
+  remark: string | null
+  items: {
+    id: number
+    product_id: number
+    product_name: string
+    product_code: string
+    required_qty: number
+    pick_qty: number
+    issued_qty: number
+  }[]
+}
+
 export interface FromOrderMaterial {
   product_id: number
   // 字段名与后端 from-order 接口对齐（PickListController::fromOrder 返回 product_name/product_code）
@@ -117,6 +144,10 @@ export interface ReturnItem {
   no: string
   order_id: number
   order_no: string
+  warehouse_id: number
+  warehouse_name: string
+  location_id: number
+  location_name: string
   status: number
   status_label: string
   approved_at: string | null
@@ -152,6 +183,10 @@ export interface OutsourcingDetail {
   supplier_name: string
   status: number
   status_label: string
+  warehouse_id: number
+  warehouse_name: string
+  location_id: number
+  location_name: string
   quantity: number
   received_qty: number
   approved_at: string | null
@@ -183,6 +218,28 @@ export interface FinishedInboundItem {
   approved_at: string | null
   operator: string | null
   created_at: string
+}
+
+export interface FinishedInboundDetail {
+  id: number
+  no: string
+  order_id: number
+  order_no: string
+  status: number
+  status_label: string
+  warehouse_id: number
+  warehouse_name: string
+  location_id: number
+  location_name: string
+  remaining_qty: number
+  remark: string | null
+  items: {
+    id: number
+    product_id: number
+    product_name: string
+    product_code: string
+    quantity: number
+  }[]
 }
 
 export interface ProductionOrderPayload {
@@ -313,31 +370,10 @@ export const productionApi = {
     const { data } = await http.get('/production/picks', { params: { per_page: 10, ...params } })
     return data.data as PageResult<PickItem>
   },
-  // 领料单详情
+  // 领料单详情（编辑草稿回填/详情展示）
   async pickDetail(id: number) {
     const { data } = await http.get(`/production/picks/${id}`)
-    return data.data as {
-      id: number
-      no: string
-      order_id: number
-      order_no: string
-      status: number
-      status_label: string
-      issue_status: number
-      issue_status_label: string
-      warehouse_name: string
-      location_name: string
-      remark: string | null
-      items: {
-        id: number
-        product_id: number
-        product_name: string
-        product_code: string
-        required_qty: number
-        pick_qty: number
-        issued_qty: number
-      }[]
-    }
+    return data.data as PickDetail
   },
   // 新建领料单（响应单号）
   async createPick(payload: PickPayload) {
@@ -481,25 +517,7 @@ export const productionApi = {
   // 成品入库单详情（含剩余产量）
   async finishedInboundDetail(id: number) {
     const { data } = await http.get(`/production/finished-inbounds/${id}`)
-    return data.data as {
-      id: number
-      no: string
-      order_id: number
-      order_no: string
-      status: number
-      status_label: string
-      remaining_qty: number
-      warehouse_name: string
-      location_name: string
-      remark: string | null
-      items: {
-        id: number
-        product_id: number
-        product_name: string
-        product_code: string
-        quantity: number
-      }[]
-    }
+    return data.data as FinishedInboundDetail
   },
   // 新建成品入库单（响应单号）
   async createFinishedInbound(payload: FinishedInboundPayload) {
