@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductionOrderController;
 use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\RoleController;
@@ -226,5 +227,15 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:sales.outbound.update')->put('/sales/outbounds/{outbound}', [SalesOutboundController::class, 'update']);
         Route::middleware('permission:sales.outbound.delete')->delete('/sales/outbounds/{outbound}', [SalesOutboundController::class, 'destroy']);
         Route::middleware('permission:sales.outbound.update')->post('/sales/outbounds/{outbound}/approve', [SalesOutboundController::class, 'approve']);
+    });
+
+    // 生产工单：CRUD + 物料需求（production.order.*；下达/开工/完工/关闭复用 update，Task 4 追加）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:production.order.list')->get('/production/orders', [ProductionOrderController::class, 'index']);
+        Route::middleware('permission:production.order.list')->get('/production/orders/{order}/materials', [ProductionOrderController::class, 'materials']);
+        Route::middleware('permission:production.order.create')->post('/production/orders', [ProductionOrderController::class, 'store']);
+        Route::middleware('permission:production.order.list')->get('/production/orders/{order}', [ProductionOrderController::class, 'show']);
+        Route::middleware('permission:production.order.update')->put('/production/orders/{order}', [ProductionOrderController::class, 'update']);
+        Route::middleware('permission:production.order.delete')->delete('/production/orders/{order}', [ProductionOrderController::class, 'destroy']);
     });
 });
