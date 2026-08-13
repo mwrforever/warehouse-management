@@ -113,13 +113,13 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('code', 1302);
     }
 
-    public function test_store_rejects_negative_price_with_422(): void
+    public function test_store_rejects_negative_price_with_1311(): void
     {
-        // 异常路径：负价格 → 422（正则限两位小数拦截负号，格式层；价格 0 允许：赠品场景）
+        // 异常路径：负价格 → 1311 业务码（regex 允许负号形态，业务层拦截；价格 0 允许：赠品场景）
         $items = $this->payload()['items'];
         $items[0]['price'] = -1;
         $this->withToken($this->token)->postJson('/api/v1/purchase/orders', ['supplier_id' => $this->supplier->id, 'order_date' => now()->toDateString(), 'items' => $items])
-            ->assertStatus(422);
+            ->assertJsonPath('code', 1311);
     }
 
     public function test_store_accepts_zero_price_for_gift(): void
