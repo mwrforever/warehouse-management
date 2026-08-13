@@ -33,8 +33,6 @@ class OutsourcingTest extends TestCase
 
     private Warehouse $wh;
 
-    private Location $a01;
-
     private Location $b01;
 
     private Product $mat;
@@ -56,7 +54,6 @@ class OutsourcingTest extends TestCase
         $this->token = $this->admin->createToken('api')->plainTextToken;
 
         $this->wh = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
-        $this->a01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
         $this->b01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
         $this->supplier = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
         $rawCat = Category::create(['name' => '原材料', 'parent_id' => 0]);

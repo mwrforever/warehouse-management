@@ -256,7 +256,6 @@ class OutsourcingController extends Controller
                     ->first();
                 $current = $balance ? (string) $balance->quantity : '0';
                 if (bccomp((string) $locked->quantity, $current, 2) > 0) {
-                    $qtyText = rtrim(rtrim($current, '0'), '.');
                     $code = Product::find($order->product_id)->code ?? ('#'.$order->product_id);
                     throw new ProductionException("商品[{$code}]库存不足", 1522);
                 }
@@ -291,9 +290,10 @@ class OutsourcingController extends Controller
     }
 
     /**
-     * 回收：事务内「锁委外单（草稿不可回收 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）→ 锁工单行取成品
-     * → InventoryService 写 outsourcing_in 流水(+qty) → 创建回收单（创建即审核）→ 累计 ≥ 委外量
-     * → 委外单已回收 + 工序标记完成」任一步失败整体回滚
+     * 回收：事务内「锁委外单（草稿不可回收 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）→ 锁委外工序行
+     * → 锁工单行取成品 → InventoryService 写 outsourcing_in 流水(+qty) → 创建回收单（创建即审核）
+     * → 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成」任一步失败整体回滚；
+     * 锁序 outsourcing→op→order 与报工（op→order）在 op→order 段同序，消除 ABBA 死锁环
      */
     public function storeReceipt(Request $request, OutsourcingOrder $outsourcing)
     {
@@ -316,6 +316,9 @@ class OutsourcingController extends Controller
                 if (bccomp(bcadd($received, (string) $data['quantity'], 2), (string) $locked->quantity, 2) > 0) {
                     throw new ProductionException('回收数量超过委外数量', 1524);
                 }
+                // 锁委外工序行（锁 order 之前无条件获取）：锁序 outsourcing→op→order 与报工（op→order）
+                // 在 op→order 段同序，消除「末批回收 vs 工序报工」并发 ABBA 死锁环；工序行防御性存在检查
+                $op = WorkOrderOperation::whereKey($locked->operation_id)->lockForUpdate()->first();
                 // 锁工单行取委外商品（= 工单成品）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
                 // 统一引擎写流水+加余额（同事务双写）
@@ -360,7 +363,7 @@ class OutsourcingController extends Controller
                 if (bccomp($receivedNow, (string) $locked->quantity, 2) >= 0) {
                     $locked->status = OutsourcingOrder::STATUS_RECEIVED;
                     $locked->save();
-                    $op = WorkOrderOperation::whereKey($locked->operation_id)->lockForUpdate()->first();
+                    // 工序行已在事务内先行锁定（锁序 outsourcing→op→order），直接更新不重复加锁（缺失防御性跳过）
                     if ($op && $op->status !== WorkOrderOperation::STATUS_DONE) {
                         $op->status = WorkOrderOperation::STATUS_DONE;
                         $op->save();
