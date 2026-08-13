@@ -22,6 +22,8 @@ class OperationReportController extends Controller
      * 合格不良累计+本次 > 计划数 → 1511；工时负数 → 1512；合格/不良负数 → 422（值域）。
      * 流转：累计合格 ≥ 计划数 → 本工序自动完成，下一工序（seq 升序）自动进行中。
      * 事务内锁工序行：并发报工同一工序在此串行化，累计值判定一致。
+     * 锁序 op→next-op→order：与委外回收（outsourcing→op→order）在 op→order 段同序，
+     * 消除「报工流转 vs 末批回收」并发 ABBA 死锁环（下一工序行在持 order 锁之前先行锁定）。
      */
     public function store(Request $request, WorkOrderOperation $operation)
     {
@@ -45,6 +47,14 @@ class OperationReportController extends Controller
                 if ($op->status !== WorkOrderOperation::STATUS_RUNNING) {
                     throw new ProductionException('该工序当前不可报工', 1509);
                 }
+                // 锁下一工序行（锁 order 之前无条件获取）：锁序 op→next-op→order 与委外回收
+                // （outsourcing→op→order）在 op→order 段同序，消除「报工流转 vs 末批回收」并发 ABBA 死锁环。
+                // 锁幂等，未达标流转时提前持锁无害；末工序无下一行 → null 防御性跳过（流转分支兜底）
+                $next = WorkOrderOperation::where('order_id', $op->order_id)
+                    ->where('seq', '>', $op->seq)
+                    ->orderBy('seq')
+                    ->lockForUpdate()
+                    ->first();
                 // 锁工单行：计划数快照（与工单状态流转并发一致）
                 $order = ProductionOrder::whereKey($op->order_id)->lockForUpdate()->firstOrFail();
                 // 累计语义：已报合格 + 本次合格 ≤ 计划数（防并发虚报）
@@ -65,14 +75,9 @@ class OperationReportController extends Controller
                 $op->defective_qty = $defectSum;
                 $op->hours = bcadd((string) $op->hours, (string) $hours, 2);
 
-                // 自动流转：累计合格 ≥ 计划数 → 本工序完成 + 下一工序进行中
+                // 自动流转：累计合格 ≥ 计划数 → 本工序完成 + 下一工序进行中（下一行已先行锁定，直接更新不重复加锁）
                 if (bccomp($op->qualified_qty, (string) $order->quantity, 2) >= 0) {
                     $op->status = WorkOrderOperation::STATUS_DONE;
-                    // 下一工序（seq 升序第一个未完成的待开工工序）
-                    $next = WorkOrderOperation::where('order_id', $order->id)
-                        ->where('seq', '>', $op->seq)
-                        ->orderBy('seq')
-                        ->first();
                     if ($next && $next->status === WorkOrderOperation::STATUS_PENDING) {
                         $next->status = WorkOrderOperation::STATUS_RUNNING;
                         $next->save();
