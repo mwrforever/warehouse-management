@@ -44,8 +44,10 @@ describe('PurchaseSalesReportView', () => {
     // 正常路径：差额 = 50.00 - 123.45 = -73.45（负数加 negative 类）
     const wrapper = mount(PurchaseSalesReportView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    expect(wrapper.text()).toContain('123.45')
-    expect(wrapper.text()).toContain('50.00')
+    // 收窄断言到 KPI 卡（避免与表格单元格数值混淆）
+    const cards = wrapper.findAll('.kpi-card')
+    expect(cards.at(0)!.text()).toContain('123.45')
+    expect(cards.at(1)!.text()).toContain('50.00')
     const neg = wrapper.find('.kpi-value.negative')
     expect(neg.exists()).toBeTruthy()
     expect(neg.text()).toContain('-73.45')
@@ -62,5 +64,7 @@ describe('PurchaseSalesReportView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('暂无数据')
     expect(wrapper.find('.mock-chart').exists()).toBeFalsy()
+    // 空态三要素之「KPI 显示 0」：采购金额卡 formatThousand('0') 恒为 '0.00'
+    expect(wrapper.findAll('.kpi-card').at(0)!.text()).toContain('0.00')
   })
 })
