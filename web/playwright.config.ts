@@ -17,6 +17,10 @@ export default defineConfig({
   use: {
     // 前端 dev server 地址（vite 代理 /api → :8000）
     baseURL: 'http://127.0.0.1:5173',
+    // 浏览器时区锁定 UTC：与后端 Laravel（config/app.php timezone=UTC）及 CI（GitHub Actions 默认 UTC）对齐——
+    // 机器本地为东八区时，凌晨 0-8 点浏览器日期与后端 UTC 日期相差一天，
+    // 日期联动断言（今日流水/工单计划日期）会跨日漂移失败
+    timezoneId: 'UTC',
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

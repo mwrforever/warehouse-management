@@ -116,10 +116,12 @@ class DashboardService
      */
     private function appendPending($query, string $module, string $type, string $url, array &$rows): void
     {
-        foreach ($query->select(['no', 'created_at'])
-            ->orderByDesc('created_at')
-            ->limit(self::MAX_PENDING)
-            ->cursor() as $doc) {
+        foreach (
+            $query->select(['no', 'created_at'])
+                ->orderByDesc('created_at')
+                ->limit(self::MAX_PENDING)
+                ->cursor() as $doc
+        ) {
             $rows[] = [
                 'module' => $module,
                 'type' => $type,
@@ -146,11 +148,13 @@ class DashboardService
 
         // 成本价估算：每商品取最近一次采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）
         $prices = [];
-        foreach (PurchaseInboundItem::query()
-            ->select('product_id', 'price')
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->cursor() as $item) {
+        foreach (
+            PurchaseInboundItem::query()
+                ->select('product_id', 'price')
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->cursor() as $item
+        ) {
             $prices[$item->product_id] = $prices[$item->product_id] ?? $item->price;
         }
 
@@ -170,10 +174,12 @@ class DashboardService
         $today = Carbon::today();
         $inbound = '0';
         $outbound = '0';
-        foreach (InventoryMovement::query()
-            ->whereBetween('created_at', [$today->startOfDay(), $today->copy()->endOfDay()])
-            ->select('direction', 'quantity')
-            ->cursor() as $m) {
+        foreach (
+            InventoryMovement::query()
+                ->whereBetween('created_at', [$today->startOfDay(), $today->copy()->endOfDay()])
+                ->select('direction', 'quantity')
+                ->cursor() as $m
+        ) {
             if ((int) $m->direction === 1) {
                 $inbound = bcadd($inbound, (string) $m->quantity, 2);
             } else {
