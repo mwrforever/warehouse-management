@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\BomController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CheckController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\FinishedInboundController;
 use App\Http\Controllers\Api\InventoryController;
@@ -310,5 +311,17 @@ Route::prefix('v1')->group(function () {
             ->get('/reports/production', [ReportController::class, 'production']);
         Route::middleware('permission:report.purchase_sales')
             ->get('/reports/purchase-sales', [ReportController::class, 'purchaseSales']);
+    });
+
+    // 仪表盘：4 个只读聚合接口（dashboard.view——operator 亦持有，默认落地页全角色可见）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:dashboard.view')
+            ->get('/dashboard/summary', [DashboardController::class, 'summary']);
+        Route::middleware('permission:dashboard.view')
+            ->get('/dashboard/pending-approvals', [DashboardController::class, 'pendingApprovals']);
+        Route::middleware('permission:dashboard.view')
+            ->get('/dashboard/work-order-progress', [DashboardController::class, 'workOrderProgress']);
+        Route::middleware('permission:dashboard.view')
+            ->get('/dashboard/alerts', [DashboardController::class, 'alerts']);
     });
 });

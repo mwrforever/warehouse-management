@@ -118,6 +118,10 @@ class RbacSeeder extends Seeder
             ['name' => '出入库汇总', 'code' => 'report.movements', 'group' => '统计报表'],
             ['name' => '生产统计', 'code' => 'report.production', 'group' => '统计报表'],
             ['name' => '采购销售汇总', 'code' => 'report.purchase_sales', 'group' => '统计报表'],
+            // 仪表盘模块权限（1 项只读查看权限，group=仪表盘）
+            // 决策（TC-DSH-07 锁定）：仪表盘为登录默认落地页，所有角色可见——operator 也显式持有（下方 sync 例外）；
+            // 待审核单据由接口内部按审核权限过滤（operator 无审核权限 → 恒为 0/空列表），不构成数据泄露
+            ['name' => '仪表盘查看', 'code' => 'dashboard.view', 'group' => '仪表盘'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
@@ -128,7 +132,10 @@ class RbacSeeder extends Seeder
         $admin->permissions()->sync(Permission::pluck('id'));
 
         $operator = Role::firstOrCreate(['code' => 'operator'], ['name' => '操作员', 'remark' => '只读操作员']);
-        $operator->permissions()->sync(Permission::where('code', 'like', '%.list')->pluck('id'));
+        // operator 挂全部 list 权限 + dashboard.view 例外（仪表盘为全角色默认落地页，TC-DSH-07 锁定）
+        $operator->permissions()->sync(
+            Permission::where('code', 'like', '%.list')->orWhere('code', 'dashboard.view')->pluck('id')
+        );
 
         // 内置 admin 用户（不可删除），挂 admin 角色
         // 密码支持 ADMIN_PASSWORD 环境变量覆盖（生产部署必须设置强口令；默认值仅限本地开发/E2E）
