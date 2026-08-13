@@ -175,6 +175,7 @@ class ReportService
      * 合格/不良/工时=operation_reports 按工单求和；物料耗用=Σ已审核领料-Σ已审核退料
      * （按物料分组；审核写流水的行数量与行明细一致，与 E2E 流水核对口径等价）。
      * 计划日期 [date_from, date_to] 闭区间；product_id 可空筛选成品。
+     * 返回 totals=全区间工单合计（order_count/计划/完工/合格/不良，KPI 口径；先于 items 截断计算）。
      *
      * @param  string  $dateFrom  计划日期起始 Y-m-d
      * @param  string  $dateTo  计划日期结束 Y-m-d
@@ -234,6 +235,23 @@ class ReportService
             ->get()
             ->keyBy('id');
 
+        // 全区间 totals：对窗口内全部工单求和（KPI 依赖全量口径，不受 items 500 行截断影响——
+        // 其他三接口 KPI 均用全区间 totals，production 此前缺失导致截断时 KPI 静默低估失真）
+        $totals = ['order_count' => 0, 'total_plan' => '0', 'total_completed' => '0', 'total_qualified' => '0', 'total_defective' => '0'];
+        foreach ($orders as $order) {
+            $agg = $reports->get($order->id);
+            $totals['order_count']++;
+            $totals['total_plan'] = bcadd($totals['total_plan'], (string) $order->quantity, 2);
+            $totals['total_completed'] = bcadd($totals['total_completed'], (string) $order->completed_qty, 2);
+            $totals['total_qualified'] = bcadd($totals['total_qualified'], (string) ($agg?->getAttribute('q') ?? '0'), 2);
+            $totals['total_defective'] = bcadd($totals['total_defective'], (string) ($agg?->getAttribute('d') ?? '0'), 2);
+        }
+        // 数量列与 items 归一约定一致：仅剥离 '.00' 尾零（'30'→'30'、'30.50'→'30.50'）
+        $totals['total_plan'] = preg_replace('/\.00$/', '', $totals['total_plan']);
+        $totals['total_completed'] = preg_replace('/\.00$/', '', $totals['total_completed']);
+        $totals['total_qualified'] = preg_replace('/\.00$/', '', $totals['total_qualified']);
+        $totals['total_defective'] = preg_replace('/\.00$/', '', $totals['total_defective']);
+
         $items = $orders->map(function ($order) use ($reports, $materials, $products) {
             $agg = $reports->get($order->id);
             // 聚合别名列经 getAttribute 读取（PHPStan 静态分析可识别，同 InventoryController 模式）
@@ -290,7 +308,7 @@ class ReportService
         })->all();
         $truncated = count($items) > self::MAX_ROWS;
 
-        return ['items' => $truncated ? array_slice($items, 0, self::MAX_ROWS) : $items, 'truncated' => $truncated];
+        return ['items' => $truncated ? array_slice($items, 0, self::MAX_ROWS) : $items, 'totals' => $totals, 'truncated' => $truncated];
     }
 
     /**

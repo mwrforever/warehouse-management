@@ -63,6 +63,22 @@ class ReportApiTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_inventory_summary_bad_date_to_format_returns_422(): void
+    {
+        // 边界路径：date_to 格式非 Y-m-d → 422 格式层（V1 仅校验格式不参与过滤）
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/inventory-summary?date_to=2026/08/01')
+            ->assertStatus(422);
+    }
+
+    public function test_production_invalid_product_id_returns_422(): void
+    {
+        // 边界路径：product_id 非整数 → 422 格式层（spec：422 仅格式层）
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/production?date_from=2026-08-01&date_to=2026-08-31&product_id=abc')
+            ->assertStatus(422);
+    }
+
     public function test_movements_summary_inverted_dates_return_1601(): void
     {
         // 边界路径：倒置日期 → 业务码 1601 + 精确消息（E2E TC-RPT-05 断言）
