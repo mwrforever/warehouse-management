@@ -31,10 +31,12 @@ class DashboardApiTest extends TestCase
         $res = $this->actingAs($this->admin)->getJson('/api/v1/dashboard/summary');
         $res->assertOk()->assertJsonPath('code', 0);
         $data = $res->json('data');
-        foreach ([
+        // 7 字段形状校验：字段清单提取为变量（多行控制结构 PSR-12 排版）
+        $keys = [
             'inventory_total_qty', 'inventory_value', 'today_inbound_qty', 'today_outbound_qty',
             'pending_approvals', 'work_order_running', 'alert_count',
-        ] as $key) {
+        ];
+        foreach ($keys as $key) {
             $this->assertArrayHasKey($key, $data, "字段 {$key} 缺失");
         }
     }
