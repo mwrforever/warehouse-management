@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\SalesOrderController;
 use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\UserController;
@@ -199,5 +200,18 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:purchase.inbound.update')->put('/purchase/inbounds/{inbound}', [PurchaseInboundController::class, 'update']);
         Route::middleware('permission:purchase.inbound.delete')->delete('/purchase/inbounds/{inbound}', [PurchaseInboundController::class, 'destroy']);
         Route::middleware('permission:purchase.inbound.update')->post('/purchase/inbounds/{inbound}/approve', [PurchaseInboundController::class, 'approve']);
+    });
+
+    // 销售订单：CRUD + 审核/关闭 + 可出库列表 + 出库记录（sales.order.*；审核/关闭复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:sales.order.list')->get('/sales/orders/available', [SalesOrderController::class, 'available']);
+        Route::middleware('permission:sales.order.list')->get('/sales/orders', [SalesOrderController::class, 'index']);
+        Route::middleware('permission:sales.order.create')->post('/sales/orders', [SalesOrderController::class, 'store']);
+        Route::middleware('permission:sales.order.list')->get('/sales/orders/{order}', [SalesOrderController::class, 'show']);
+        Route::middleware('permission:sales.order.update')->put('/sales/orders/{order}', [SalesOrderController::class, 'update']);
+        Route::middleware('permission:sales.order.update')->post('/sales/orders/{order}/approve', [SalesOrderController::class, 'approve']);
+        Route::middleware('permission:sales.order.update')->post('/sales/orders/{order}/close', [SalesOrderController::class, 'close']);
+        Route::middleware('permission:sales.order.delete')->delete('/sales/orders/{order}', [SalesOrderController::class, 'destroy']);
+        Route::middleware('permission:sales.order.list')->get('/sales/orders/{order}/outbounds', [SalesOrderController::class, 'outbounds']);
     });
 });
