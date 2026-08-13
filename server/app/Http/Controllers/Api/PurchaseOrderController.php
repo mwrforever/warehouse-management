@@ -300,9 +300,9 @@ class PurchaseOrderController extends Controller
             // 注意：items 不加 required——空数组 [] 走 1301 业务码（422 仅拦缺失字段与类型错误）
             'items' => 'array',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            // 数量/单价限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError）
-            'items.*.quantity' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
-            'items.*.price' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
+            // 数量/单价限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError；允许负号形态，负值由业务层拦截 1302/1311）
+            'items.*.quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
+            'items.*.price' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
         ]);
     }
 
