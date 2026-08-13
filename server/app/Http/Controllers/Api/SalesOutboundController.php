@@ -140,10 +140,11 @@ class SalesOutboundController extends Controller
             ->get();
 
         return $this->ok([
+            // join 别名列经 getAttribute 读取（PHPStan 静态分析可识别）
             'items' => $rows->map(fn ($r) => [
                 'product_id' => $r->product_id,
-                'product_code' => $r->product_code,
-                'product_name' => $r->product_name,
+                'product_code' => $r->getAttribute('product_code'),
+                'product_name' => $r->getAttribute('product_name'),
                 'quantity' => $r->quantity,
             ]),
         ]);
@@ -362,7 +363,9 @@ class SalesOutboundController extends Controller
                     if (bccomp((string) $item->quantity, $current, 2) > 0) {
                         // 库存快照去掉小数尾零展示（14.00 → 14；0.00 → 0）
                         $qtyText = rtrim(rtrim($current, '0'), '.');
-                        $name = Product::find($item->product_id)?->name ?? ('#'.$item->product_id);
+                        // 商品名取不到时回退商品 id（商品被删的兜底展示）
+                        $product = Product::find($item->product_id);
+                        $name = $product ? $product->name : ('#'.$item->product_id);
                         throw new SalesException("商品[{$name}]库存不足，当前库存 {$qtyText}", 1409);
                     }
                     $movements[] = [
