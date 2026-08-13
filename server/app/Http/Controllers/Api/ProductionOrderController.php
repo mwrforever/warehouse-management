@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Models\BomHeader;
 use App\Models\DocumentSequence;
 use App\Models\FinishedInbound;
+use App\Models\InventoryBalance;
 use App\Models\OutsourcingOrder;
 use App\Models\PickList;
 use App\Models\Product;
@@ -297,6 +298,139 @@ class ProductionOrderController extends Controller
                     'remaining_qty' => bcsub((string) $m->required_qty, (string) $m->issued_qty, 2),
                 ]),
         ]);
+    }
+
+    /**
+     * 下达（草稿→已下达）：重复/非草稿 1505；物料库存不足仅返回 warnings 不阻断（缺料由领料环节控制）
+     * 事务内锁工单行复查状态防并发；warnings 读全局库存快照（Σ 全仓余额，只读不锁）
+     */
+    public function release(ProductionOrder $order)
+    {
+        try {
+            $result = null;
+            DB::transaction(function () use ($order, &$result) {
+                // 锁工单行：同一工单重复下达在此判重（幂等 1505）
+                $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status === ProductionOrder::STATUS_RELEASED) {
+                    throw new ProductionException('工单已下达', 1505);
+                }
+                if ($locked->status !== ProductionOrder::STATUS_DRAFT) {
+                    throw new ProductionException('当前状态不可下达', 1505);
+                }
+                // 缺料警告：全仓余额汇总 vs 需求（bcadd 累加防浮点；只读快照，允许下达）
+                $warnings = [];
+                foreach ($locked->materials as $m) {
+                    $stock = '0.00';
+                    foreach (InventoryBalance::where('product_id', $m->material_id)->get() as $b) {
+                        $stock = bcadd($stock, (string) $b->quantity, 2);
+                    }
+                    if (bccomp($stock, (string) $m->required_qty, 2) < 0) {
+                        $warnings[] = [
+                            'material_name' => $m->material->name ?? ('#'.$m->material_id),
+                            'material_code' => $m->material?->code,
+                            'required' => $m->required_qty,
+                            'stock' => $stock,
+                        ];
+                    }
+                }
+                $locked->status = ProductionOrder::STATUS_RELEASED;
+                $locked->released_at = now();
+                $locked->save();
+                $result = ['warnings' => $warnings];
+            });
+        } catch (ProductionException $e) {
+            // 1505 重复下达/状态非法流转
+            return $this->fail($e->getCode() ?: 1505, $e->getMessage());
+        }
+
+        return $this->ok($result);
+    }
+
+    /**
+     * 开工（已下达→生产中）：首工序（seq 最小）置进行中；重复/非已下达 1506
+     */
+    public function start(ProductionOrder $order)
+    {
+        try {
+            DB::transaction(function () use ($order) {
+                // 锁工单行复查状态（幂等 1506）
+                $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== ProductionOrder::STATUS_RELEASED) {
+                    throw new ProductionException('当前状态不可开工', 1506);
+                }
+                $locked->status = ProductionOrder::STATUS_PRODUCING;
+                $locked->save();
+                // 首工序置进行中（seq 最小；锁工序行防并发报工窗口）
+                $first = WorkOrderOperation::where('order_id', $locked->id)
+                    ->orderBy('seq')->lockForUpdate()->first();
+                if ($first && $first->status === WorkOrderOperation::STATUS_PENDING) {
+                    $first->status = WorkOrderOperation::STATUS_RUNNING;
+                    $first->save();
+                }
+            });
+        } catch (ProductionException $e) {
+            // 1506 重复开工/状态非法流转
+            return $this->fail($e->getCode() ?: 1506, $e->getMessage());
+        }
+
+        return $this->ok();
+    }
+
+    /**
+     * 完工（生产中→已完成）：双前置校验——所有工序已完成（1507）+ 至少一次成品入库 completed_qty>0（1508）
+     */
+    public function complete(ProductionOrder $order)
+    {
+        try {
+            DB::transaction(function () use ($order) {
+                // 锁工单行复查状态（幂等 1507）
+                $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== ProductionOrder::STATUS_PRODUCING) {
+                    throw new ProductionException('当前状态不可完工', 1507);
+                }
+                // 前置 1：所有工序必须已完成（存在待开工/进行中 → 1507）
+                $hasUndone = $locked->operations()->where('status', '!=', WorkOrderOperation::STATUS_DONE)->exists();
+                if ($hasUndone) {
+                    throw new ProductionException('存在未完成工序，无法完工', 1507);
+                }
+                // 前置 2：至少一次成品入库（completed_qty > 0，bcmath 比较）
+                if (bccomp((string) $locked->completed_qty, '0', 2) <= 0) {
+                    throw new ProductionException('无成品入库，无法完工', 1508);
+                }
+                $locked->status = ProductionOrder::STATUS_COMPLETED;
+                $locked->completed_at = now();
+                $locked->save();
+            });
+        } catch (ProductionException $e) {
+            // 1507 状态/工序未完成 或 1508 无入库
+            return $this->fail($e->getCode() ?: 1507, $e->getMessage());
+        }
+
+        return $this->ok();
+    }
+
+    /**
+     * 关闭（已完成→关闭）：非已完成拒绝 1505「当前状态不可关闭」（spec 码段满，复用 1505，与 1405/1306 语义对齐）
+     */
+    public function close(ProductionOrder $order)
+    {
+        try {
+            DB::transaction(function () use ($order) {
+                // 锁工单行复查状态（幂等 1505 关闭族）
+                $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+                if ($locked->status !== ProductionOrder::STATUS_COMPLETED) {
+                    throw new ProductionException('当前状态不可关闭', 1505);
+                }
+                $locked->status = ProductionOrder::STATUS_CLOSED;
+                $locked->closed_at = now();
+                $locked->save();
+            });
+        } catch (ProductionException $e) {
+            // 1505 当前状态不可关闭
+            return $this->fail($e->getCode() ?: 1505, $e->getMessage());
+        }
+
+        return $this->ok();
     }
 
     // 载荷格式校验（422 仅格式层）；数量值域 1502 在方法内检查（业务码）

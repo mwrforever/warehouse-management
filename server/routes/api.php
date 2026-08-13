@@ -237,5 +237,9 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.order.list')->get('/production/orders/{order}', [ProductionOrderController::class, 'show']);
         Route::middleware('permission:production.order.update')->put('/production/orders/{order}', [ProductionOrderController::class, 'update']);
         Route::middleware('permission:production.order.delete')->delete('/production/orders/{order}', [ProductionOrderController::class, 'destroy']);
+        Route::middleware('permission:production.order.update')->post('/production/orders/{order}/release', [ProductionOrderController::class, 'release']);
+        Route::middleware('permission:production.order.update')->post('/production/orders/{order}/start', [ProductionOrderController::class, 'start']);
+        Route::middleware('permission:production.order.update')->post('/production/orders/{order}/complete', [ProductionOrderController::class, 'complete']);
+        Route::middleware('permission:production.order.update')->post('/production/orders/{order}/close', [ProductionOrderController::class, 'close']);
     });
 });

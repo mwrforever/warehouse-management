@@ -16,6 +16,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Models\WorkOrderOperation;
+use App\Services\InventoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -264,5 +265,162 @@ class ProductionOrderTest extends TestCase
         $u->roles()->sync([$role->id]);
         $token = $u->createToken('api')->plainTextToken;
         $this->withToken($token)->getJson('/api/v1/production/orders')->assertStatus(403);
+    }
+
+    // 通过 API 建单并下达，返回工单模型（多次用例复用）
+    private function releasedOrder(array $overrides = []): ProductionOrder
+    {
+        $no = $this->createOrder($this->payload($overrides));
+        $order = ProductionOrder::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")->assertJsonPath('code', 0);
+
+        return $order->refresh();
+    }
+
+    public function test_release_transitions_and_returns_warnings(): void
+    {
+        // 正常路径：草稿 → 已下达（released_at 落库）；物料充足时 warnings 空
+        // 物料充足基线：MAT-001=30、SEMI-001=20（经 InventoryService 保证恒等式；brief 用例未种库存，补种后 warnings 为空的前提成立）
+        app(InventoryService::class)->apply([
+            ['product_id' => $this->mat->id, 'warehouse_id' => 1, 'location_id' => 1, 'direction' => 1, 'quantity' => 30, 'source_type' => 'purchase_inbound', 'source_id' => 0, 'source_no' => 'PO-SEED', 'remark' => '测试基线'],
+            ['product_id' => $this->semi->id, 'warehouse_id' => 1, 'location_id' => 1, 'direction' => 1, 'quantity' => 20, 'source_type' => 'purchase_inbound', 'source_id' => 0, 'source_no' => 'PO-SEED', 'remark' => '测试基线'],
+        ]);
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $res = $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release");
+        $res->assertJsonPath('code', 0)->assertJsonPath('data.warnings', []);
+        $this->assertSame(ProductionOrder::STATUS_RELEASED, ProductionOrder::find($order->id)->status);
+        $this->assertNotNull(ProductionOrder::find($order->id)->released_at);
+    }
+
+    public function test_release_warns_when_material_insufficient(): void
+    {
+        // 边界路径：物料全局库存不足时仅警告不阻断（缺料由领料环节控制）
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $res = $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release");
+        $res->assertJsonPath('code', 0);
+        $warnings = $res->json('data.warnings');
+        $this->assertNotEmpty($warnings);
+        $mat = collect($warnings)->firstWhere('material_name', '测试铝材');
+        $this->assertSame('20.00', $mat['required']);
+        $this->assertSame('0.00', $mat['stock']);
+        $this->assertSame(ProductionOrder::STATUS_RELEASED, ProductionOrder::find($order->id)->status);
+    }
+
+    public function test_release_rejects_non_draft_with_1505(): void
+    {
+        // 异常路径：重复下达 → 1505「工单已下达」
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")
+            ->assertJsonPath('code', 1505)
+            ->assertJsonPath('message', '工单已下达');
+    }
+
+    public function test_start_transitions_first_operation_and_rejects_duplicate_with_1506(): void
+    {
+        // 正常+异常路径：已下达 → 生产中 + 首工序进行中；重复开工 → 1506
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $order->refresh();
+        $this->assertSame(ProductionOrder::STATUS_PRODUCING, $order->status);
+        $first = $order->operations()->orderBy('seq')->first();
+        $this->assertSame(WorkOrderOperation::STATUS_RUNNING, $first->status);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")
+            ->assertJsonPath('code', 1506);
+    }
+
+    public function test_start_rejects_draft_with_1506(): void
+    {
+        // 异常路径：草稿未下达直接开工 → 1506
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")
+            ->assertJsonPath('code', 1506);
+    }
+
+    public function test_complete_requires_all_operations_done_with_1507(): void
+    {
+        // 异常路径：存在未完成工序 → 1507「存在未完成工序，无法完工」
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $res = $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete");
+        $res->assertJsonPath('code', 1507)->assertJsonPath('message', '存在未完成工序，无法完工');
+        $this->assertSame(ProductionOrder::STATUS_PRODUCING, ProductionOrder::find($order->id)->status);
+    }
+
+    public function test_complete_requires_finished_inbound_with_1508(): void
+    {
+        // 异常路径：全部工序已完成但无成品入库 → 1508（completed_qty=0）
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        // 直接置全部工序完成（报工接口 Task 5 覆盖流转，此处绕过前置）
+        $order->operations()->update(['status' => WorkOrderOperation::STATUS_DONE]);
+        $res = $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete");
+        $res->assertJsonPath('code', 1508)->assertJsonPath('message', '无成品入库，无法完工');
+    }
+
+    public function test_complete_transitions_when_all_done_and_inbound(): void
+    {
+        // 正常路径：全部工序完成 + completed_qty>0 → 已完成（completed_at 落库）
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $order->operations()->update(['status' => WorkOrderOperation::STATUS_DONE]);
+        $order->completed_qty = 10;
+        $order->save();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete")
+            ->assertJsonPath('code', 0);
+        $order->refresh();
+        $this->assertSame(ProductionOrder::STATUS_COMPLETED, $order->status);
+        $this->assertNotNull($order->completed_at);
+    }
+
+    public function test_complete_rejects_non_producing_with_1507(): void
+    {
+        // 异常路径：草稿直接完工 → 1507（当前状态不可完工）
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete")
+            ->assertJsonPath('code', 1507);
+    }
+
+    public function test_close_completed_and_rejects_others_with_1505(): void
+    {
+        // 正常+异常路径：已完成 → 关闭（closed_at 落库）；非已完成（草稿）关闭 → 1505「当前状态不可关闭」
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $order->operations()->update(['status' => WorkOrderOperation::STATUS_DONE]);
+        $order->completed_qty = 10;
+        $order->save();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/close")
+            ->assertJsonPath('code', 0);
+        $order->refresh();
+        $this->assertSame(ProductionOrder::STATUS_CLOSED, $order->status);
+        $this->assertNotNull($order->closed_at);
+
+        $no2 = $this->createOrder($this->payload());
+        $draft = ProductionOrder::where('no', $no2)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$draft->id}/close")
+            ->assertJsonPath('code', 1505)
+            ->assertJsonPath('message', '当前状态不可关闭');
+    }
+
+    public function test_closed_order_blocks_release_and_start(): void
+    {
+        // 异常路径：关闭后无任何操作（PRD-14）——release/start 均被状态机拦截
+        $order = $this->releasedOrder();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $order->operations()->update(['status' => WorkOrderOperation::STATUS_DONE]);
+        $order->completed_qty = 10;
+        $order->save();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/complete")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/close")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")
+            ->assertJsonPath('code', 1505);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")
+            ->assertJsonPath('code', 1506);
     }
 }
