@@ -39,8 +39,6 @@ class FinishedInboundTest extends TestCase
 
     private ProductionOrder $order;
 
-    private int $finishItemId; // finished_inbound_items 行 id（预填用）
-
     protected function setUp(): void
     {
         parent::setUp();

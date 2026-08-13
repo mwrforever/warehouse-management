@@ -293,8 +293,7 @@ class PickListController extends Controller
                         ->first();
                     $current = $balance ? (string) $balance->quantity : '0';
                     if (bccomp((string) $item->pick_qty, $current, 2) > 0) {
-                        // 库存快照去掉小数尾零展示（14.00 → 14；0.00 → 0），消息用商品编码（E2E 断言 MAT-001）
-                        $qtyText = rtrim(rtrim($current, '0'), '.');
+                        // 1515 消息契约不含库存快照，仅含商品编码（E2E 断言 MAT-001）
                         // ?? 左值天然 null 安全（find 无结果时回退 #id 展示），nullsafe 显式多余故用 ->
                         $code = Product::find($item->product_id)->code ?? ('#'.$item->product_id);
                         throw new ProductionException("商品[{$code}]库存不足", 1515);
