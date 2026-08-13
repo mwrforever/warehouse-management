@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\BomHeader;
 use App\Models\BomItem;
 use App\Models\Category;
+use App\Models\Customer;
 use App\Models\Location;
 use App\Models\Product;
 use App\Models\Role;
@@ -234,6 +235,32 @@ class ProductTest extends TestCase
         ]);
         DB::table('purchase_inbound_items')->insert([
             'inbound_id' => DB::table('purchase_inbounds')->value('id'), 'product_id' => $p->id,
+            'quantity' => 1, 'price' => 100, 'amount' => 100, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    public function test_destroy_referenced_by_sales_outbound_item_fails_with_1116(): void
+    {
+        // 边界路径：sales_outbound_items 引用该商品时删除被拒 1116（出库单明细引用同码保护）
+        $p = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $outboundId = DB::table('sales_outbounds')->insertGetId([
+            'no' => 'SOUT-TEST-001', 'customer_id' => $c->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('sales_outbound_items')->insert([
+            'outbound_id' => $outboundId, 'product_id' => $p->id,
             'quantity' => 1, 'price' => 100, 'amount' => 100, 'created_at' => now(), 'updated_at' => now(),
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")

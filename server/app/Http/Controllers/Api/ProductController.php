@@ -155,6 +155,7 @@ class ProductController extends Controller
             || DeletionGuard::referenced('purchase_order_items', 'product_id', $product->id)
             || DeletionGuard::referenced('purchase_inbound_items', 'product_id', $product->id)
             || DeletionGuard::referenced('sales_order_items', 'product_id', $product->id)
+            || DeletionGuard::referenced('sales_outbound_items', 'product_id', $product->id)
             || DeletionGuard::referenced('production_orders', 'product_id', $product->id);
         if ($referencedByBom || $referencedByOther) {
             return $this->fail(1116, '商品已被业务单据使用，不可删除');
