@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OperationReportController;
+use App\Http\Controllers\Api\OutsourcingController;
 use App\Http\Controllers\Api\PickListController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
@@ -273,5 +274,17 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.return.update')->put('/production/returns/{return}', [ReturnListController::class, 'update']);
         Route::middleware('permission:production.return.delete')->delete('/production/returns/{return}', [ReturnListController::class, 'destroy']);
         Route::middleware('permission:production.return.update')->post('/production/returns/{return}/approve', [ReturnListController::class, 'approve']);
+    });
+
+    // 委外加工：CRUD + 发出（审核）+ 回收（production.outsource.*；审核/回收复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings', [OutsourcingController::class, 'index']);
+        Route::middleware('permission:production.outsource.create')->post('/production/outsourcings', [OutsourcingController::class, 'store']);
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}', [OutsourcingController::class, 'show']);
+        Route::middleware('permission:production.outsource.update')->put('/production/outsourcings/{outsourcing}', [OutsourcingController::class, 'update']);
+        Route::middleware('permission:production.outsource.delete')->delete('/production/outsourcings/{outsourcing}', [OutsourcingController::class, 'destroy']);
+        Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/approve', [OutsourcingController::class, 'approve']);
+        Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'storeReceipt']);
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'receipts']);
     });
 });

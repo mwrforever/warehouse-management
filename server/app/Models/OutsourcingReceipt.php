@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * 委外回收单
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $warehouse_id
  * @property int $location_id
  * @property int $status
- * @property string $received_at
+ * @property Carbon $received_at
  * @property string|null $operator
  * @property string|null $remark
  */
@@ -41,5 +42,19 @@ class OutsourcingReceipt extends Model
     public function outsourcing(): BelongsTo
     {
         return $this->belongsTo(OutsourcingOrder::class, 'outsourcing_id');
+    }
+
+    /** @return BelongsTo<Warehouse, $this> */
+    // 回收仓库
+    public function warehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    /** @return BelongsTo<Location, $this> */
+    // 回收库位
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(Location::class);
     }
 }
