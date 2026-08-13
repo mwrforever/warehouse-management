@@ -2,7 +2,7 @@
 
 - 发现日期：2026-08-13
 - 严重级别：高（权限绕过/提权）
-- 状态：已修复（2026-08-13 修复波次，提交号待补）
+- 状态：已修复（2026-08-13 修复波次，提交 1dab666（PR #8 已合入 main））
 - 涉及提交：90cab76（resetPassword 无守卫）、0f7e383（1003 守卫仅补 update/destroy）
 - 涉及文件：`server/app/Http/Controllers/Api/UserController.php`、`server/app/Http/Middleware/EnsurePermission.php`
 
