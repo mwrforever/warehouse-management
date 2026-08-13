@@ -281,4 +281,31 @@ class ProductTest extends TestCase
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")->assertJsonPath('code', 0);
         $this->assertDatabaseMissing('products', ['id' => $p->id]);
     }
+
+    public function test_destroy_referenced_by_production_material_fails_with_1116(): void
+    {
+        // 边界路径：production_order_materials 引用该物料时删除被拒 1116（工单物料快照引用保护）
+        $p = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
+        $fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $bom = BomHeader::create(['code' => 'BOM-TEST-001', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        $orderId = DB::table('production_orders')->insertGetId([
+            'no' => 'MO-TEST-001', 'product_id' => $fin->id, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bom->id, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('production_order_materials')->insert([
+            'order_id' => $orderId, 'material_id' => $p->id, 'required_qty' => 20,
+            'issued_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
+            ->assertJsonPath('code', 1116);
+    }
 }
