@@ -93,10 +93,11 @@ test.describe('库存管理模块', () => {
     await page.locator('.el-select-dropdown__item', { hasText: '盘盈' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__empty-text')).toContainText('暂无数据')
-    // 重新进入重置筛选后：单号点击 → 采购入库来源提示对应模块未实施
+    // 重新进入重置筛选后：单号点击 → 采购入库来源跳采购入库单页（模块已实施；
+    // 种子流水 source_id=0 无真实单据 → 落到入库单列表页，不再提示「随对应模块实施后开放」）
     await page.goto('/inventory/movements')
     await page.locator('.source-no').first().click()
-    await expect(page.locator('.el-message')).toContainText('随对应模块实施后开放')
+    await expect(page).toHaveURL(/\/purchase\/inbounds/)
   })
 
   test('TC-INV-04 余额=流水恒等式核对', async ({ page }) => {
@@ -189,9 +190,11 @@ test.describe('库存管理模块', () => {
       .textContent()
     const list = await apiGet(page, '/api/v1/checks', { keyword: approvedNo?.trim() })
     const approved = list.items[0] as { id: number }
+    // 明细用有余额的商品（MAT-001 真实 id）绕过 1205 无余额校验，验证 1202 已审核状态守卫
+    const matBal = await apiGet(page, '/api/v1/inventory/balances', { keyword: 'MAT-001' })
     const put = await apiPut(page, `/api/v1/checks/${approved.id}`, {
       warehouse_id: 1,
-      items: [{ product_id: 1, location_id: 1, actual_qty: 1 }],
+      items: [{ product_id: matBal.items[0].product_id as number, location_id: 1, actual_qty: 1 }],
     })
     expect(put.code).toBe(1202)
     // 步骤 4：删除第一张草稿（MAT-001 105 那张）

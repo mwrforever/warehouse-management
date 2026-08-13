@@ -9,6 +9,9 @@ const backendCommand =
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  // 库存（inventory）与采购（purchase）spec 共享同一 sqlite 库存数据且互相增量断言，
+  // 文件级并发会互相污染余额 → 单 worker 串行执行保证确定性
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
