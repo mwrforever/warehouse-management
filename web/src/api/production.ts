@@ -96,8 +96,9 @@ export interface PickItem {
 
 export interface FromOrderMaterial {
   product_id: number
-  material_name: string
-  material_code: string
+  // 字段名与后端 from-order 接口对齐（PickListController::fromOrder 返回 product_name/product_code）
+  product_name: string
+  product_code: string
   required_qty: number
   issued_qty: number
   remaining_qty: number
@@ -380,12 +381,15 @@ export const productionApi = {
       order_id: number
       order_no: string
       pick_id: number | null
+      pick_no: string | null
       status: number
       status_label: string
       warehouse_id: number
       warehouse_name: string
       location_id: number
       location_name: string
+      approved_at: string | null
+      operator: string | null
       remark: string | null
       items: {
         id: number
