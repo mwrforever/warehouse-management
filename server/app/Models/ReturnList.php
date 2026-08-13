@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * 退料单
@@ -18,7 +19,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $status
  * @property int $warehouse_id
  * @property int $location_id
- * @property string|null $approved_at
+ * @property Carbon|null $approved_at
  * @property string|null $operator
  * @property string|null $remark
  */
@@ -56,6 +57,20 @@ class ReturnList extends Model
     public function pick(): BelongsTo
     {
         return $this->belongsTo(PickList::class, 'pick_id');
+    }
+
+    /** @return BelongsTo<Warehouse, $this> */
+    // 退料仓库
+    public function warehouse(): BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class);
+    }
+
+    /** @return BelongsTo<Location, $this> */
+    // 退料库位
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(Location::class);
     }
 
     /** @return HasMany<ReturnListItem, $this> */
