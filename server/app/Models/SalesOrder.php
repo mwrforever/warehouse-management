@@ -21,8 +21,8 @@ use Illuminate\Support\Carbon;
  * @property string $total_amount
  * @property string|null $remark
  * @property int|null $created_by
- * @property string|null $approved_at
- * @property string|null $closed_at
+ * @property Carbon|null $approved_at
+ * @property Carbon|null $closed_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */

@@ -446,7 +446,7 @@ test.describe('销售管理模块', () => {
 
   test('TC-SAL-08 独立出库与边界（余额 0/重复商品）', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // 独立出库 SEMI-001×1@20.00 → 审核 → SEMI-001 = S₂-6
+    // 独立出库 SEMI-001×1@20.00 → 审核 → SEMI-001 = S₂-1
     await page.goto('/sales/outbounds')
     await page.getByRole('button', { name: /新\s*建/ }).click()
     const dialog = page.locator('.el-dialog')
