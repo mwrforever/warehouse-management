@@ -186,7 +186,7 @@ async function save() {
       query.status = undefined
       await loadList()
       const created = list.value.find((r) => r.no === no)
-      if (!created) throw new Error('工单已创建，但未能在列表定位，请刷新查看')
+      if (!created) throw new Error('工单已创建，请刷新列表查看')
       expandData.value = await productionApi.orderDetail(created.id)
       dialogVisible.value = false
       expandVisible.value = true
@@ -426,7 +426,9 @@ onMounted(async () => {
       <el-table-column prop="plan_date" label="计划日期" width="110" />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ row.status_label }}</el-tag>
+          <el-tag :type="statusTagType(row.status)" :class="{ 'tag-done': row.status === 3 }">{{
+            row.status_label
+          }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="320" fixed="right">
@@ -461,31 +463,37 @@ onMounted(async () => {
             >开 工</el-button
           >
           <template v-if="row.status === 2">
+            <!-- 生产中五个业务跳转按各自列表权限门控（无权限不展示入口） -->
             <el-button
+              v-if="auth.has('production.pick.list')"
               link
               type="primary"
               @click="router.push(`/production/picks?order_id=${row.id}`)"
               >领 料</el-button
             >
             <el-button
+              v-if="auth.has('production.return.list')"
               link
               type="primary"
               @click="router.push(`/production/returns?order_id=${row.id}`)"
               >退 料</el-button
             >
             <el-button
+              v-if="auth.has('production.report.list')"
               link
               type="primary"
               @click="router.push(`/production/reports?order_id=${row.id}`)"
               >报 工</el-button
             >
             <el-button
+              v-if="auth.has('production.outsource.list')"
               link
               type="primary"
               @click="router.push(`/production/outsourcings?order_id=${row.id}`)"
               >委 外</el-button
             >
             <el-button
+              v-if="auth.has('production.finished.list')"
               link
               type="primary"
               @click="router.push(`/production/finished-inbounds?order_id=${row.id}`)"
@@ -526,7 +534,7 @@ onMounted(async () => {
     <el-dialog
       v-model="dialogVisible"
       :title="editing ? '编辑工单' : '新 建工单'"
-      width="560px"
+      width="900px"
       :close-on-click-modal="false"
     >
       <el-form :model="form" label-width="90px">
@@ -646,7 +654,11 @@ onMounted(async () => {
           <el-descriptions-item label="单号">{{ detail.no }}</el-descriptions-item>
           <el-descriptions-item label="成品">{{ detail.product_name }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="statusTagType(detail.status)">{{ detail.status_label }}</el-tag>
+            <el-tag
+              :type="statusTagType(detail.status)"
+              :class="{ 'tag-done': detail.status === 3 }"
+              >{{ detail.status_label }}</el-tag
+            >
           </el-descriptions-item>
           <el-descriptions-item label="计划数">
             <span class="font-code">{{ Number(detail.quantity) }}</span>
@@ -835,6 +847,12 @@ onMounted(async () => {
 /* 缺料警告条（琥珀色，不阻断下达；下方逐行明细） */
 .warning-alert {
   margin-bottom: 12px;
+}
+/* 已完成深绿（与已审核绿同族但明度更低，防同态混淆——销售模块同款） */
+.tag-done {
+  background: #ecfdf5 !important;
+  color: #047857 !important;
+  border-color: #047857 !important;
 }
 .warning-line {
   display: flex;

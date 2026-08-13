@@ -3,7 +3,12 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { productionApi, type PickItem, type ProductionOrderItem } from '../../api/production'
+import {
+  productionApi,
+  type PickDetail,
+  type PickItem,
+  type ProductionOrderItem,
+} from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 
@@ -28,7 +33,6 @@ const query = reactive({
 
 // 弹窗状态（V1 仅「从工单生成」入口，独立新建不开放——复用销售 1406 教训）
 const dialogVisible = ref(false)
-const mode = ref<'from-order' | 'standalone'>('from-order')
 const editingId = ref<number | null>(null) // 当前编辑草稿 id（null 表示新建）
 // 弹窗标题中的预填工单单号（选中工单后展示）
 const fromOrderNo = ref('')
@@ -47,14 +51,9 @@ const form = reactive({
   }[],
 })
 
-// 详情弹窗（pickDetail 接口缺仓库/库位 id 与审核人，本地补全供编辑回填/详情展示）
-type PickDetailData = Awaited<ReturnType<typeof productionApi.pickDetail>> & {
-  warehouse_id: number
-  location_id: number
-  operator: string | null
-}
+// 详情弹窗（pickDetail 含仓库/库位 id、审核人与时间，直接供详情展示）
 const detailVisible = ref(false)
-const detail = ref<PickDetailData | null>(null)
+const detail = ref<PickDetail | null>(null)
 
 // 领料单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
@@ -132,7 +131,6 @@ function validatePickQty(row: { pick_qty: number; remaining_qty: number }) {
 
 // 新建（从工单生成）：清空表单；路由直达时携带工单自动预填
 function openCreate(orderId?: number) {
-  mode.value = 'from-order'
   editingId.value = null
   fromOrderNo.value = ''
   Object.assign(form, {
@@ -152,7 +150,7 @@ function openCreate(orderId?: number) {
 // 编辑草稿：详情回填 + fromOrderPicks 取剩余量（pickDetail 不含剩余字段，按 product_id 合并）
 async function openEdit(row: PickItem) {
   try {
-    const d = (await productionApi.pickDetail(row.id)) as PickDetailData
+    const d = await productionApi.pickDetail(row.id)
     const pre = await productionApi.fromOrderPicks(d.order_id)
     editingId.value = row.id
     fromOrderNo.value = d.order_no
@@ -285,7 +283,7 @@ async function issueRow(row: PickItem) {
 
 async function openDetail(row: PickItem) {
   try {
-    detail.value = (await productionApi.pickDetail(row.id)) as PickDetailData
+    detail.value = await productionApi.pickDetail(row.id)
     detailVisible.value = true
   } catch (e) {
     ElMessage.error((e as Error).message)
@@ -319,7 +317,13 @@ onMounted(async () => {
         style="width: 200px"
         @keyup.enter="search"
       />
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="loadList"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
@@ -395,11 +399,7 @@ onMounted(async () => {
     <el-dialog
       v-model="dialogVisible"
       :title="
-        editingId
-          ? '编辑领料单'
-          : mode === 'from-order'
-            ? `从工单生成领料单${fromOrderNo ? `（${fromOrderNo}）` : ''}`
-            : '新 建领料单'
+        editingId ? '编辑领料单' : `从工单生成领料单${fromOrderNo ? `（${fromOrderNo}）` : ''}`
       "
       width="900px"
       :close-on-click-modal="false"
