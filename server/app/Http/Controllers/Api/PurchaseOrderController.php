@@ -13,6 +13,7 @@ use App\Models\PurchaseOrderItem;
 use App\Services\DocumentSequenceService;
 use App\Services\PurchaseOrderService;
 use App\Support\ApiResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -106,20 +107,9 @@ class PurchaseOrderController extends Controller
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
-        // 业务码校验（422 仅格式层，业务冲突走业务码）
-        if (empty($data['items'])) {
-            return $this->fail(1301, '请至少添加一条明细');
-        }
-        foreach ($data['items'] as $item) {
-            if ((float) $item['quantity'] <= 0) {
-                return $this->fail(1302, '数量必须大于 0');
-            }
-            if ((float) $item['price'] < 0) {
-                return $this->fail(1311, '价格不能为负数');
-            }
-        }
-        if ($this->hasDuplicateProduct($data['items'])) {
-            return $this->fail(1312, '明细存在重复商品');
+        // 业务码校验（422 仅格式层，业务冲突走业务码；明细校验逻辑见 validateBusinessItems）
+        if ($fail = $this->validateBusinessItems($data['items'])) {
+            return $fail;
         }
 
         $order = DB::transaction(function () use ($data) {
@@ -191,19 +181,9 @@ class PurchaseOrderController extends Controller
             return $this->fail(1303, '已审核订单不可修改');
         }
         $data = $this->validatePayload($request);
-        if (empty($data['items'])) {
-            return $this->fail(1301, '请至少添加一条明细');
-        }
-        foreach ($data['items'] as $item) {
-            if ((float) $item['quantity'] <= 0) {
-                return $this->fail(1302, '数量必须大于 0');
-            }
-            if ((float) $item['price'] < 0) {
-                return $this->fail(1311, '价格不能为负数');
-            }
-        }
-        if ($this->hasDuplicateProduct($data['items'])) {
-            return $this->fail(1312, '明细存在重复商品');
+        // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
+        if ($fail = $this->validateBusinessItems($data['items'])) {
+            return $fail;
         }
 
         DB::transaction(function () use ($order, $data) {
@@ -327,5 +307,27 @@ class PurchaseOrderController extends Controller
         }
 
         return false;
+    }
+
+    // 明细业务校验（store/update 共用）：空明细 1301 / 数量≤0 1302 / 负价 1311 / 重复商品 1312
+    // 校验通过返回 null，未通过返回对应业务码的 fail 响应（JSON 信封，由调用方直接 return）
+    private function validateBusinessItems(array $items): ?JsonResponse
+    {
+        if (empty($items)) {
+            return $this->fail(1301, '请至少添加一条明细');
+        }
+        foreach ($items as $item) {
+            if ((float) $item['quantity'] <= 0) {
+                return $this->fail(1302, '数量必须大于 0');
+            }
+            if ((float) $item['price'] < 0) {
+                return $this->fail(1311, '价格不能为负数');
+            }
+        }
+        if ($this->hasDuplicateProduct($items)) {
+            return $this->fail(1312, '明细存在重复商品');
+        }
+
+        return null;
     }
 }

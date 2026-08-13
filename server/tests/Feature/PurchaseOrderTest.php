@@ -250,6 +250,16 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('data.items.0.amount', '50000.00');
     }
 
+    public function test_inbounds_returns_empty_items_for_draft_order(): void
+    {
+        // 正常路径：草稿订单无入库记录，inbounds 返回 code=0 且 data.items 为空数组（详情页「入库记录」tab 数据源）
+        $no = $this->createOrder($this->payload());
+        $id = PurchaseOrder::where('no', $no)->first()->id;
+        $res = $this->withToken($this->token)->getJson("/api/v1/purchase/orders/{$id}/inbounds");
+        $res->assertJsonPath('code', 0);
+        $this->assertSame([], $res->json('data.items'));
+    }
+
     public function test_available_only_lists_approvable_orders(): void
     {
         // 正常路径：available 仅出 已审核/部分入库 且 未关闭 且有剩余量 的订单（从订单生成下拉数据源）
