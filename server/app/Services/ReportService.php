@@ -238,9 +238,9 @@ class ReportService
             $agg = $reports->get($order->id);
             // 聚合别名列经 getAttribute 读取（PHPStan 静态分析可识别，同 InventoryController 模式）
             // 求和结果跨库不一致（SQLite 返回 int、MySQL 返回 decimal 字符串）——统一 bcmath 归一：
-            // 数量类 2 位小数后去尾零输出、工时固定 2 位小数
-            $qualified = rtrim(rtrim(bcadd((string) ($agg?->getAttribute('q') ?? '0'), '0', 2), '0'), '.');
-            $defective = rtrim(rtrim(bcadd((string) ($agg?->getAttribute('d') ?? '0'), '0', 2), '0'), '.');
+            // 数量类仅剥离 '.00' 尾零（'10'→'10'、'10.50'→'10.50'，保留 2 位小数语义）、工时固定 2 位小数
+            $qualified = preg_replace('/\.00$/', '', bcadd((string) ($agg?->getAttribute('q') ?? '0'), '0', 2));
+            $defective = preg_replace('/\.00$/', '', bcadd((string) ($agg?->getAttribute('d') ?? '0'), '0', 2));
             $hours = bcadd((string) ($agg?->getAttribute('h') ?? '0'), '0', 2);
             // 达成率：完工/计划（4 位中间精度 → 2 位输出；计划 0 防御 0.00）
             $achievement = bccomp($order->quantity, '0', 2) === 0
@@ -278,8 +278,8 @@ class ReportService
                 'order_no' => $order->no,
                 'product_name' => $order->getAttribute('product_name'),
                 'product_code' => $order->getAttribute('product_code'),
-                'quantity' => rtrim(rtrim(bcadd((string) $order->quantity, '0', 2), '0'), '.'),
-                'completed_qty' => rtrim(rtrim(bcadd((string) $order->completed_qty, '0', 2), '0'), '.'),
+                'quantity' => preg_replace('/\.00$/', '', bcadd((string) $order->quantity, '0', 2)),
+                'completed_qty' => preg_replace('/\.00$/', '', bcadd((string) $order->completed_qty, '0', 2)),
                 'achievement_rate' => $achievement,
                 'qualified_qty' => $qualified,
                 'defective_qty' => $defective,

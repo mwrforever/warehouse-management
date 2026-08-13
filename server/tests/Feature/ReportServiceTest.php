@@ -375,6 +375,25 @@ class ReportServiceTest extends TestCase
         $this->assertFalse($res['truncated']);
     }
 
+    public function test_production_preserves_fractional_quantities_two_decimals(): void
+    {
+        // 边界路径：数量/合格/不良小数位保持 2 位一致（仅剥离 '.00' 尾零，不破坏 1 位小数的尾零）
+        $fin = $this->makeProduct('FIN-A', 'finished', '成品');
+        $o = $this->makeOrder($fin, 'MO20260813-004', '10.50', '2026-08-13', 3, '10.50');
+        $this->makeReport($o, '8.50', '1.50', '1.50'); // 合格 8.5 不良 1.5 工时 1.5
+
+        $res = $this->service->production('2026-08-01', '2026-08-31');
+        $row = $res['items'][0];
+
+        $this->assertSame('10.50', $row['quantity']);
+        $this->assertSame('10.50', $row['completed_qty']);
+        $this->assertSame('8.50', $row['qualified_qty']);
+        $this->assertSame('1.50', $row['defective_qty']);
+        $this->assertSame('1.50', $row['total_hours']);
+        $this->assertSame('85.00', $row['yield_rate']); // 8.5/(8.5+1.5)=85.00%
+        $this->assertSame('100.00', $row['achievement_rate']);
+    }
+
     public function test_production_yield_is_100_when_no_defective(): void
     {
         // 边界路径：无不良（含无报工记录）→ 良率 100.00（spec RPT-04）
