@@ -9,7 +9,7 @@
 
 - 2 页统一 `.page-card` 容器 + `.page-title` + `.toolbar`（左标题右操作）
 - 金额列统一 Fira Code + 右对齐 + `¥` 前缀（`formatYuan` 千分位 2 位小数）
-- 单号列 Fira Code（`class-name="font-code"`），`cursor: pointer` 点击看详情
+- 单号列 Fira Code（`class-name="font-code"`），`cursor: pointer` 点击看详情（未实施——与采购页镜像一致，待产品决策后统一落地）
 - 弹窗宽 `900px` + `:close-on-click-modal="false"`（明细表格宽，禁止误触关闭丢数据）
 - **商品下拉仅含成品/半成品**（原料禁售 SAL-10）：`productApi.list({type:'finished'})` 与 `{type:'semi_finished'}` 两次调用合并
 
@@ -45,4 +45,4 @@
 - 所有输入 on-blur/即时校验（数量/价格/重复商品/剩余量上限），错误提示 `ElMessage` 就近可见，不等到提交
 - 提交按钮带 loading（`saving` 状态），成功后 `ElMessage.success` 反馈（不静默）
 - 可点击元素一律 `cursor: pointer`，hover 过渡 150-300ms
-- 弹窗关闭二次确认：明细已编辑时（dirty 标记）关闭弹窗 `ElMessageBox.confirm`「明细未保存，确认关闭？」
+- 弹窗关闭二次确认：明细已编辑时（dirty 标记）关闭弹窗 `ElMessageBox.confirm`「明细未保存，确认关闭？」（未实施——与采购页镜像一致，待产品决策后统一落地）

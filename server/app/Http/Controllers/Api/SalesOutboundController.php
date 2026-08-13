@@ -361,8 +361,8 @@ class SalesOutboundController extends Controller
                         ->first();
                     $current = $balance ? (string) $balance->quantity : '0';
                     if (bccomp((string) $item->quantity, $current, 2) > 0) {
-                        // 库存快照去掉小数尾零展示（14.00 → 14；0.00 → 0）
-                        $qtyText = rtrim(rtrim($current, '0'), '.');
+                        // 库存快照去掉小数尾零展示（14.00 → 14；0.00/缺行 → 0）
+                        $qtyText = str_contains($current, '.') ? rtrim(rtrim($current, '0'), '.') : $current;
                         // 商品名取不到时回退商品 id（商品被删的兜底展示）
                         $product = Product::find($item->product_id);
                         $name = $product ? $product->name : ('#'.$item->product_id);
