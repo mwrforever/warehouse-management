@@ -111,6 +111,13 @@ class RbacSeeder extends Seeder
             ['name' => '成品入库创建', 'code' => 'production.finished.create', 'group' => '生产管理'],
             ['name' => '成品入库更新', 'code' => 'production.finished.update', 'group' => '生产管理'],
             ['name' => '成品入库删除', 'code' => 'production.finished.delete', 'group' => '生产管理'],
+            // 统计报表模块权限（4 项只读查看权限，group=统计报表）
+            // 决策（TC-RPT-06 锁定）：刻意不带 .list 后缀——operator 自动持有全部 %.list，
+            // 报表为管理层视图（E2E 断言 limited01 菜单隐藏 + 后端 403），故不纳入 operator 默认持有
+            ['name' => '库存报表', 'code' => 'report.inventory', 'group' => '统计报表'],
+            ['name' => '出入库汇总', 'code' => 'report.movements', 'group' => '统计报表'],
+            ['name' => '生产统计', 'code' => 'report.production', 'group' => '统计报表'],
+            ['name' => '采购销售汇总', 'code' => 'report.purchase_sales', 'group' => '统计报表'],
         ];
         foreach ($permissions as $p) {
             Permission::firstOrCreate(['code' => $p['code']], $p);
