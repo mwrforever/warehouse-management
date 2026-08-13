@@ -7,6 +7,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * 生产工单
@@ -20,9 +21,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $status
  * @property string $completed_qty
  * @property int|null $created_by
- * @property string|null $released_at
- * @property string|null $completed_at
- * @property string|null $closed_at
+ * @property Carbon|null $released_at
+ * @property Carbon|null $completed_at
+ * @property Carbon|null $closed_at
  * @property string|null $remark
  */
 class ProductionOrder extends Model
