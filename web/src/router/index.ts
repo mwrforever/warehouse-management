@@ -106,6 +106,18 @@ const router = createRouter({
           meta: { permission: 'inventory.list' },
         },
         {
+          path: 'purchase/orders',
+          name: 'purchase-orders',
+          component: () => import('../views/purchase/OrdersView.vue'),
+          meta: { permission: 'purchase.order.list' },
+        },
+        {
+          path: 'purchase/inbounds/:id?',
+          name: 'purchase-inbounds',
+          component: () => import('../views/purchase/InboundsView.vue'),
+          meta: { permission: 'purchase.inbound.list' },
+        },
+        {
           path: 'master/boms',
           name: 'master-boms',
           component: () => import('../views/master/BomsView.vue'),

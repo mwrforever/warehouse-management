@@ -53,6 +53,16 @@
         <RouterLink v-if="auth.has('process.list')" to="/master/processes" class="menu-item"
           >工序管理</RouterLink
         >
+        <div class="menu-group">采购管理</div>
+        <RouterLink v-if="auth.has('purchase.order.list')" to="/purchase/orders" class="menu-item"
+          >采购订单</RouterLink
+        >
+        <RouterLink
+          v-if="auth.has('purchase.inbound.list')"
+          to="/purchase/inbounds"
+          class="menu-item"
+          >采购入库</RouterLink
+        >
       </nav>
     </aside>
     <div class="main">
