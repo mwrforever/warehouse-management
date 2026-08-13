@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductionOrderController;
 use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
+use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReturnListController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SalesOrderController;
@@ -297,5 +298,17 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.finished.update')->put('/production/finished-inbounds/{finishedInbound}', [FinishedInboundController::class, 'update']);
         Route::middleware('permission:production.finished.delete')->delete('/production/finished-inbounds/{finishedInbound}', [FinishedInboundController::class, 'destroy']);
         Route::middleware('permission:production.finished.update')->post('/production/finished-inbounds/{finishedInbound}/approve', [FinishedInboundController::class, 'approve']);
+    });
+
+    // 统计报表：4 类只读聚合接口（report.inventory/movements/production/purchase_sales 四项查看权限）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:report.inventory')
+            ->get('/reports/inventory-summary', [ReportController::class, 'inventorySummary']);
+        Route::middleware('permission:report.movements')
+            ->get('/reports/movements-summary', [ReportController::class, 'movementsSummary']);
+        Route::middleware('permission:report.production')
+            ->get('/reports/production', [ReportController::class, 'production']);
+        Route::middleware('permission:report.purchase_sales')
+            ->get('/reports/purchase-sales', [ReportController::class, 'purchaseSales']);
     });
 });
