@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OperationReportController;
+use App\Http\Controllers\Api\PickListController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductionOrderController;
@@ -248,5 +249,18 @@ Route::prefix('v1')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::middleware('permission:production.report.create')->post('/production/operations/{operation}/reports', [OperationReportController::class, 'store']);
         Route::middleware('permission:production.report.list')->get('/production/operations/{operation}/reports', [OperationReportController::class, 'index']);
+    });
+
+    // 领料单：CRUD + from-order 预填 + 审核 + 发料（production.pick.*；审核/发料复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        // 注意：from-order 必须先于 {pick} 注册，避免 orderId 被解析为领料单 ID
+        Route::middleware('permission:production.pick.list')->get('/production/picks/from-order/{orderId}', [PickListController::class, 'fromOrder']);
+        Route::middleware('permission:production.pick.list')->get('/production/picks', [PickListController::class, 'index']);
+        Route::middleware('permission:production.pick.create')->post('/production/picks', [PickListController::class, 'store']);
+        Route::middleware('permission:production.pick.list')->get('/production/picks/{pick}', [PickListController::class, 'show']);
+        Route::middleware('permission:production.pick.update')->put('/production/picks/{pick}', [PickListController::class, 'update']);
+        Route::middleware('permission:production.pick.delete')->delete('/production/picks/{pick}', [PickListController::class, 'destroy']);
+        Route::middleware('permission:production.pick.update')->post('/production/picks/{pick}/approve', [PickListController::class, 'approve']);
+        Route::middleware('permission:production.pick.update')->post('/production/picks/{pick}/issue', [PickListController::class, 'issue']);
     });
 });
