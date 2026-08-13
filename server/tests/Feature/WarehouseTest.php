@@ -5,6 +5,7 @@
 namespace Tests\Feature;
 
 use App\Models\Category;
+use App\Models\Customer;
 use App\Models\InventoryBalance;
 use App\Models\Location;
 use App\Models\Product;
@@ -170,6 +171,34 @@ class WarehouseTest extends TestCase
         $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
         DB::table('purchase_inbounds')->insert([
             'no' => 'PI-TEST-001', 'supplier_id' => $s->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+            ->assertJsonPath('code', 1107);
+    }
+
+    public function test_destroy_warehouse_with_sales_outbound_reference_fails(): void
+    {
+        // 边界路径：sales_outbounds 引用该仓库时删除被拒 1106（出库单引用同码保护）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
+        DB::table('sales_outbounds')->insert([
+            'no' => 'SOUT-TEST-001', 'customer_id' => $c->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
+            ->assertJsonPath('code', 1106);
+    }
+
+    public function test_destroy_location_with_sales_outbound_reference_fails(): void
+    {
+        // 边界路径：sales_outbounds 引用该库位时删除被拒 1107（出库单引用同码保护）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
+        DB::table('sales_outbounds')->insert([
+            'no' => 'SOUT-TEST-001', 'customer_id' => $c->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
             'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")

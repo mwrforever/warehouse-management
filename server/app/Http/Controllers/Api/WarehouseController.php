@@ -87,13 +87,14 @@ class WarehouseController extends Controller
         return $this->ok();
     }
 
-    /** 删除仓库：存在库存余额或入库单引用 1106（余额表由库存模块创建，未建时守卫自动放行） */
+    /** 删除仓库：存在库存余额或入库/出库单引用 1106（余额表由库存模块创建，未建时守卫自动放行） */
     public function destroy(Warehouse $warehouse)
     {
-        // 库存余额 + 采购入库单引用均受保护（同码 1106）
+        // 库存余额 + 采购入库单 + 销售出库单引用均受保护（同码 1106）
         if (
             DeletionGuard::referenced('inventory_balances', 'warehouse_id', $warehouse->id)
             || DeletionGuard::referenced('purchase_inbounds', 'warehouse_id', $warehouse->id)
+            || DeletionGuard::referenced('sales_outbounds', 'warehouse_id', $warehouse->id)
         ) {
             return $this->fail(1106, '仓库存在库存，不可删除');
         }
@@ -145,13 +146,14 @@ class WarehouseController extends Controller
         return $this->ok();
     }
 
-    /** 删除库位：存在库存余额或入库单引用 1107 */
+    /** 删除库位：存在库存余额或入库/出库单引用 1107 */
     public function destroyLocation(Location $location)
     {
-        // 库存余额 + 采购入库单引用均受保护（同码 1107）
+        // 库存余额 + 采购入库单 + 销售出库单引用均受保护（同码 1107）
         if (
             DeletionGuard::referenced('inventory_balances', 'location_id', $location->id)
             || DeletionGuard::referenced('purchase_inbounds', 'location_id', $location->id)
+            || DeletionGuard::referenced('sales_outbounds', 'location_id', $location->id)
         ) {
             return $this->fail(1107, '库位存在库存，不可删除');
         }

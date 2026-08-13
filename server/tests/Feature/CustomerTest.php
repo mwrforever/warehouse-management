@@ -5,11 +5,12 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
+use App\Models\Location;
 use App\Models\Role;
 use App\Models\User;
+use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class CustomerTest extends TestCase
@@ -76,9 +77,9 @@ class CustomerTest extends TestCase
         $this->assertDatabaseHas('customers', ['id' => $c->id, 'contact' => '王五', 'phone' => '13900000000']);
     }
 
-    public function test_destroy_succeeds_when_sales_tables_missing(): void
+    public function test_destroy_succeeds_when_no_sales_reference(): void
     {
-        // 边界路径：销售模块表未建（守卫放行），客户可删
+        // 边界路径：无任何销售单据引用（销售表已建），客户可删
         $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
         $this->withToken($this->token)->deleteJson("/api/v1/customers/{$c->id}")->assertJsonPath('code', 0);
         $this->assertDatabaseMissing('customers', ['id' => $c->id]);
@@ -86,18 +87,28 @@ class CustomerTest extends TestCase
 
     public function test_destroy_with_sales_order_reference_fails(): void
     {
-        // 边界路径：sales_orders 表存在且有引用时删除被拒 1111（临时表验证守卫联动）
+        // 边界路径：sales_orders 真实表引用该客户时删除被拒 1111（订单引用保护）
         $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
-        Schema::create('sales_orders', function ($table) {
-            $table->id();
-            $table->unsignedBigInteger('customer_id');
-        });
-        DB::table('sales_orders')->insert(['customer_id' => $c->id]);
-        try {
-            $this->withToken($this->token)->deleteJson("/api/v1/customers/{$c->id}")
-                ->assertJsonPath('code', 1111);
-        } finally {
-            Schema::dropIfExists('sales_orders');
-        }
+        DB::table('sales_orders')->insert([
+            'no' => 'SO-TEST-001', 'customer_id' => $c->id, 'order_date' => now()->toDateString(),
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/customers/{$c->id}")
+            ->assertJsonPath('code', 1111);
+    }
+
+    public function test_destroy_with_sales_outbound_reference_fails(): void
+    {
+        // 边界路径：sales_outbounds 真实表引用该客户时删除被拒 1111（出库单引用保护，独立出库必选客户）
+        // 注：测试库 sqlite 外键约束开启，出库单需真实仓库/库位（本测试类不种子，先建再插入）
+        $c = Customer::create(['name' => '测试客户', 'code' => 'CUS-001', 'status' => 1]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        DB::table('sales_outbounds')->insert([
+            'no' => 'SOUT-TEST-001', 'customer_id' => $c->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/customers/{$c->id}")
+            ->assertJsonPath('code', 1111);
     }
 }

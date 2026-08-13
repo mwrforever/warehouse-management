@@ -85,10 +85,13 @@ class CustomerController extends Controller
         return $this->ok();
     }
 
-    /** 删除客户：被销售单据引用 1111（销售表由销售模块创建，未建时守卫自动放行） */
+    /** 删除客户：被销售单据引用 1111（订单 + 出库单；销售表由销售模块创建，未建时守卫自动放行） */
     public function destroy(Customer $customer)
     {
-        if (DeletionGuard::referenced('sales_orders', 'customer_id', $customer->id)) {
+        if (
+            DeletionGuard::referenced('sales_orders', 'customer_id', $customer->id)
+            || DeletionGuard::referenced('sales_outbounds', 'customer_id', $customer->id)
+        ) {
             return $this->fail(1111, '客户已被销售单据使用，不可删除');
         }
         $customer->delete();
