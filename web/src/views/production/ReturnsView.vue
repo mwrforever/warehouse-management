@@ -3,17 +3,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  productionApi,
-  type FromOrderMaterial,
-  type ProductionOrderItem,
-  type ReturnItem,
-} from '../../api/production'
+import { productionApi, type ProductionOrderItem, type ReturnItem } from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
-
-// from-order 接口后端实际返回 product_name/product_code 别名（接口声名为 material_name/material_code），本地兼容读取
-type FromOrderRow = FromOrderMaterial & { product_name?: string; product_code?: string }
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -47,8 +39,8 @@ const form = reactive({
   remark: '',
   items: [] as {
     product_id: number
-    material_name: string
-    material_code: string
+    product_name: string
+    product_code: string
     issued_qty: number
     quantity: number
   }[],
@@ -83,16 +75,13 @@ async function onOrderChange(orderId: number | undefined) {
   try {
     const data = await productionApi.fromOrderPicks(orderId)
     form.order_id = data.order_id
-    form.items = data.items.map((i) => {
-      const row = i as FromOrderRow
-      return {
-        product_id: row.product_id,
-        material_name: row.material_name ?? row.product_name ?? '',
-        material_code: row.material_code ?? row.product_code ?? '',
-        issued_qty: Number(row.issued_qty),
-        quantity: Number(row.issued_qty),
-      }
-    })
+    form.items = data.items.map((i) => ({
+      product_id: i.product_id,
+      product_name: i.product_name,
+      product_code: i.product_code,
+      issued_qty: Number(i.issued_qty),
+      quantity: Number(i.issued_qty),
+    }))
   } catch (e) {
     // 预填失败：清空工单选择，避免带无效工单保存
     ElMessage.error((e as Error).message)
@@ -147,18 +136,19 @@ async function openEdit(row: ReturnRow) {
     const pre = await productionApi.fromOrderPicks(d.order_id)
     editingId.value = row.id
     form.order_id = d.order_id
+    // 关联领料单回填（编辑保真，保存时随载荷提交）
+    form.pick_id = d.pick_id
     form.warehouse_id = d.warehouse_id
     form.location_id = d.location_id
     form.remark = d.remark ?? ''
     form.items = pre.items.map((i) => {
-      const row = i as FromOrderRow
-      const cur = d.items.find((it) => it.product_id === row.product_id)
+      const cur = d.items.find((it) => it.product_id === i.product_id)
       return {
-        product_id: row.product_id,
-        material_name: row.material_name ?? row.product_name ?? '',
-        material_code: row.material_code ?? row.product_code ?? '',
-        issued_qty: Number(row.issued_qty),
-        quantity: Number(cur?.quantity ?? row.issued_qty),
+        product_id: i.product_id,
+        product_name: i.product_name,
+        product_code: i.product_code,
+        issued_qty: Number(i.issued_qty),
+        quantity: Number(cur?.quantity ?? i.issued_qty),
       }
     })
     locations.value = (await warehouseApi.locations(d.warehouse_id)).items
@@ -389,9 +379,9 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
-          <el-table-column prop="material_name" label="物料" min-width="140" />
+          <el-table-column prop="product_name" label="物料" min-width="140" />
           <el-table-column
-            prop="material_code"
+            prop="product_code"
             label="编码"
             class-name="font-code"
             min-width="110"
