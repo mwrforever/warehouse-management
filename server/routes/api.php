@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CheckController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
+use App\Http\Controllers\Api\OperationReportController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductionOrderController;
@@ -241,5 +242,11 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.order.update')->post('/production/orders/{order}/start', [ProductionOrderController::class, 'start']);
         Route::middleware('permission:production.order.update')->post('/production/orders/{order}/complete', [ProductionOrderController::class, 'complete']);
         Route::middleware('permission:production.order.update')->post('/production/orders/{order}/close', [ProductionOrderController::class, 'close']);
+    });
+
+    // 工序报工：报工 + 记录列表（production.report.*；报工提交复用 create）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:production.report.create')->post('/production/operations/{operation}/reports', [OperationReportController::class, 'store']);
+        Route::middleware('permission:production.report.list')->get('/production/operations/{operation}/reports', [OperationReportController::class, 'index']);
     });
 });
