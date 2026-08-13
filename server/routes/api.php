@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\DictionaryController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\ProcessController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\PurchaseInboundController;
 use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\SupplierController;
@@ -186,5 +187,17 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:purchase.order.update')->post('/purchase/orders/{order}/close', [PurchaseOrderController::class, 'close']);
         Route::middleware('permission:purchase.order.delete')->delete('/purchase/orders/{order}', [PurchaseOrderController::class, 'destroy']);
         Route::middleware('permission:purchase.order.list')->get('/purchase/orders/{order}/inbounds', [PurchaseOrderController::class, 'inbounds']);
+    });
+
+    // 采购入库单：CRUD + from-order 预填 + 审核（purchase.inbound.*；审核复用 update）
+    Route::middleware('auth:sanctum')->group(function () {
+        // 注意：from-order 必须先于 {inbound} 注册，避免 orderId 被解析为入库单 ID
+        Route::middleware('permission:purchase.inbound.list')->get('/purchase/inbounds/from-order/{orderId}', [PurchaseInboundController::class, 'fromOrder']);
+        Route::middleware('permission:purchase.inbound.list')->get('/purchase/inbounds', [PurchaseInboundController::class, 'index']);
+        Route::middleware('permission:purchase.inbound.create')->post('/purchase/inbounds', [PurchaseInboundController::class, 'store']);
+        Route::middleware('permission:purchase.inbound.list')->get('/purchase/inbounds/{inbound}', [PurchaseInboundController::class, 'show']);
+        Route::middleware('permission:purchase.inbound.update')->put('/purchase/inbounds/{inbound}', [PurchaseInboundController::class, 'update']);
+        Route::middleware('permission:purchase.inbound.delete')->delete('/purchase/inbounds/{inbound}', [PurchaseInboundController::class, 'destroy']);
+        Route::middleware('permission:purchase.inbound.update')->post('/purchase/inbounds/{inbound}/approve', [PurchaseInboundController::class, 'approve']);
     });
 });
