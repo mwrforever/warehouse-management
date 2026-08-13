@@ -46,8 +46,11 @@ class ReportStructureTest extends TestCase
         $this->assertSame(0, $operator->permissions()->whereIn('code', [
             'report.inventory', 'report.movements', 'report.production', 'report.purchase_sales',
         ])->count());
-        // operator 持有的全部权限仍以 .list 结尾（既有同步逻辑不变）
+        // operator 持有的权限以 .list 结尾，唯一例外 dashboard.view（仪表盘全角色默认落地页，TC-DSH-07 锁定）
         foreach ($operator->permissions as $p) {
+            if ($p->code === 'dashboard.view') {
+                continue;
+            }
             $this->assertStringEndsWith('.list', $p->code);
         }
     }
