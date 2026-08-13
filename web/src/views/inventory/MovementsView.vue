@@ -156,6 +156,12 @@ function toLocalDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// 本地日期字符串解析（new Date('YYYY-MM-DD') 按 UTC 解析，负时区会偏移一天 → 手动拆解构造）
+function parseLocalDate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
 async function load() {
   loading.value = true
   try {
@@ -201,6 +207,10 @@ onMounted(async () => {
   const q = route.query as Record<string, string>
   if (q.product_id) query.product_id = Number(q.product_id)
   if (q.warehouse_id) query.warehouse_id = Number(q.warehouse_id)
+  // 报表下钻带入的日期闭区间预填（出入库汇总行点击跳转链路）
+  if (q.date_from && q.date_to) {
+    dateRange.value = [parseLocalDate(q.date_from), parseLocalDate(q.date_to)]
+  }
   load()
   // 商品/仓库下拉（全量）
   try {
