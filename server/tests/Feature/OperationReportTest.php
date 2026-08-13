@@ -205,6 +205,26 @@ class OperationReportTest extends TestCase
             ->assertJsonPath('data.items.0.operator', '张三');
     }
 
+    public function test_report_missing_defective_qty_defaults_to_zero(): void
+    {
+        // 边界路径：defective_qty 漏传（nullable 字段，镜像 E2E TC-PRD-04 载荷「合格 10、工时 0.5」）
+        // → 归一化为 0 不 500；累计合格达标 → 本工序完成，不良/工时累计 0/0.5
+        $op1 = $this->ops[1];
+        $this->withToken($this->token)->postJson("/api/v1/production/operations/{$op1->id}/reports", [
+            'qualified_qty' => 10,
+            'hours' => 0.5,
+        ])->assertJsonPath('code', 0);
+        $op1->refresh();
+        $this->assertSame(WorkOrderOperation::STATUS_DONE, $op1->status);
+        $this->assertSame('0.00', $op1->defective_qty);
+        $this->assertSame('0.50', $op1->hours);
+        // 报工记录同样按 0/0.5 落库（操作人回退到当前登录用户名）
+        $this->assertDatabaseHas('operation_reports', [
+            'operation_id' => $op1->id, 'qualified_qty' => '10.00', 'defective_qty' => '0.00',
+            'hours' => '0.50', 'operator' => '管理员',
+        ]);
+    }
+
     public function test_reports_requires_report_permission(): void
     {
         // 异常路径：无 production.report.list 权限的角色被拒（403 JSON 信封）
