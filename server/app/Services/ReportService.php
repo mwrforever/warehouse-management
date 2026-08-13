@@ -54,11 +54,11 @@ class ReportService
 
         // 成本价估算：每商品取最近一次采购入库单价（created_at DESC, id DESC 首条生效；无记录则不参与金额）
         $prices = [];
-        foreach (PurchaseInboundItem::query()
+        $priceQuery = PurchaseInboundItem::query()
             ->select('product_id', 'price')
             ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->cursor() as $item) {
+            ->orderByDesc('id');
+        foreach ($priceQuery->cursor() as $item) {
             $prices[$item->product_id] = $prices[$item->product_id] ?? $item->price;
         }
 

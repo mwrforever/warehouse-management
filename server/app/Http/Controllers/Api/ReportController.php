@@ -47,8 +47,10 @@ class ReportController extends Controller
         ]);
 
         return $this->ok($this->service->movementsSummary(
-            $range['date_from'], $range['date_to'],
-            $v['granularity'] ?? 'day', $v['source_type'] ?? null,
+            $range['date_from'],
+            $range['date_to'],
+            $v['granularity'] ?? 'day',
+            $v['source_type'] ?? null,
         ));
     }
 
