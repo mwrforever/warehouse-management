@@ -347,22 +347,25 @@ class ProductionOrderController extends Controller
     }
 
     /**
-     * 开工（已下达→生产中）：首工序（seq 最小）置进行中；重复/非已下达 1506
+     * 开工（已下达→生产中）：首工序（seq 最小）置进行中；重复/非已下达 1506。
+     * 锁序 op(seq1)→order：与委外回收（outsourcing→op→order）/报工（op→next-op→order）在 op→order 段同序，
+     * 消除「末批回收 vs 开工」并发 ABBA 死锁环（委外工序可为 seq1，系统无校验禁止）。
      */
     public function start(ProductionOrder $order)
     {
         try {
             DB::transaction(function () use ($order) {
-                // 锁工单行复查状态（幂等 1506）
+                // 锁首工序行（锁 order 之前）：seq 最小工序；开工与报工/回收并发时按全局 op→order 锁序串行化
+                $first = WorkOrderOperation::where('order_id', $order->id)
+                    ->orderBy('seq')->lockForUpdate()->first();
+                // 锁工单行复查状态（幂等 1506；失败回滚释放锁，行为与锁后校验等价）
                 $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== ProductionOrder::STATUS_RELEASED) {
                     throw new ProductionException('当前状态不可开工', 1506);
                 }
                 $locked->status = ProductionOrder::STATUS_PRODUCING;
                 $locked->save();
-                // 首工序置进行中（seq 最小；锁工序行防并发报工窗口）
-                $first = WorkOrderOperation::where('order_id', $locked->id)
-                    ->orderBy('seq')->lockForUpdate()->first();
+                // 首工序置进行中（seq 最小；行已提前锁定，直接更新不重复加锁）
                 if ($first && $first->status === WorkOrderOperation::STATUS_PENDING) {
                     $first->status = WorkOrderOperation::STATUS_RUNNING;
                     $first->save();
