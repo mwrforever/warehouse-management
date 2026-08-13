@@ -7,11 +7,15 @@ namespace Tests\Feature;
 use App\Models\BomHeader;
 use App\Models\BomItem;
 use App\Models\Category;
+use App\Models\Location;
 use App\Models\Product;
 use App\Models\Role;
+use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
+use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class ProductTest extends TestCase
@@ -207,6 +211,32 @@ class ProductTest extends TestCase
             'unit_id' => $this->unit->id,
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/products/{$material->id}")
+            ->assertJsonPath('code', 1116);
+    }
+
+    public function test_destroy_referenced_by_purchase_inbound_fails_with_1116(): void
+    {
+        // 异常路径：被采购入库单明细引用的商品不可删 1116（采购模块表落地后守卫自动生效）
+        $p = Product::create([
+            'name' => '铝材',
+            'code' => 'RAW-001',
+            'type' => 'raw_material',
+            'category_id' => $this->rawCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH01', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        DB::table('purchase_inbounds')->insert([
+            'no' => 'PI-TEST-001', 'supplier_id' => $s->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('purchase_inbound_items')->insert([
+            'inbound_id' => DB::table('purchase_inbounds')->value('id'), 'product_id' => $p->id,
+            'quantity' => 1, 'price' => 100, 'amount' => 100, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/products/{$p->id}")
             ->assertJsonPath('code', 1116);
     }
 

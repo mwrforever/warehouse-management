@@ -9,10 +9,12 @@ use App\Models\InventoryBalance;
 use App\Models\Location;
 use App\Models\Product;
 use App\Models\Role;
+use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class WarehouseTest extends TestCase
@@ -130,6 +132,20 @@ class WarehouseTest extends TestCase
             ->assertJsonPath('code', 1106);
     }
 
+    public function test_destroy_warehouse_with_purchase_inbound_reference_fails(): void
+    {
+        // 边界路径：purchase_inbounds 引用该仓库时删除被拒 1106（入库单引用同码保护）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        DB::table('purchase_inbounds')->insert([
+            'no' => 'PI-TEST-001', 'supplier_id' => $s->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/warehouses/{$w->id}")
+            ->assertJsonPath('code', 1106);
+    }
+
     public function test_destroy_location_with_balances_table_reference_fails(): void
     {
         // 边界路径：真实 inventory_balances 表存在 location_id 引用时，库位删除被拒 1107（库存模块表落地后守卫自动生效）
@@ -141,6 +157,20 @@ class WarehouseTest extends TestCase
             'warehouse_id' => $w->id,
             'location_id' => $l->id,
             'quantity' => 1,
+        ]);
+        $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
+            ->assertJsonPath('code', 1107);
+    }
+
+    public function test_destroy_location_with_purchase_inbound_reference_fails(): void
+    {
+        // 边界路径：purchase_inbounds 引用该库位时删除被拒 1107（入库单引用同码保护）
+        $w = Warehouse::create(['name' => '测试仓', 'code' => 'WH02', 'status' => 1]);
+        $l = Location::create(['warehouse_id' => $w->id, 'name' => 'A-01', 'code' => 'A-01', 'status' => 1]);
+        $s = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        DB::table('purchase_inbounds')->insert([
+            'no' => 'PI-TEST-001', 'supplier_id' => $s->id, 'warehouse_id' => $w->id, 'location_id' => $l->id,
+            'status' => 0, 'total_amount' => 0, 'created_at' => now(), 'updated_at' => now(),
         ]);
         $this->withToken($this->token)->deleteJson("/api/v1/locations/{$l->id}")
             ->assertJsonPath('code', 1107);

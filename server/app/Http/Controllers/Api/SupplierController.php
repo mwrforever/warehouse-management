@@ -88,7 +88,11 @@ class SupplierController extends Controller
     /** 删除供应商：被采购单据引用 1109（采购表由采购模块创建，未建时守卫自动放行） */
     public function destroy(Supplier $supplier)
     {
-        if (DeletionGuard::referenced('purchase_orders', 'supplier_id', $supplier->id)) {
+        // 采购订单/采购入库单引用均受保护（订单+入库单同码 1109）
+        if (
+            DeletionGuard::referenced('purchase_orders', 'supplier_id', $supplier->id)
+            || DeletionGuard::referenced('purchase_inbounds', 'supplier_id', $supplier->id)
+        ) {
             return $this->fail(1109, '供应商已被采购单据使用，不可删除');
         }
         $supplier->delete();
