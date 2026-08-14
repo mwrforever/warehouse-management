@@ -38,6 +38,8 @@
 
 ## 快速开始
 
+> 💡 **一键启动**（需 Docker Desktop）：运行 `./start-dev.sh`（Windows 可双击 `start-dev.bat`），自动完成 MySQL 启动、数据库初始化、前后端启动并打开浏览器；Ctrl+C 一键停止。
+
 要求：PHP 8.3+ / Composer / Node.js 24+ / Docker（可选，MySQL）
 
 ```bash
