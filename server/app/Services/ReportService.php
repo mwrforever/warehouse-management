@@ -46,7 +46,9 @@ class ReportService
             ->select(
                 'inventory_balances.product_id',
                 'inventory_balances.quantity',
+                'inventory_balances.warehouse_id',
                 'products.type',
+                'products.category_id',
                 'categories.name as category_name',
                 'warehouses.name as warehouse_name'
             )
@@ -75,17 +77,24 @@ class ReportService
         foreach ($rows as $row) {
             // joined 列经 getAttribute 读取（larastan 将查询结果按 InventoryBalance 模型定型，属性访问报 undefined）
             $rowType = $row->getAttribute('type');
+            // 分组键用 id（name 无唯一约束，同名仓库/分类会静默合并数据——bug #9）；名称仅作展示输出
+            $key = match ($groupBy) {
+                'warehouse' => (int) $row->getAttribute('warehouse_id'),
+                'type' => $rowType,
+                default => (int) $row->getAttribute('category_id'),
+            };
             $name = match ($groupBy) {
                 'warehouse' => $row->getAttribute('warehouse_name'),
                 'type' => self::TYPE_LABELS[$rowType] ?? $rowType,
                 default => $row->getAttribute('category_name'),
             };
-            $groups[$name]['quantity_total'] = bcadd($groups[$name]['quantity_total'] ?? '0', (string) $row->quantity, 2);
-            $groups[$name]['product_count'][$row->product_id] = true;
+            $groups[$key]['group_name'] = $name;
+            $groups[$key]['quantity_total'] = bcadd($groups[$key]['quantity_total'] ?? '0', (string) $row->quantity, 2);
+            $groups[$key]['product_count'][$row->product_id] = true;
             if (isset($prices[$row->product_id])) {
                 // 行金额 = 余额 × 单价（分）→ 元（2 位）；bcmath 全程无浮点（decimal cast 静态定型为 float，显式转字符串）
                 $lineYuan = bcdiv(bcmul((string) $row->quantity, (string) $prices[$row->product_id], 2), '100', 2);
-                $groups[$name]['amount_total'] = bcadd($groups[$name]['amount_total'] ?? '0', $lineYuan, 2);
+                $groups[$key]['amount_total'] = bcadd($groups[$key]['amount_total'] ?? '0', $lineYuan, 2);
                 $totalAmount = bcadd($totalAmount, $lineYuan, 2);
                 $totalAmountKnown = true;
             }
@@ -94,8 +103,8 @@ class ReportService
         }
 
         $items = collect($groups)
-            ->map(fn ($g, $name) => [
-                'group_name' => $name,
+            ->map(fn ($g) => [
+                'group_name' => $g['group_name'],
                 'quantity_total' => $g['quantity_total'],
                 'product_count' => count($g['product_count']),
                 'amount_total' => $g['amount_total'] ?? null,

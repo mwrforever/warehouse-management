@@ -143,6 +143,32 @@ class ReportServiceTest extends TestCase
         $this->assertSame('3.00', $byName['成品']['quantity_total']);
     }
 
+    public function test_inventory_summary_groups_same_name_warehouses_separately(): void
+    {
+        // 核心口径（bug #9 回归）：分组键用 id 而非名称——同名仓库（name 无唯一约束）不得被静默合并
+        $p = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        $whA = Warehouse::create(['name' => '同名仓', 'code' => 'WH-A', 'status' => 1]);
+        $whB = Warehouse::create(['name' => '同名仓', 'code' => 'WH-B', 'status' => 1]);
+        foreach ([$whA, $whB] as $wh) {
+            InventoryBalance::create([
+                'product_id' => $p->id, 'warehouse_id' => $wh->id,
+                'location_id' => $this->location->id, 'quantity' => '1.00',
+                'safety_min' => 0, 'safety_max' => 0,
+            ]);
+        }
+
+        $res = $this->service->inventorySummary('warehouse');
+
+        // 两个同名仓各自成组（修复前以名称为键 → 合并为 1 组）
+        $this->assertCount(2, $res['items']);
+        $this->assertSame('同名仓', $res['items'][0]['group_name']);
+        $this->assertSame('同名仓', $res['items'][1]['group_name']);
+        $this->assertSame('1.00', $res['items'][0]['quantity_total']);
+        $this->assertSame('1.00', $res['items'][1]['quantity_total']);
+        // 总量不变（分组粒度不影响全量口径）
+        $this->assertSame('2.00', $res['total']['quantity_total']);
+    }
+
     public function test_inventory_summary_items_sorted_by_group_name(): void
     {
         // 确定性：多组按组名升序（排序保证输出稳定，不随插入顺序漂移）
