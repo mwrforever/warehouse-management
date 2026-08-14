@@ -146,10 +146,15 @@ class DashboardService
     {
         $balances = InventoryBalance::query()->select('product_id', 'quantity')->get();
 
-        // 成本价估算：每商品取最近一次采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）
+        // 成本价估算：每商品取最近一次「已审核」采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）
+        // 限定余额行商品集（whereIn 单查）消除全表 cursor 扫描（性能债 P1-1）；
+        // whereHas 过滤已审核入库单——草稿入库单 store 即写明细且审核不改 created_at，草稿价参与会导致金额跳变（bug #7）
         $prices = [];
+        $productIds = $balances->pluck('product_id')->unique()->all();
         foreach (
             PurchaseInboundItem::query()
+                ->whereIn('product_id', $productIds)
+                ->whereHas('purchaseInbound', fn ($q) => $q->where('status', PurchaseInbound::STATUS_APPROVED))
                 ->select('product_id', 'price')
                 ->orderByDesc('created_at')
                 ->orderByDesc('id')

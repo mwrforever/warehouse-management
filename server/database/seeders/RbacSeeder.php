@@ -9,6 +9,7 @@ use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 
 class RbacSeeder extends Seeder
 {
@@ -148,6 +149,13 @@ class RbacSeeder extends Seeder
                 'status' => 1,
             ]
         );
+        // 密码轮换：既有 admin 与 env 口令不一致时同步更新（重跑种子会按 env 轮换 admin 密码——
+        // 保证 ADMIN_PASSWORD 安全修复在已初始化环境同样生效，而非仅首次建号；User 模型 password cast 已自动哈希）
+        $password = env('ADMIN_PASSWORD', 'admin123');
+        if (! Hash::check($password, $adminUser->password)) {
+            $adminUser->password = $password;
+            $adminUser->save();
+        }
         $adminUser->roles()->syncWithoutDetaching([$admin->id]);
 
         // 种子字典：计量单位（供基础资料模块下拉引用）

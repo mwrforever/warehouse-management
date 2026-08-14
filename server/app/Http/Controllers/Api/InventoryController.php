@@ -28,6 +28,10 @@ class InventoryController extends Controller
     /** 余额导出 CSV：UTF-8 BOM + 中文表头（与当前筛选一致的全量行）；流式输出不占内存 */
     public function exportBalances(Request $request)
     {
+        // 预热查询：响应头发送前先执行一次 count（值不使用，仅触发 SQL 编译/执行）——
+        // SQL 结构错误在此暴露为 JSON 500，而非流式输出中途降级为「200 + 半截 CSV」（bug #10 回归）
+        (clone $this->balanceQuery($request))->count();
+
         // 用流式响应输出 CSV（测试 streamedContent 依赖）：回调内游标逐行读取 + fputcsv 逐行写出，
         // 避免 ->get() 全量装载 + 全量拼串导致的内存随行数线性增长
         return response()->stream(function () use ($request): void {

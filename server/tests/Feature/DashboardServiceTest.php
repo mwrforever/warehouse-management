@@ -160,6 +160,30 @@ class DashboardServiceTest extends TestCase
         $this->assertNull($res['inventory_value']);
     }
 
+    public function test_summary_value_excludes_draft_inbound_price(): void
+    {
+        // 核心口径（bug #7 回归）：草稿入库单 store 即写明细且审核不改 created_at——
+        // 草稿单价不得参与成本价估算（与报表模块 status=1 同口径），否则草稿改删导致金额跳变
+        $p = $this->makeProduct('MAT-B', 'raw_material');
+        $this->makeBalance($p, '10.00');
+        $sup = Supplier::create(['name' => '供应商B', 'code' => 'SUP-B', 'status' => 1]);
+        $draft = PurchaseInbound::create([
+            'no' => 'PI20260813-002', 'supplier_id' => $sup->id,
+            'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+            'status' => PurchaseInbound::STATUS_DRAFT, 'total_amount' => 0, 'inbound_at' => now()->toDateTimeString(),
+        ]);
+        PurchaseInboundItem::create([
+            'inbound_id' => $draft->id, 'product_id' => $p->id,
+            'quantity' => 1, 'price' => 999, 'amount' => 999,
+        ]);
+
+        $res = $this->service->summary($this->admin);
+
+        // 仅草稿价存在：不参与金额 → 总值 null（已审核价参与口径由 test_summary_aggregates_... 覆盖）
+        $this->assertSame('10.00', $res['inventory_total_qty']);
+        $this->assertNull($res['inventory_value']);
+    }
+
     public function test_summary_pending_count_is_permission_filtered(): void
     {
         // 正常路径：待审核数按用户审核权限过滤（无采购权限 → 采购草稿不计）

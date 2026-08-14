@@ -36,6 +36,13 @@ class PurchaseInboundItem extends Model
         return $this->belongsTo(Product::class);
     }
 
+    /** @return BelongsTo<PurchaseInbound, $this> */
+    // 所属入库单（成本价估算按单据审核状态过滤：草稿入库单单价不参与）
+    public function purchaseInbound(): BelongsTo
+    {
+        return $this->belongsTo(PurchaseInbound::class, 'inbound_id');
+    }
+
     /** @return BelongsTo<PurchaseOrderItem, $this> */
     // 来源订单行（独立入库为空）
     public function orderItem(): BelongsTo

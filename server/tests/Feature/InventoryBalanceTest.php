@@ -13,6 +13,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class InventoryBalanceTest extends TestCase
@@ -138,6 +139,21 @@ class InventoryBalanceTest extends TestCase
         InventoryBalance::query()->update(['quantity' => 40]);
         $csv = $this->withToken($this->token)->get('/api/v1/inventory/balances/export')->streamedContent();
         $this->assertStringContainsString('低库存', $csv);
+    }
+
+    public function test_export_csv_preheats_count_before_streaming(): void
+    {
+        // 核心路径（bug #10 回归）：流式回调前先执行 count 预热——
+        // SQL 结构错误在响应头发送前暴露为 JSON 500，而非「200 + 半截 CSV」
+        $counts = 0;
+        DB::listen(function ($q) use (&$counts) {
+            if (str_starts_with($q->sql, 'select count(')) {
+                $counts++;
+            }
+        });
+        $res = $this->withToken($this->token)->get('/api/v1/inventory/balances/export');
+        $res->assertOk();
+        $this->assertSame(1, $counts);
     }
 
     public function test_balances_requires_inventory_permission(): void

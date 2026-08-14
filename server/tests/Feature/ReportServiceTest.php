@@ -216,6 +216,30 @@ class ReportServiceTest extends TestCase
         $this->assertSame('3.00', $res['total']['amount_total']);
     }
 
+    public function test_inventory_summary_amount_excludes_draft_inbound_price(): void
+    {
+        // 核心口径（bug #7 回归）：草稿入库单单价不参与成本价估算（与 movementsSummary/purchaseSales 的 status=1 同口径）
+        $raw = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        $this->makeBalance($raw, '2.00');
+        $sup = Supplier::create(['name' => '供应商B', 'code' => 'SUP-B', 'status' => 1]);
+        $draft = PurchaseInbound::create([
+            'no' => 'PI20260813-003', 'supplier_id' => $sup->id,
+            'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+            'status' => PurchaseInbound::STATUS_DRAFT, 'total_amount' => 0, 'inbound_at' => now()->toDateTimeString(),
+        ]);
+        // 草稿价 999 分（比任何已审核价都新，但状态未审核 → 不得生效）
+        PurchaseInboundItem::create([
+            'inbound_id' => $draft->id, 'product_id' => $raw->id,
+            'quantity' => 1, 'price' => 999, 'amount' => 999,
+        ]);
+
+        $res = $this->service->inventorySummary('category');
+
+        // 仅草稿价存在：金额为空（已审核价参与口径由 test_inventory_summary_amount_uses_latest_purchase_price 覆盖）
+        $this->assertSame('2.00', $res['items'][0]['quantity_total']);
+        $this->assertNull($res['items'][0]['amount_total']);
+    }
+
     public function test_inventory_summary_amount_null_when_no_purchase_price(): void
     {
         // 边界路径：有采购单但无对应商品单价 → 金额为空、仅数量
