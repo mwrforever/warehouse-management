@@ -158,7 +158,7 @@ describe('DashboardView', () => {
           product_code: 'MAT-001',
           warehouse_name: '主仓',
           quantity: '3.00',
-          safety_min: '10.00',
+          safety_min: 10,
         },
       ],
     })
