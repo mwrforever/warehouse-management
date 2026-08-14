@@ -625,10 +625,34 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
 
   test('TC-PRD-09 退料冲销', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // 草稿经 API 直建：MO-001 已完成/关闭后退料页「从工单生成」下拉仅生产中工单，UI 无法选中该工单
-    // （编辑/校验/保存/审核全流程仍走 UI，见文档 §5 注）
+    // 新口径（spec §5.1 生产中→退料）：MO-001 已在前序用例完成/关闭，不可再对其退料——
+    // 自建「生产中」工单并领料（issued=20）后走退料全流程（编辑/校验/保存/审核仍走 UI，见文档 §5 注）
+    const moR = await apiPost(page, '/api/v1/production/orders', {
+      product_id: finId,
+      quantity: 10,
+      plan_date: todayStr(),
+    })
+    expect(moR.code).toBe(0)
+    const moRId = (moR.data as { id: number }).id
+    const rel = await apiPost(page, `/api/v1/production/orders/${moRId}/release`)
+    expect(rel.code).toBe(0)
+    const st = await apiPost(page, `/api/v1/production/orders/${moRId}/start`)
+    expect(st.code).toBe(0)
+    const pk = await apiPost(page, '/api/v1/production/picks', {
+      order_id: moRId,
+      warehouse_id: whId,
+      location_id: a01Id,
+      items: [{ product_id: matId, pick_qty: 20 }],
+    })
+    expect(pk.code).toBe(0)
+    const pkList = await apiGet(page, '/api/v1/production/picks', {
+      keyword: (pk.data as { no: string }).no,
+    })
+    const pkAppr = await apiPost(page, `/api/v1/production/picks/${pkList.items[0].id}/approve`)
+    expect(pkAppr.code).toBe(0)
+    // 草稿经 API 直建（新工单生产中，符合新口径）
     const rl = await apiPost(page, '/api/v1/production/returns', {
-      order_id: mo1Id,
+      order_id: moRId,
       warehouse_id: whId,
       location_id: a01Id,
       items: [{ product_id: matId, quantity: 2 }],
@@ -640,7 +664,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const rlList = await apiGet(page, '/api/v1/production/returns', { keyword: rlNo })
     const rlId = rlList.items[0].id as number
     const over = await apiPut(page, `/api/v1/production/returns/${rlId}`, {
-      order_id: mo1Id,
+      order_id: moRId,
       warehouse_id: whId,
       location_id: a01Id,
       items: [{ product_id: matId, quantity: 25 }],
@@ -662,7 +686,8 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     await qtyInput.fill('2')
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    // 审核：confirm「库存将增加并冲销已领」→ 成功；MAT-001 = P₁-18（return 流水 +2）
+    // 审核：confirm「库存将增加并冲销已领」→ 成功；
+    // MAT-001 = P₁-38（前序用例领 20 + 本用例自建链路领 20 − 退 2；TC-PRD-10 开头会全量清零，无跨用例基线依赖）
     await rlRow.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('审核后库存将增加并冲销已领')
     await page
@@ -670,7 +695,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
       .getByRole('button', { name: /确\s*定/ })
       .click()
     await expect(page.locator('.el-message--success').last()).toContainText('审核成功')
-    expect(await totalBalance(page, 'MAT-001')).toBe(p1 - 18)
+    expect(await totalBalance(page, 'MAT-001')).toBe(p1 - 38)
     const mv = await apiGet(page, '/api/v1/inventory/movements', {
       source_type: 'return',
       source_no: rlNo,
@@ -678,9 +703,9 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     expect(mv.total).toBe(1)
     expect(mv.items[0].direction).toBe(1)
     expect(Number(mv.items[0].quantity)).toBe(2)
-    expect(Number(mv.items[0].balance_after)).toBe(p1a - 18)
+    expect(Number(mv.items[0].balance_after)).toBe(p1a - 38)
     // 工单物料已领 20→18（冲销）
-    const moDetail = await apiGet(page, `/api/v1/production/orders/${mo1Id}`)
+    const moDetail = await apiGet(page, `/api/v1/production/orders/${moRId}`)
     expect(Number(moDetail.materials[0].issued_qty)).toBe(18)
     expect(Number(moDetail.materials[0].remaining_qty)).toBe(2)
     // 幂等：重复审核 → 1519
