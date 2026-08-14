@@ -2,7 +2,7 @@
 <template>
   <div class="login-page">
     <el-card class="login-card">
-      <h1 class="font-code">Nexus Factory</h1>
+      <h1 class="font-code">warehouse</h1>
       <el-form ref="formRef" :model="form" :rules="rules" @keyup.enter="submit">
         <el-form-item prop="username">
           <el-input v-model="form.username" placeholder="请输入用户名" />
