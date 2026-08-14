@@ -7,3 +7,8 @@
 
 # playwright-cli 登录态（本地测试产物）
 auth.json
+
+# 内部开发文档（本地保留，不上传 GitHub）：问题记录/进度交接/实施计划/E2E 测试文档/设计系统
+docs/
+design-system/
+.claude/
