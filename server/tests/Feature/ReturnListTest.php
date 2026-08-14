@@ -130,6 +130,33 @@ class ReturnListTest extends TestCase
             ->assertJsonPath('message', '退料数量超过已领数量');
     }
 
+    public function test_store_rejects_order_not_producing_with_1517(): void
+    {
+        // 异常路径（bug #2 回归）：spec §5.1 生产中→退料——草稿工单不可退料（store 同步收紧）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->fin->id, 'quantity' => 10, 'plan_date' => now()->toDateString(),
+        ]);
+        $draft = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['order_id' => $draft->id]))
+            ->assertJsonPath('code', 1517)
+            ->assertJsonPath('message', '工单当前状态不可退料');
+    }
+
+    public function test_approve_rejects_order_not_producing_with_1519(): void
+    {
+        // 异常路径（bug #2 回归）：草稿期合法建单后工单被关闭 → 审核被拒 1519，库存/已领均无变动
+        $no = $this->createReturn($this->payload());
+        $this->order->status = ProductionOrder::STATUS_CLOSED;
+        $this->order->save();
+        $return = ReturnList::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/returns/{$return->id}/approve")
+            ->assertJsonPath('code', 1519)
+            ->assertJsonPath('message', '工单当前状态不可退料');
+        // 被拒审核不得冲销：库存仍为 10、已领仍为 20
+        $this->assertSame('10.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+        $this->assertSame('20.00', $this->order->materials()->where('material_id', $this->mat->id)->first()->issued_qty);
+    }
+
     public function test_store_rejects_material_not_issued_with_1517(): void
     {
         // 异常路径：商品从未领过（已领 0）→ 1517（超已领自然拦截）
@@ -167,11 +194,14 @@ class ReturnListTest extends TestCase
     public function test_store_pick_id_must_belong_to_same_order_with_422(): void
     {
         // 异常路径：pick_id 属于其他工单的领料单 → 422（防跨工单挂单，追溯语义错乱）
-        // 建第二工单（FIN-002×5 → MAT-001 需求 10）并领料，挂到第一工单的退料单上
+        // 建第二工单（FIN-002×5 → MAT-001 需求 10）并下达开工（领料要求生产中，同 set
+        // Up 口径），领料后挂到第一工单的退料单上
         $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
             'product_id' => $this->fin->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
         ]);
         $order2 = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order2->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order2->id}/start")->assertJsonPath('code', 0);
         $pickRes = $this->withToken($this->token)->postJson('/api/v1/production/picks', [
             'order_id' => $order2->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->a01->id,
             'items' => [['product_id' => $this->mat->id, 'pick_qty' => 5]],

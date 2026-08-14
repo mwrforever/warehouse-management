@@ -9,6 +9,7 @@ use App\Exceptions\ProductionException;
 use App\Http\Controllers\Controller;
 use App\Models\DocumentSequence;
 use App\Models\PickList;
+use App\Models\ProductionOrder;
 use App\Models\ProductionOrderMaterial;
 use App\Models\ReturnList;
 use App\Models\ReturnListItem;
@@ -82,6 +83,11 @@ class ReturnListController extends Controller
         }
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(422, '仓库与库位不能为空');
+        }
+        // 工单状态校验：spec §5.1 生产中→退料（草稿/已下达/已完成/已关闭工单不可退料；1517 退料族码段）
+        $order = ProductionOrder::find($data['order_id']);
+        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+            return $this->fail(1517, '工单当前状态不可退料');
         }
         if ($fail = $this->validatePickBelongs($data)) {
             return $fail;
@@ -161,6 +167,11 @@ class ReturnListController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(422, '仓库与库位不能为空');
             }
+            // 工单状态校验：spec §5.1 生产中→退料（同 store 口径）
+            $order = ProductionOrder::find($data['order_id']);
+            if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+                return $this->fail(1517, '工单当前状态不可退料');
+            }
             if ($fail = $this->validatePickBelongs($data)) {
                 return $fail;
             }
@@ -232,6 +243,12 @@ class ReturnListController extends Controller
                 $locked = ReturnList::whereKey($return->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status === ReturnList::STATUS_APPROVED) {
                     throw new ProductionException('该退料单已审核', 1519);
+                }
+                // 锁工单行校验状态：spec §5.1 生产中→退料；锁序 单据行→工单行→物料行
+                // （全局无「物料→工单」反向路径，与领料审核同构，无 ABBA 环）
+                $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
+                if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+                    throw new ProductionException('工单当前状态不可退料', 1519);
                 }
                 $movements = [];
                 $writeOff = []; // [material_id => 本次冲销量] 待回写

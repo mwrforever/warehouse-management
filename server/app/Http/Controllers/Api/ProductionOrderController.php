@@ -229,11 +229,16 @@ class ProductionOrderController extends Controller
                     'remark' => $data['remark'] ?? $locked->remark,
                 ]);
                 // 物料快照/工序序列全量重建（草稿工单无流水引用，直接重建）
+                // 重建前按 material_id 快照既有已领量：历史缺陷期草稿单可能已产生领料，
+                // 清零会导致剩余量恢复全量 → 原料库存重复扣减、退料「≤已领」防线失效（防数据丢失）
+                $issuedByMaterial = $locked->materials()->get()->keyBy('material_id');
                 $locked->materials()->delete();
                 $locked->materials()->createMany(array_map(fn ($m) => [
                     'material_id' => $m['material_id'],
                     'required_qty' => $m['required_qty'],
-                    'issued_qty' => 0,
+                    // 回填既有已领量（仅重算需求数量；该物料不再出现在新 BOM 时其已领记录随快照行一并移除）
+                    // ?? 左值天然 null 安全（缺失时回退 0），nullsafe 显式多余故用 ->
+                    'issued_qty' => (string) ($issuedByMaterial->get($m['material_id'])->issued_qty ?? '0'),
                 ], $expansion['materials']));
                 $locked->operations()->delete();
                 $locked->operations()->createMany(array_map(fn ($op) => [

@@ -101,6 +101,10 @@ class FinishedInboundController extends Controller
         if (! $order) {
             return $this->fail(422, '工单不存在');
         }
+        // 工单状态校验：spec §5.1 生产中→成品入库（1525 入库族码段）
+        if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+            return $this->fail(1525, '工单当前状态不可入库');
+        }
         if ($msg = $this->validateItems($order, $data['items'])) {
             [$code, $message] = $msg;
 
@@ -182,6 +186,10 @@ class FinishedInboundController extends Controller
             if (! $order) {
                 return $this->fail(422, '工单不存在');
             }
+            // 工单状态校验：spec §5.1 生产中→成品入库（同 store 口径）
+            if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+                return $this->fail(1525, '工单当前状态不可入库');
+            }
             if ($msg = $this->validateItems($order, $data['items'])) {
                 [$code, $message] = $msg;
 
@@ -254,6 +262,11 @@ class FinishedInboundController extends Controller
                 }
                 // 锁工单行：completed_qty 并发安全（多张 FI 同时审核串行化）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
+                // 工单状态校验：spec §5.1 生产中→成品入库；同时封死下方自动完成分支
+                // 把「已下达」工单直跳「已完成」的越级流转（bug #2 额外危害）
+                if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+                    throw new ProductionException('工单当前状态不可入库', 1528);
+                }
                 $movements = [];
                 $inboundTotal = '0';
                 /** @var FinishedInboundItem $item */

@@ -154,6 +154,26 @@ class ProductionOrderTest extends TestCase
         $this->assertSame('10.00', $order->materials()->where('material_id', $this->mat->id)->first()->required_qty);
     }
 
+    public function test_update_draft_preserves_issued_qty_by_material(): void
+    {
+        // 核心路径（bug #1 回归）：历史缺陷期草稿工单可能已产生领料（issued_qty > 0），
+        // update 重建物料快照时必须按 material_id 回填已领量、仅重算需求——
+        // 清零会导致剩余量恢复全量 → 原料库存重复扣减、退料「≤已领」防线失效
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        // 模拟已领料：MAT-001 已领 5（历史数据形态，绕过状态校验直接改库）
+        $order->materials()->where('material_id', $this->mat->id)->update(['issued_qty' => 5.00]);
+        $this->withToken($this->token)->putJson("/api/v1/production/orders/{$order->id}", $this->payload(['quantity' => 5]))
+            ->assertJsonPath('code', 0);
+        $order->refresh();
+        $mats = $order->materials()->get()->keyBy('material_id');
+        // 需求重算（5×2=10），已领量按 material_id 保留（5.00 不被清零）
+        $this->assertSame('10.00', $mats[$this->mat->id]->required_qty);
+        $this->assertSame('5.00', $mats[$this->mat->id]->issued_qty);
+        // 未被领料的物料已领量仍为 0
+        $this->assertSame('0.00', $mats[$this->semi->id]->issued_qty);
+    }
+
     public function test_update_released_rejected_with_1503(): void
     {
         // 异常路径：已下达工单不可修改 → 1503
