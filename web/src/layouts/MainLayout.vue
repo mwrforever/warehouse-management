@@ -2,7 +2,7 @@
 <template>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand font-code">Nexus Factory</div>
+      <div class="brand font-code">warehouse</div>
       <nav>
         <RouterLink to="/dashboard" class="menu-item">仪表盘</RouterLink>
         <div class="menu-group">库存管理</div>

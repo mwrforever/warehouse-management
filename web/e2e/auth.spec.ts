@@ -18,7 +18,7 @@ test.describe('登录流程', () => {
     await loginByUI(page, 'admin', 'admin123')
 
     // 品牌与侧边栏菜单渲染（admin 全权限）
-    await expect(page.locator('.brand')).toHaveText('Nexus Factory')
+    await expect(page.locator('.brand')).toHaveText('warehouse')
     await expect(page.getByRole('link', { name: '用户管理' })).toBeVisible()
     await expect(page.getByRole('link', { name: '商品管理' })).toBeVisible()
   })
