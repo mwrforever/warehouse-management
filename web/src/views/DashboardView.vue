@@ -69,7 +69,7 @@
               >
                 <span class="type-tag">{{ row.type }}</span>
                 <span class="font-code pending-no">{{ row.no }}</span>
-                <span class="pending-time">{{ row.created_at }}</span>
+                <span class="pending-time font-code">{{ row.created_at }}</span>
                 <el-icon class="row-arrow"><ArrowRight /></el-icon>
               </div>
             </div>
@@ -496,7 +496,7 @@ onMounted(() => {
 .alert-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-lg);
+  gap: var(--space-xl);
 }
 .alert-card {
   border: 1px solid #fecaca;
@@ -518,6 +518,7 @@ onMounted(() => {
 .alert-code {
   color: #64748b;
   font-size: 12px;
+  margin-left: var(--space-sm);
 }
 .alert-wh {
   font-size: 12px;

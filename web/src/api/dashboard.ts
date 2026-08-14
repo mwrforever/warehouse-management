@@ -34,7 +34,7 @@ export interface DashboardAlertItem {
   product_code: string
   warehouse_name: string
   quantity: string
-  safety_min: string
+  safety_min: number
 }
 
 export const dashboardApi = {
