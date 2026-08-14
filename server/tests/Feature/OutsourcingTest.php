@@ -144,6 +144,29 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('code', 422);
     }
 
+    public function test_store_rejects_non_positive_qty_with_422(): void
+    {
+        // 异常路径：委外数量 ≤ 0 → 422（格式层；spec 码段满）
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['quantity' => 0]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_rejects_missing_supplier_with_422(): void
+    {
+        // 异常路径：供应商缺失 → 422（格式层）
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['supplier_id' => null]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_rejects_missing_warehouse_or_location_with_422(): void
+    {
+        // 异常路径：仓库/库位缺失 → 422（格式层）
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['warehouse_id' => null]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['location_id' => null]))
+            ->assertJsonPath('code', 422);
+    }
+
     public function test_approve_deducts_finished_inventory_and_writes_movement(): void
     {
         // 核心不变式（发出）：余额 50→45、outsourcing_out 流水（direction=-1，商品=工单成品）

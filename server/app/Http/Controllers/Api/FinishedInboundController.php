@@ -56,7 +56,8 @@ class FinishedInboundController extends Controller
             $query->whereDate('finished_inbounds.created_at', '<=', $request->input('date_to'));
         }
 
-        $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+        // 预加载工单/明细/仓库/库位：消除列表逐行懒加载与逐行 SUM 聚合 N+1（每页最多 100 行 → 4×N 条查询）
+        $rows = $query->with(['order', 'items', 'warehouse', 'location'])->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
 
         return $this->ok([
             // join 别名列经 getAttribute 读取（PHPStan 静态分析可识别）；数量 = Σ 明细行（单成品语义取首行）
@@ -68,8 +69,9 @@ class FinishedInboundController extends Controller
                 'product_id' => $f->order_id ? $f->order?->product_id : null,
                 'product_name' => $f->getAttribute('product_name'),
                 'product_code' => $f->getAttribute('product_code'),
-                // 数量 = Σ 明细行（单成品语义取首行）；聚合不套 decimal cast，显式格式化两位小数（CheckController 先例）
-                'quantity' => number_format((float) $f->items()->sum('quantity'), 2, '.', ''),
+                // 数量 = Σ 明细行（单成品语义取首行）；预加载后内存聚合（聚合不套 decimal cast，
+                // 显式格式化两位小数——CheckController 先例）
+                'quantity' => number_format((float) $f->items->sum('quantity'), 2, '.', ''),
                 'warehouse_id' => $f->warehouse_id,
                 'warehouse_name' => $f->warehouse?->name,
                 'location_id' => $f->location_id,

@@ -152,6 +152,24 @@ class PickListTest extends TestCase
             ->assertJsonPath('code', 422);
     }
 
+    public function test_store_rejects_non_positive_qty_with_422(): void
+    {
+        // 异常路径：领料数量 ≤ 0 → 422（格式层；spec 码段满）
+        $this->withToken($this->token)->postJson('/api/v1/production/picks', $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'pick_qty' => 0],
+        ]]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_rejects_missing_warehouse_or_location_with_422(): void
+    {
+        // 异常路径：仓库/库位缺失 → 422（格式层）
+        $this->withToken($this->token)->postJson('/api/v1/production/picks', $this->payload(['warehouse_id' => null]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/picks', $this->payload(['location_id' => null]))
+            ->assertJsonPath('code', 422);
+    }
+
     public function test_approve_deducts_inventory_and_writes_movement(): void
     {
         // 核心不变式：审核后余额 50→30、pick 流水双写（direction=-1）、回写物料 issued_qty
@@ -246,6 +264,20 @@ class PickListTest extends TestCase
         $pick = PickList::where('no', $no)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/issue")
             ->assertJsonPath('code', 422);
+    }
+
+    public function test_issue_idempotent_when_already_all_issued(): void
+    {
+        // 幂等路径：重复发料 → 返回当前状态、不重复写（判重锁行后复查，事务内幂等）
+        $no = $this->createPick($this->payload());
+        $pick = PickList::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/approve")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/issue")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/issue")
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.issue_status', '全部发料');
+        $pick->refresh();
+        $this->assertSame(PickList::ISSUE_ALL, $pick->issue_status);
     }
 
     public function test_update_and_destroy_draft_ok_approved_rejected_with_1514(): void
