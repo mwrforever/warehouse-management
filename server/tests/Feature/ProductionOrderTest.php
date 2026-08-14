@@ -217,6 +217,19 @@ class ProductionOrderTest extends TestCase
             ->assertJsonPath('data.total', 0);
     }
 
+    public function test_index_progress_caps_at_100_when_completed_exceeds_plan(): void
+    {
+        // 边界路径：completed_qty 超计划（异常数据防御）→ progress 钳制 100 而非 >100 失真
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        // 模拟异常数据：直接改库绕过业务校验（completed 15 > 计划 10）
+        $order->completed_qty = 15;
+        $order->save();
+        $this->withToken($this->token)->getJson('/api/v1/production/orders')
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.items.0.progress', 100.0);
+    }
+
     public function test_show_returns_materials_and_operations(): void
     {
         // 正常路径：详情含物料需求（需求/已领/剩余）与工序列表（状态与累计值）

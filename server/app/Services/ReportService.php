@@ -53,8 +53,11 @@ class ReportService
             ->get();
 
         // 成本价估算：每商品取最近一次采购入库单价（created_at DESC, id DESC 首条生效；无记录则不参与金额）
+        // 限定余额行商品集（whereIn 单查），消除全表 cursor 扫描（性能债）
         $prices = [];
+        $productIds = $rows->pluck('product_id')->unique()->all();
         $priceQuery = PurchaseInboundItem::query()
+            ->whereIn('product_id', $productIds)
             ->select('product_id', 'price')
             ->orderByDesc('created_at')
             ->orderByDesc('id');

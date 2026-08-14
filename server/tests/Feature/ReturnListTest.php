@@ -39,6 +39,8 @@ class ReturnListTest extends TestCase
 
     private ProductionOrder $order;
 
+    private PickList $pick;
+
     private int $materialId;
 
     protected function setUp(): void
@@ -81,6 +83,7 @@ class ReturnListTest extends TestCase
         $pickRes->assertJsonPath('code', 0);
         $pick = PickList::where('no', $pickRes->json('data.no'))->first();
         $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/approve")->assertJsonPath('code', 0);
+        $this->pick = $pick;
         $this->materialId = $this->order->materials()->where('material_id', $this->mat->id)->first()->id;
         // 已领 20、库存 30-20=10
     }
@@ -134,6 +137,52 @@ class ReturnListTest extends TestCase
             ['product_id' => $this->fin->id, 'quantity' => 1],
         ]]))
             ->assertJsonPath('code', 1517);
+    }
+
+    public function test_store_rejects_empty_items_non_positive_and_duplicates_with_422(): void
+    {
+        // 异常路径：明细为空/数量≤0/重复商品 → 422（格式层；spec 码段满）
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['items' => []]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0],
+        ]]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 1],
+            ['product_id' => $this->mat->id, 'quantity' => 1],
+        ]]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_rejects_missing_warehouse_or_location_with_422(): void
+    {
+        // 异常路径：仓库/库位缺失 → 422（格式层）
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['warehouse_id' => null]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['location_id' => null]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_pick_id_must_belong_to_same_order_with_422(): void
+    {
+        // 异常路径：pick_id 属于其他工单的领料单 → 422（防跨工单挂单，追溯语义错乱）
+        // 建第二工单（FIN-002×5 → MAT-001 需求 10）并领料，挂到第一工单的退料单上
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->fin->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
+        ]);
+        $order2 = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $pickRes = $this->withToken($this->token)->postJson('/api/v1/production/picks', [
+            'order_id' => $order2->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->a01->id,
+            'items' => [['product_id' => $this->mat->id, 'pick_qty' => 5]],
+        ]);
+        $pick2 = PickList::where('no', $pickRes->json('data.no'))->first();
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['pick_id' => $pick2->id]))
+            ->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '领料单不属于该工单');
+        // 正常路径：本工单领料单正确归属 → 放行
+        $this->withToken($this->token)->postJson('/api/v1/production/returns', $this->payload(['pick_id' => $this->pick->id]))
+            ->assertJsonPath('code', 0);
     }
 
     public function test_approve_credits_inventory_and_writes_movement(): void

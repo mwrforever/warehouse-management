@@ -127,6 +127,31 @@ class FinishedInboundTest extends TestCase
             ->assertJsonPath('message', '入库商品与工单产品不一致');
     }
 
+    public function test_store_rejects_empty_items_non_positive_and_duplicates_with_422(): void
+    {
+        // 异常路径：明细为空/数量≤0/重复商品 → 422（格式层；spec 码段满）
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['items' => []]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['items' => [
+            ['product_id' => $this->fin->id, 'quantity' => 0],
+        ]]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['items' => [
+            ['product_id' => $this->fin->id, 'quantity' => 1],
+            ['product_id' => $this->fin->id, 'quantity' => 1],
+        ]]))
+            ->assertJsonPath('code', 422);
+    }
+
+    public function test_store_rejects_missing_warehouse_or_location_with_422(): void
+    {
+        // 异常路径：仓库/库位缺失 → 422（格式层）
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['warehouse_id' => null]))
+            ->assertJsonPath('code', 422);
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['location_id' => null]))
+            ->assertJsonPath('code', 422);
+    }
+
     public function test_approve_credits_inventory_and_completes_order(): void
     {
         // 核心不变式：审核后余额 20→30、finished_inbound 流水（direction=+1）、completed_qty 回写 10、

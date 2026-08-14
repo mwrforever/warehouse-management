@@ -318,10 +318,15 @@ class ProductionOrderController extends Controller
                     throw new ProductionException('当前状态不可下达', 1505);
                 }
                 // 缺料警告：全仓余额汇总 vs 需求（bcadd 累加防浮点；只读快照，允许下达）
+                // 物料与余额一次预取（with('material') + whereIn 单查分组），消除逐物料查询 N+1
+                $materials = $locked->materials()->with('material')->get();
+                $stockByMaterial = InventoryBalance::whereIn('product_id', $materials->pluck('material_id'))
+                    ->get()
+                    ->groupBy('product_id');
                 $warnings = [];
-                foreach ($locked->materials as $m) {
+                foreach ($materials as $m) {
                     $stock = '0.00';
-                    foreach (InventoryBalance::where('product_id', $m->material_id)->get() as $b) {
+                    foreach ($stockByMaterial->get($m->material_id) ?? collect() as $b) {
                         $stock = bcadd($stock, (string) $b->quantity, 2);
                     }
                     if (bccomp($stock, (string) $m->required_qty, 2) < 0) {
@@ -381,18 +386,26 @@ class ProductionOrderController extends Controller
 
     /**
      * 完工（生产中→已完成）：双前置校验——所有工序已完成（1507）+ 至少一次成品入库 completed_qty>0（1508）
+     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（op→next-op→order）/开工（op(seq1)→order）
+     * 全局同序；若先锁 order 再锁工序行会引入 order→op 反序，与并发报工构成 ABBA 死锁环
      */
     public function complete(ProductionOrder $order)
     {
         try {
             DB::transaction(function () use ($order) {
+                // 锁全部工序行（升序）：工序状态改为锁后一致读——与并发报工末批提交串行化
+                // （此前为无锁一致性读，窗口内可能读到「全部 DONE」的同时末笔报工在途，方向安全但读不可靠）
+                $operations = WorkOrderOperation::where('order_id', $order->id)
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->get();
                 // 锁工单行复查状态（幂等 1507）
                 $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== ProductionOrder::STATUS_PRODUCING) {
                     throw new ProductionException('当前状态不可完工', 1507);
                 }
-                // 前置 1：所有工序必须已完成（存在待开工/进行中 → 1507）
-                $hasUndone = $locked->operations()->where('status', '!=', WorkOrderOperation::STATUS_DONE)->exists();
+                // 前置 1：所有工序必须已完成（直接用已锁工序行判定，存在待开工/进行中 → 1507）
+                $hasUndone = $operations->contains(fn (WorkOrderOperation $op) => $op->status !== WorkOrderOperation::STATUS_DONE);
                 if ($hasUndone) {
                     throw new ProductionException('存在未完成工序，无法完工', 1507);
                 }

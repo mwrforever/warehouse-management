@@ -343,13 +343,14 @@ class PickListController extends Controller
         if ($pick->status !== PickList::STATUS_APPROVED) {
             return $this->fail(422, '请先审核领料单');
         }
-        // 防重复发料：已全部发料直接返回当前状态（幂等）
-        if ($pick->issue_status === PickList::ISSUE_ALL) {
-            return $this->ok(['issue_status' => PickList::ISSUE_LABELS[$pick->issue_status]]);
-        }
         DB::transaction(function () use ($pick) {
             // 锁领料单行复查状态（并发审核/发料串行化）
             $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
+            // 幂等判重移入事务：锁行后复查 issue_status，防并发双请求同时越过外部判重
+            // （结果写入相同故无正确性影响，此处消除竞态窗口）
+            if ($locked->issue_status === PickList::ISSUE_ALL) {
+                return;
+            }
             if ($locked->status !== PickList::STATUS_APPROVED) {
                 throw new ProductionException('请先审核领料单', 422);
             }

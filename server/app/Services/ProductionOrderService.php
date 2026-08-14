@@ -58,7 +58,8 @@ class ProductionOrderService
             return 0.0;
         }
 
-        return (float) bcmul(bcdiv($completed, $quantity, 4), '100', 1);
+        // 上限钳制 100：completed 超计划（异常/防御数据）时展示 100 而非超 100 失真
+        return min(100.0, (float) bcmul(bcdiv($completed, $quantity, 4), '100', 1));
     }
 
     /** 工序状态中文标签（详情/列表展示，防御未知状态） */

@@ -126,6 +126,66 @@ class ReportServiceTest extends TestCase
         $this->assertSame('3.00', $byName['成品']['quantity_total']);
     }
 
+    public function test_inventory_summary_type_labels_include_semi_finished(): void
+    {
+        // 边界路径：半成品类型 → 组名「半成品」（TYPE_LABELS 全量标签覆盖）
+        $raw = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        $semi = $this->makeProduct('SEMI-A', 'semi_finished', '半成品');
+        $fin = $this->makeProduct('FIN-A', 'finished', '成品');
+        $this->makeBalance($raw, '10.00');
+        $this->makeBalance($semi, '5.00');
+        $this->makeBalance($fin, '3.00');
+
+        $type = $this->service->inventorySummary('type');
+        $byName = collect($type['items'])->keyBy('group_name');
+        $this->assertSame('10.00', $byName['原料']['quantity_total']);
+        $this->assertSame('5.00', $byName['半成品']['quantity_total']);
+        $this->assertSame('3.00', $byName['成品']['quantity_total']);
+    }
+
+    public function test_inventory_summary_items_sorted_by_group_name(): void
+    {
+        // 确定性：多组按组名升序（排序保证输出稳定，不随插入顺序漂移）
+        $p = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        // 后插的仓库名靠前（AA < ZZ 字节序），插入顺序与输出顺序相反以验证排序
+        Warehouse::create(['name' => 'ZZ仓', 'code' => 'WH-ZZ', 'status' => 1]);
+        Warehouse::create(['name' => 'AA仓', 'code' => 'WH-AA', 'status' => 1]);
+        foreach (['主仓', 'ZZ仓', 'AA仓'] as $name) {
+            $wh = Warehouse::where('name', $name)->first();
+            InventoryBalance::create([
+                'product_id' => $p->id, 'warehouse_id' => $wh->id,
+                'location_id' => $this->location->id, 'quantity' => '1.00',
+                'safety_min' => 0, 'safety_max' => 0,
+            ]);
+        }
+
+        $res = $this->service->inventorySummary('warehouse');
+        $names = collect($res['items'])->pluck('group_name')->all();
+        // ASCII 前缀组名在 UTF-8 中文前（PHP sortBy 字节序）：AA仓 < ZZ仓 < 主仓
+        $this->assertSame(['AA仓', 'ZZ仓', '主仓'], $names);
+        $this->assertSame('3.00', $res['total']['quantity_total']);
+    }
+
+    public function test_inventory_summary_truncates_over_500_groups(): void
+    {
+        // 边界路径：>500 分组截断前 500 + truncated 标记（501 个仓库分组构造）
+        $p = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        for ($i = 0; $i < 501; $i++) {
+            $wh = Warehouse::create(['name' => '仓'.$i, 'code' => 'WH-'.$i, 'status' => 1]);
+            InventoryBalance::create([
+                'product_id' => $p->id, 'warehouse_id' => $wh->id,
+                'location_id' => $this->location->id, 'quantity' => '1.00',
+                'safety_min' => 0, 'safety_max' => 0,
+            ]);
+        }
+        $res = $this->service->inventorySummary('warehouse');
+        $this->assertTrue($res['truncated']);
+        $this->assertCount(500, $res['items']);
+        // total 仍为全区间真实合计（截断只作用于 items 展示，同 movements 口径）
+        $this->assertSame('501.00', $res['total']['quantity_total']);
+        $this->assertSame(1, $res['total']['product_count']);
+    }
+
     public function test_inventory_summary_amount_uses_latest_purchase_price(): void
     {
         // 正常路径：金额=余额×最近一次采购入库单价（分）÷100 元；取最近一条单价

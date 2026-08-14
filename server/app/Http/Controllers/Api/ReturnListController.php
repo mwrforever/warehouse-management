@@ -8,6 +8,7 @@ use App\Exceptions\InventoryException;
 use App\Exceptions\ProductionException;
 use App\Http\Controllers\Controller;
 use App\Models\DocumentSequence;
+use App\Models\PickList;
 use App\Models\ProductionOrderMaterial;
 use App\Models\ReturnList;
 use App\Models\ReturnListItem;
@@ -48,7 +49,8 @@ class ReturnListController extends Controller
             $query->whereDate('return_lists.created_at', '<=', $request->input('date_to'));
         }
 
-        $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
+        // 预加载仓库/库位：消除列表逐行懒加载 N+1（每页最多 100 行 → 2×N 条查询）
+        $rows = $query->with(['warehouse', 'location'])->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
 
         return $this->ok([
             // join 别名列经 getAttribute 读取（PHPStan 静态分析可识别）
@@ -80,6 +82,9 @@ class ReturnListController extends Controller
         }
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(422, '仓库与库位不能为空');
+        }
+        if ($fail = $this->validatePickBelongs($data)) {
+            return $fail;
         }
         // 草稿期校验：逐行 ≤ 该商品已领总量（1517）
         if ($msg = $this->validateIssued((int) $data['order_id'], $data['items'])) {
@@ -155,6 +160,9 @@ class ReturnListController extends Controller
             }
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(422, '仓库与库位不能为空');
+            }
+            if ($fail = $this->validatePickBelongs($data)) {
+                return $fail;
             }
             if ($msg = $this->validateIssued((int) $data['order_id'], $data['items'])) {
                 return $this->fail(1517, $msg);
@@ -312,6 +320,20 @@ class ReturnListController extends Controller
                 return $this->fail(422, '明细存在重复商品');
             }
             $seen[$item['product_id']] = true;
+        }
+
+        return null;
+    }
+
+    // pick_id 归属校验：领料单必须属于同一工单（防跨工单挂单，追溯语义错乱；
+    // 与 OutsourcingController「工序不属于该工单」同款 422 惯例，spec 码段满）
+    private function validatePickBelongs(array $data): ?JsonResponse
+    {
+        if (! empty($data['pick_id'])) {
+            $belongs = PickList::whereKey($data['pick_id'])->where('order_id', $data['order_id'])->exists();
+            if (! $belongs) {
+                return $this->fail(422, '领料单不属于该工单');
+            }
         }
 
         return null;
