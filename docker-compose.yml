@@ -5,10 +5,14 @@ services:
     image: mysql:8.4
     container_name: php-design-mysql
     environment:
+      # root 超级用户口令（仅本地开发容器；生产数据库需另行加固）
       MYSQL_ROOT_PASSWORD: root
+      # 自动创建的数据库名（与 server/.env 的 DB_DATABASE 对应）
       MYSQL_DATABASE: php_design
+      # 业务账号/口令（与 server/.env 的 DB_USERNAME/DB_PASSWORD 对应）
       MYSQL_USER: php
       MYSQL_PASSWORD: secret
+      # 容器时区（与业务时区约定对齐）
       TZ: Asia/Shanghai
     ports:
       - "3306:3306"
