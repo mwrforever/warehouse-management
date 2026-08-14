@@ -18,6 +18,7 @@ use App\Services\InventoryService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class ReturnListController extends Controller
@@ -92,8 +93,10 @@ class ReturnListController extends Controller
         if ($fail = $this->validatePickBelongs($data)) {
             return $fail;
         }
+        // 工单物料行一次预取：草稿期已领校验用（消除逐商品 N+1，P1-4）
+        $materialMap = $this->materialMap((int) $data['order_id']);
         // 草稿期校验：逐行 ≤ 该商品已领总量（1517）
-        if ($msg = $this->validateIssued((int) $data['order_id'], $data['items'])) {
+        if ($msg = $this->validateIssued($data['items'], $materialMap)) {
             return $this->fail(1517, $msg);
         }
 
@@ -110,8 +113,9 @@ class ReturnListController extends Controller
                     'location_id' => $data['location_id'],
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (ReturnList::where('no', 'like', 'RL'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($r) => (int) substr((string) $r->no, -3))->max() ?? 0),
+                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                fn () => ($no = ReturnList::where('no', 'like', 'RL'.date('Ymd').'-%')
+                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
             );
             $return->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],
@@ -175,7 +179,9 @@ class ReturnListController extends Controller
             if ($fail = $this->validatePickBelongs($data)) {
                 return $fail;
             }
-            if ($msg = $this->validateIssued((int) $data['order_id'], $data['items'])) {
+            // 工单物料行一次预取（同 store 口径，P1-4）
+            $materialMap = $this->materialMap((int) $data['order_id']);
+            if ($msg = $this->validateIssued($data['items'], $materialMap)) {
                 return $this->fail(1517, $msg);
             }
 
@@ -356,12 +362,17 @@ class ReturnListController extends Controller
         return null;
     }
 
-    // 草稿期已领校验：逐行 ≤ 该商品已领总量（1517），返回错误文案或 null
-    private function validateIssued(int $orderId, array $items): ?string
+    // 工单物料行预取（P1-4）：store/update 的草稿期已领校验共用一次查询，消除逐商品 N+1
+    private function materialMap(int $orderId): Collection
+    {
+        return ProductionOrderMaterial::where('order_id', $orderId)->get()->keyBy('material_id');
+    }
+
+    // 草稿期已领校验：逐行 ≤ 该商品已领总量（1517），返回错误文案或 null（物料行取自预取 map）
+    private function validateIssued(array $items, Collection $materialMap): ?string
     {
         foreach ($items as $item) {
-            $pm = ProductionOrderMaterial::where('order_id', $orderId)
-                ->where('material_id', $item['product_id'])->first();
+            $pm = $materialMap->get($item['product_id']);
             if (! $pm || bccomp((string) $item['quantity'], (string) $pm->issued_qty, 2) > 0) {
                 return '退料数量超过已领数量';
             }

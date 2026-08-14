@@ -123,8 +123,9 @@ class FinishedInboundController extends Controller
                     'location_id' => $data['location_id'],
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (FinishedInbound::where('no', 'like', 'FI'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($f) => (int) substr((string) $f->no, -3))->max() ?? 0),
+                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                fn () => ($no = FinishedInbound::where('no', 'like', 'FI'.date('Ymd').'-%')
+                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
             );
             $fi->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

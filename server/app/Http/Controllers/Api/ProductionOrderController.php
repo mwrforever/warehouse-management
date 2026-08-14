@@ -119,8 +119,9 @@ class ProductionOrderController extends Controller
                         'created_by' => auth()->id(),
                         'remark' => $data['remark'] ?? null,
                     ]),
-                    fn () => (int) (ProductionOrder::where('no', 'like', 'MO'.date('Ymd').'-%')
-                        ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+                    // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                    fn () => ($no = ProductionOrder::where('no', 'like', 'MO'.date('Ymd').'-%')
+                        ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
                 );
                 // BOM 展开结果快照：物料需求（order_id+material_id 唯一）+ 工序序列（order_id+seq 唯一）
                 $order->materials()->createMany(array_map(fn ($m) => [

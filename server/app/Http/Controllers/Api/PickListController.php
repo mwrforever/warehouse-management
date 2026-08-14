@@ -19,6 +19,7 @@ use App\Services\InventoryService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class PickListController extends Controller
@@ -122,12 +123,14 @@ class PickListController extends Controller
         if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
             return $this->fail(1513, '工单当前状态不可领料');
         }
+        // 工单物料行一次预取：草稿期剩余校验 + 明细需求快照共用（消除逐商品 2N 查询，P1-4）
+        $materialMap = $this->materialMap((int) $data['order_id']);
         // 草稿期校验：逐行 ≤ 需求剩余（1513）
-        if ($msg = $this->validateRemaining((int) $data['order_id'], $data['items'])) {
+        if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
             return $this->fail(1513, $msg);
         }
 
-        $pick = DB::transaction(function () use ($data) {
+        $pick = DB::transaction(function () use ($data, $materialMap) {
             $pick = $this->sequenceService->nextNo(
                 DocumentSequence::TYPE_PL,
                 'PL',
@@ -140,13 +143,14 @@ class PickListController extends Controller
                     'location_id' => $data['location_id'],
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (PickList::where('no', 'like', 'PL'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($p) => (int) substr((string) $p->no, -3))->max() ?? 0),
+                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                fn () => ($no = PickList::where('no', 'like', 'PL'.date('Ymd').'-%')
+                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
             );
-            // 明细行：需求快照 + 本次领用量
+            // 明细行：需求快照 + 本次领用量（需求快照取自预取 map，P1-4）
             $pick->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],
-                'required_qty' => $this->requiredQty((int) $data['order_id'], (int) $i['product_id']),
+                'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
                 'pick_qty' => $i['pick_qty'],
                 'issued_qty' => 0,
             ], $data['items']));
@@ -207,11 +211,13 @@ class PickListController extends Controller
             if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
                 return $this->fail(1513, '工单当前状态不可领料');
             }
-            if ($msg = $this->validateRemaining((int) $data['order_id'], $data['items'])) {
+            // 工单物料行一次预取（同 store 口径，P1-4）
+            $materialMap = $this->materialMap((int) $data['order_id']);
+            if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
                 return $this->fail(1513, $msg);
             }
 
-            DB::transaction(function () use ($pick, $data) {
+            DB::transaction(function () use ($pick, $data, $materialMap) {
                 // 锁领料单行复查状态：与审核并发时防止改到正在审核的单（幂等 1514）
                 $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== PickList::STATUS_DRAFT) {
@@ -223,11 +229,11 @@ class PickListController extends Controller
                     'location_id' => $data['location_id'],
                     'remark' => $data['remark'] ?? $locked->remark,
                 ]);
-                // 明细全量替换（草稿单无流水引用，直接重建）
+                // 明细全量替换（草稿单无流水引用，直接重建；需求快照取自预取 map，P1-4）
                 $locked->items()->delete();
                 $locked->items()->createMany(array_map(fn ($i) => [
                     'product_id' => $i['product_id'],
-                    'required_qty' => $this->requiredQty((int) $data['order_id'], (int) $i['product_id']),
+                    'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
                     'pick_qty' => $i['pick_qty'],
                     'issued_qty' => 0,
                 ], $data['items']));
@@ -418,12 +424,17 @@ class PickListController extends Controller
         return null;
     }
 
-    // 草稿期剩余量校验：逐行 ≤ 需求剩余（1513），返回错误文案或 null
-    private function validateRemaining(int $orderId, array $items): ?string
+    // 工单物料行预取（P1-4）：store/update 的草稿期校验与明细需求快照共用一次查询，消除逐商品 N+1
+    private function materialMap(int $orderId): Collection
+    {
+        return ProductionOrderMaterial::where('order_id', $orderId)->get()->keyBy('material_id');
+    }
+
+    // 草稿期剩余量校验：逐行 ≤ 需求剩余（1513），返回错误文案或 null（物料行取自预取 map）
+    private function validateRemaining(array $items, Collection $materialMap): ?string
     {
         foreach ($items as $item) {
-            $pm = ProductionOrderMaterial::where('order_id', $orderId)
-                ->where('material_id', $item['product_id'])->first();
+            $pm = $materialMap->get($item['product_id']);
             if (! $pm) {
                 return '领料数量超过需求数量';
             }
@@ -436,10 +447,10 @@ class PickListController extends Controller
         return null;
     }
 
-    // 物料需求数量（明细行快照：生成时点工单物料需求）
-    private function requiredQty(int $orderId, int $productId): string
+    // 物料需求数量（明细行快照：生成时点工单物料需求；取自预取 map）
+    private function requiredQty(Collection $materialMap, int $productId): string
     {
-        $pm = ProductionOrderMaterial::where('order_id', $orderId)->where('material_id', $productId)->first();
+        $pm = $materialMap->get($productId);
 
         return $pm ? (string) $pm->required_qty : '0';
     }

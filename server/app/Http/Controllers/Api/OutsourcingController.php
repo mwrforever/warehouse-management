@@ -116,8 +116,9 @@ class OutsourcingController extends Controller
                     'quantity' => $data['quantity'],
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (OutsourcingOrder::where('no', 'like', 'OS'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                fn () => ($no = OutsourcingOrder::where('no', 'like', 'OS'.date('Ymd').'-%')
+                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
             );
 
             return $os;
@@ -352,8 +353,9 @@ class OutsourcingController extends Controller
                         'operator' => auth()->user()->name ?? '',
                         'remark' => $data['remark'] ?? null,
                     ]),
-                    fn () => (int) (OutsourcingReceipt::where('no', 'like', 'OSR'.date('Ymd').'-%')
-                        ->get('no')->map(fn ($r) => (int) substr((string) $r->no, -3))->max() ?? 0),
+                    // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                    fn () => ($no = OutsourcingReceipt::where('no', 'like', 'OSR'.date('Ymd').'-%')
+                        ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
                 );
                 // 流水单号回补（流水创建时回收单号未定，先以委外单号占位后回补——审计链完整）
                 DB::table('inventory_movements')
@@ -408,15 +410,15 @@ class OutsourcingController extends Controller
         ]);
     }
 
-    // 已回收累计（Σ 已审核回收单数量，bcmath 累加）
+    // 已回收累计（Σ 回收单数量；SQL SUM 聚合——回收单创建即审核 status 恒 1，SUM 与逐行 bcadd 语义等价，
+    // 跨库 SUM 返回形态不一（MySQL 字符串 / SQLite 数值）统一 bcmath 归一；P1-3）
     private function receivedQty(int $outsourcingId): string
     {
-        $total = '0';
-        foreach (OutsourcingReceipt::where('outsourcing_id', $outsourcingId)->get() as $r) {
-            $total = bcadd($total, (string) $r->quantity, 2);
-        }
+        $total = OutsourcingReceipt::where('outsourcing_id', $outsourcingId)
+            ->selectRaw('SUM(quantity) as total')
+            ->value('total');
 
-        return $total;
+        return $total === null ? '0' : bcadd((string) $total, '0', 2);
     }
 
     // 委外单载荷格式校验（422 仅格式层）；业务码在方法内检查

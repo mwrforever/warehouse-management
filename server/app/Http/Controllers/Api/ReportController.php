@@ -46,10 +46,22 @@ class ReportController extends Controller
             'source_type' => ['sometimes', 'nullable', 'string', 'in:'.implode(',', InventoryMovement::SOURCE_TYPES)],
         ]);
 
+        // 区间跨度上限（P2-2①）：日粒度 ≤ 366 天、月粒度 ≤ 36 个月，超出 1601「日期区间过长」——
+        // 防区间无上限导致流水全量遍历（复用 1601 业务码，与倒置区间消息区分）
+        $granularity = $v['granularity'] ?? 'day';
+        $span = (new \DateTime($range['date_to']))->diff(new \DateTime($range['date_from']));
+        if ($granularity === 'day') {
+            if ($span->days > 366) {
+                return $this->fail(1601, '日期区间过长');
+            }
+        } elseif ($span->y * 12 + $span->m > 36) {
+            return $this->fail(1601, '日期区间过长');
+        }
+
         return $this->ok($this->service->movementsSummary(
             $range['date_from'],
             $range['date_to'],
-            $v['granularity'] ?? 'day',
+            $granularity,
             $v['source_type'] ?? null,
         ));
     }
