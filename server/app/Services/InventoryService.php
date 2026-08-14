@@ -9,6 +9,7 @@ use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\Product;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class InventoryService
@@ -26,15 +27,22 @@ class InventoryService
      */
     public function apply(array $movements, ?int $operatorId = null): void
     {
-        DB::transaction(function () use ($movements, $operatorId) {
+        // 商品预取（P1-2）：N 条明细 → 1 次 whereIn 单查上下限快照（只读，余额行锁语义不涉及商品行，
+        // 与逐笔 findOrFail 行为一致仅减查询次数；缺失商品在 applyOne 内回退 findOrFail 保持 404 语义）
+        $productIds = array_values(array_unique(array_map(fn ($m) => (int) $m['product_id'], $movements)));
+        $productMap = $productIds === []
+            ? collect()
+            : Product::whereIn('id', $productIds)->select(['id', 'safety_min', 'safety_max'])->get()->keyBy('id');
+
+        DB::transaction(function () use ($movements, $operatorId, $productMap) {
             foreach ($movements as $m) {
-                $this->applyOne($m, $operatorId);
+                $this->applyOne($m, $operatorId, $productMap);
             }
         });
     }
 
     // 单笔变动：行锁余额行 → 出库校验 → 写流水 + 更新余额（与调用方同事务）
-    private function applyOne(array $m, ?int $operatorId): void
+    private function applyOne(array $m, ?int $operatorId, Collection $productMap): void
     {
         $direction = (int) $m['direction'];
         $quantity = (float) $m['quantity'];
@@ -77,7 +85,8 @@ class InventoryService
             }
         }
 
-        $product = Product::findOrFail($m['product_id']);
+        // 预取 map 命中即用；缺失（商品不存在）回退 findOrFail 保持既有异常语义
+        $product = $productMap[$m['product_id']] ?? Product::findOrFail($m['product_id']);
         // 余额累加 + 上下限冗余同步（预警计算以商品实时值为准，此冗余仅作快照）
         $balance->quantity = (float) $balance->quantity + $direction * $quantity;
         // 上下限冗余同步（decimal cast 为字符串，显式转 float 保证类型一致）

@@ -143,40 +143,62 @@ class ReportService
         $query = InventoryMovement::query()
             // 闭区间：起始日 00:00:00 至结束日 23:59:59（字符串比较，跨月边界正确）
             ->where('created_at', '>=', $dateFrom.' 00:00:00')
-            ->where('created_at', '<=', $dateTo.' 23:59:59')
-            ->select('direction', 'quantity', 'created_at');
+            ->where('created_at', '<=', $dateTo.' 23:59:59');
         if ($sourceType !== null) {
             $query->where('source_type', $sourceType);
         }
 
-        $groups = [];
+        // totals 下推 SQL（P2-2②）：GROUP BY direction 单查取全区间合计（SUM/COUNT 标准 SQL 无方言差异；
+        // 跨库返回形态经 (string)/bcmath 归一，同 production() 先例）
         $totals = ['inbound_qty' => '0', 'outbound_qty' => '0', 'inbound_count' => 0, 'outbound_count' => 0];
-        foreach ($query->cursor() as $row) {
-            // PHP 侧按日/月分组（Carbon format，SQLite/MySQL 方言兼容）
-            $period = $row->created_at->format($granularity === 'month' ? 'Y-m' : 'Y-m-d');
-            $groups[$period] ??= ['inbound_qty' => '0', 'outbound_qty' => '0', 'inbound_count' => 0, 'outbound_count' => 0];
+        foreach (
+            (clone $query)
+                ->select('direction')
+                ->selectRaw('SUM(quantity) as q, COUNT(*) as c')
+                ->groupBy('direction')
+                ->get() as $row
+        ) {
             if ((int) $row->direction === 1) {
-                $groups[$period]['inbound_qty'] = bcadd($groups[$period]['inbound_qty'], (string) $row->quantity, 2);
-                $groups[$period]['inbound_count']++;
-                $totals['inbound_qty'] = bcadd($totals['inbound_qty'], (string) $row->quantity, 2);
-                $totals['inbound_count']++;
+                $totals['inbound_qty'] = bcadd((string) $row->getAttribute('q'), '0', 2);
+                $totals['inbound_count'] = (int) $row->getAttribute('c');
             } else {
-                $groups[$period]['outbound_qty'] = bcadd($groups[$period]['outbound_qty'], (string) $row->quantity, 2);
-                $groups[$period]['outbound_count']++;
-                $totals['outbound_qty'] = bcadd($totals['outbound_qty'], (string) $row->quantity, 2);
-                $totals['outbound_count']++;
+                $totals['outbound_qty'] = bcadd((string) $row->getAttribute('q'), '0', 2);
+                $totals['outbound_count'] = (int) $row->getAttribute('c');
             }
         }
 
-        ksort($groups); // period 字符串升序（Y-m-d / Y-m 字典序=时间序）
+        // 分桶遍历（P2-2③）：created_at 升序 + 500 桶预剪枝——出现第 501 个周期即置截断并 break
+        // （同周期行连续，break 时前 500 个最小周期已完整聚合，与 ksort+截断语义逐字节等价；
+        //   有序扫描走 movement_created_at 索引，传输量从「区间全量行」降为「前 500 周期行」）
+        $groups = [];
+        $truncated = false;
+        foreach ($query->select('direction', 'quantity', 'created_at')->orderBy('created_at')->cursor() as $row) {
+            // PHP 侧按日/月分组（Carbon format，SQLite/MySQL 方言兼容）
+            $period = $row->created_at->format($granularity === 'month' ? 'Y-m' : 'Y-m-d');
+            if (! isset($groups[$period])) {
+                if (count($groups) >= self::MAX_ROWS) {
+                    $truncated = true;
+                    break;
+                }
+                $groups[$period] = ['inbound_qty' => '0', 'outbound_qty' => '0', 'inbound_count' => 0, 'outbound_count' => 0];
+            }
+            if ((int) $row->direction === 1) {
+                $groups[$period]['inbound_qty'] = bcadd($groups[$period]['inbound_qty'], (string) $row->quantity, 2);
+                $groups[$period]['inbound_count']++;
+            } else {
+                $groups[$period]['outbound_qty'] = bcadd($groups[$period]['outbound_qty'], (string) $row->quantity, 2);
+                $groups[$period]['outbound_count']++;
+            }
+        }
+
+        // period 按 created_at 升序遍历自然升序（Y-m-d / Y-m 字典序=时间序，无需 ksort）
         $items = collect($groups)
             ->map(fn ($g, $period) => ['period' => $period] + $g)
             ->values()
             ->all();
-        $truncated = count($items) > self::MAX_ROWS;
 
         return [
-            'items' => $truncated ? array_slice($items, 0, self::MAX_ROWS) : $items,
+            'items' => $items,
             'totals' => $totals,
             'truncated' => $truncated,
         ];

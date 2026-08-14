@@ -176,19 +176,24 @@ class DashboardService
         }
 
         // 今日出入库：流水 created_at 当天闭区间（Carbon 本地时区边界，方言无关）
+        // SQL 聚合下推（P2-1②）：GROUP BY direction 单查替代全量 cursor + PHP 逐行求和
+        // （SUM 为标准 SQL 无方言差异；decimal(12,2) 求和与逐行 bcadd 精确等价，跨库形态 bcmath 归一）
         $today = Carbon::today();
         $inbound = '0';
         $outbound = '0';
         foreach (
             InventoryMovement::query()
                 ->whereBetween('created_at', [$today->startOfDay(), $today->copy()->endOfDay()])
-                ->select('direction', 'quantity')
-                ->cursor() as $m
+                ->select('direction')
+                ->selectRaw('SUM(quantity) as total')
+                ->groupBy('direction')
+                ->get() as $row
         ) {
-            if ((int) $m->direction === 1) {
-                $inbound = bcadd($inbound, (string) $m->quantity, 2);
+            $total = bcadd((string) $row->getAttribute('total'), '0', 2);
+            if ((int) $row->direction === 1) {
+                $inbound = $total;
             } else {
-                $outbound = bcadd($outbound, (string) $m->quantity, 2);
+                $outbound = $total;
             }
         }
 
