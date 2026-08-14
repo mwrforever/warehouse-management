@@ -321,6 +321,10 @@ class OutsourcingController extends Controller
                 $op = WorkOrderOperation::whereKey($locked->operation_id)->lockForUpdate()->first();
                 // 锁工单行取委外商品（= 工单成品）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
+                // 工单状态校验：与发出 approve 同口径 [RELEASED, PRODUCING]（spec §5.1 生产中→委外）
+                if (! in_array($order->status, [ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING], true)) {
+                    throw new ProductionException('工单当前状态不可委外', 1523);
+                }
                 // 统一引擎写流水+加余额（同事务双写）
                 $this->inventoryService->apply([[
                     'product_id' => $order->product_id,

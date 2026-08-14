@@ -117,6 +117,35 @@ class FinishedInboundTest extends TestCase
             ->assertJsonPath('message', '入库数量超过工单剩余产量');
     }
 
+    public function test_store_rejects_order_not_producing_with_1525(): void
+    {
+        // 异常路径（bug #2 回归）：spec §5.1 生产中→成品入库——已下达（未开工）工单不可入库
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->fin->id, 'quantity' => 10, 'plan_date' => now()->toDateString(),
+        ]);
+        $released = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$released->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson('/api/v1/production/finished-inbounds', $this->payload(['order_id' => $released->id]))
+            ->assertJsonPath('code', 1525)
+            ->assertJsonPath('message', '工单当前状态不可入库');
+    }
+
+    public function test_approve_rejects_released_order_and_not_auto_complete_with_1528(): void
+    {
+        // 异常路径（bug #2 回归）：草稿期合法建单后工单回退到「已下达」→ 审核被拒 1528，
+        // 且不得被自动完成分支越级置「已完成」（RELEASED→COMPLETED 跳过生产中）
+        $no = $this->createInbound($this->payload());
+        $this->order->status = ProductionOrder::STATUS_RELEASED;
+        $this->order->save();
+        $fi = FinishedInbound::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/finished-inbounds/{$fi->id}/approve")
+            ->assertJsonPath('code', 1528)
+            ->assertJsonPath('message', '工单当前状态不可入库');
+        // 状态不得越级流转，库存不变
+        $this->assertSame(ProductionOrder::STATUS_RELEASED, $this->order->refresh()->status);
+        $this->assertSame('20.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+    }
+
     public function test_store_rejects_wrong_product_with_1526(): void
     {
         // 异常路径：入库商品与工单产品不一致 → 1526
@@ -200,18 +229,22 @@ class FinishedInboundTest extends TestCase
 
     public function test_approve_rejects_when_remaining_shrunk_with_1525_rollback(): void
     {
-        // 核心不变式：两张草稿各 10 均在剩余 10 时创建（草稿期合法）；先审第一张（completed 10 剩余 0）
-        // → 审核第二张超量 1525 整体回滚（审核期锁工单行复核）
-        $no1 = $this->createInbound($this->payload());
+        // 核心不变式：第一张 6（草稿期合法）审核后 completed 6、剩余 4（工单仍生产中）；第二张 6 在
+        // 剩余 10 时创建（草稿期合法）→ 审核第二张超量 1525 整体回滚（审核期锁工单行复核）
+        $no1 = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->fin->id, 'quantity' => 6],
+        ]]));
         $no2 = $this->createInbound($this->payload());
         $fi1 = FinishedInbound::where('no', $no1)->first();
         $fi2 = FinishedInbound::where('no', $no2)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/finished-inbounds/{$fi1->id}/approve")->assertJsonPath('code', 0);
+        // 第一张未满产，工单保持生产中（状态守卫放行，1525 超量复核仍可达）
+        $this->assertSame(ProductionOrder::STATUS_PRODUCING, $this->order->refresh()->status);
         $res = $this->withToken($this->token)->postJson("/api/v1/production/finished-inbounds/{$fi2->id}/approve");
         $res->assertJsonPath('code', 1525)
             ->assertJsonPath('message', '入库数量超过工单剩余产量');
-        // 回滚验证：余额仍 30（第二张未入）、第二张仍草稿
-        $this->assertSame('30.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        // 回滚验证：余额仍 26（第一张 +6，第二张未入）、第二张仍草稿
+        $this->assertSame('26.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
         $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no2]);
         $this->assertSame(FinishedInbound::STATUS_DRAFT, $fi2->refresh()->status);
     }

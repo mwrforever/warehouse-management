@@ -131,6 +131,32 @@ class PickListTest extends TestCase
             ->assertJsonPath('message', '领料数量超过需求数量');
     }
 
+    public function test_store_rejects_order_not_producing_with_1513(): void
+    {
+        // 异常路径（bug #2 回归）：spec §5.1 生产中→领料——草稿工单不可领料（store 同步收紧）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->fin->id, 'quantity' => 10, 'plan_date' => now()->toDateString(),
+        ]);
+        $draft = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $this->withToken($this->token)->postJson('/api/v1/production/picks', $this->payload(['order_id' => $draft->id]))
+            ->assertJsonPath('code', 1513)
+            ->assertJsonPath('message', '工单当前状态不可领料');
+    }
+
+    public function test_approve_rejects_order_not_producing_with_1516(): void
+    {
+        // 异常路径（bug #2 回归）：草稿期合法建单后工单被关闭 → 审核被拒 1516，库存无变动
+        $no = $this->createPick($this->payload());
+        $this->order->status = ProductionOrder::STATUS_CLOSED;
+        $this->order->save();
+        $pick = PickList::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/approve")
+            ->assertJsonPath('code', 1516)
+            ->assertJsonPath('message', '工单当前状态不可领料');
+        // 余额守恒：被拒审核不得扣减库存
+        $this->assertSame('50.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+    }
+
     public function test_store_rejects_material_not_in_order_with_1513(): void
     {
         // 异常路径：商品不在工单物料需求中 → 1513（需求剩余 0，超量自然拦截）

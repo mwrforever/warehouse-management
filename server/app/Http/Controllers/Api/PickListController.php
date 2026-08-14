@@ -117,6 +117,11 @@ class PickListController extends Controller
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(422, '仓库与库位不能为空');
         }
+        // 工单状态校验：spec §5.1 生产中→领料（草稿/已下达/已完成/已关闭工单不可领料；1513 领料族码段）
+        $order = ProductionOrder::find($data['order_id']);
+        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+            return $this->fail(1513, '工单当前状态不可领料');
+        }
         // 草稿期校验：逐行 ≤ 需求剩余（1513）
         if ($msg = $this->validateRemaining((int) $data['order_id'], $data['items'])) {
             return $this->fail(1513, $msg);
@@ -197,6 +202,11 @@ class PickListController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(422, '仓库与库位不能为空');
             }
+            // 工单状态校验：spec §5.1 生产中→领料（同 store 口径）
+            $order = ProductionOrder::find($data['order_id']);
+            if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+                return $this->fail(1513, '工单当前状态不可领料');
+            }
             if ($msg = $this->validateRemaining((int) $data['order_id'], $data['items'])) {
                 return $this->fail(1513, $msg);
             }
@@ -266,6 +276,12 @@ class PickListController extends Controller
                 $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status === PickList::STATUS_APPROVED) {
                     throw new ProductionException('该领料单已审核', 1516);
+                }
+                // 锁工单行校验状态：spec §5.1 生产中→领料；锁序 单据行→工单行→物料行→余额行
+                // （全局无「物料→工单」反向路径，与委外发出/成品入库的 单据→工单 锁序一致，无 ABBA 环）
+                $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
+                if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+                    throw new ProductionException('工单当前状态不可领料', 1516);
                 }
                 $movements = [];
                 $issueMap = []; // [material_id => 本次领用累计] 待回写

@@ -282,6 +282,27 @@ class OutsourcingTest extends TestCase
         ])->assertJsonPath('code', 422);
     }
 
+    public function test_receipt_rejects_order_not_released_or_producing_with_1523(): void
+    {
+        // 异常路径（bug #2 回归）：发出后工单被关闭 → 回收被拒 1523（与发出 approve 同口径），无流水无回收单
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
+        // 发出已扣减：50 → 45
+        $this->assertSame('45.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->order->status = ProductionOrder::STATUS_CLOSED;
+        $this->order->save();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 5, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '工单当前状态不可委外');
+        // 被拒回收：库存不变、无回收单、委外单仍为已发出
+        $this->assertSame('45.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertDatabaseCount('outsourcing_receipts', 0);
+        $this->assertSame(OutsourcingOrder::STATUS_APPROVED, $os->refresh()->status);
+    }
+
     public function test_receipts_index_lists_records(): void
     {
         // 正常路径：回收记录列表（单号/数量/时间）
