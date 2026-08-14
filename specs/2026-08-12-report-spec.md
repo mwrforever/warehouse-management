@@ -33,6 +33,8 @@
 |---|---|---|
 | `/api/v1/reports/movements-summary` | `date_from, date_to, granularity(day/month), source_type(可空)` | 出入库趋势：`data:{items:[{period(如 2026-08-12), inbound_qty, outbound_qty, inbound_count, outbound_count}], totals:{inbound_qty, outbound_qty}}` |
 
+- 日期区间跨度上限：日粒度 ≤ 366 天、月粒度 ≤ 36 个月，超出返回业务码 1601「日期区间过长」（防区间无上限全量遍历；前端快捷项最大近 30 天不可触发）。
+
 ### 3.3 生产统计
 
 | 接口 | 参数 | 说明 |

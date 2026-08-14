@@ -373,6 +373,23 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
     const invBody = (await inv.json()) as { code: number; message: string }
     expect(invBody.code).toBe(1601)
     expect(invBody.message).toBe('开始日期不能晚于结束日期')
+    // 4. 区间跨度上限（P2-2）：日粒度 >366 天、月粒度 >36 个月 → 业务码 1601「日期区间过长」
+    // （前端快捷项最大近 30 天不可触发，API 直调断言；防区间无上限导致流水全量遍历）
+    const token = await page.evaluate(() => localStorage.getItem('token'))
+    const overDay = await page.request.get('/api/v1/reports/movements-summary', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { date_from: '2025-08-01', date_to: '2026-08-14', granularity: 'day' },
+    })
+    const overDayBody = (await overDay.json()) as { code: number; message: string }
+    expect(overDayBody.code).toBe(1601)
+    expect(overDayBody.message).toBe('日期区间过长')
+    const overMonth = await page.request.get('/api/v1/reports/movements-summary', {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { date_from: '2025-01-01', date_to: '2028-02-01', granularity: 'month' },
+    })
+    const overMonthBody = (await overMonth.json()) as { code: number; message: string }
+    expect(overMonthBody.code).toBe(1601)
+    expect(overMonthBody.message).toBe('日期区间过长')
   })
 
   test('TC-RPT-06 权限控制', async ({ page }) => {
