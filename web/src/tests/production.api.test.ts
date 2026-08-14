@@ -22,9 +22,11 @@ describe('productionApi 工单', () => {
     })
   })
 
-  it('createOrder 返回单号', async () => {
-    vi.mocked(http.post).mockResolvedValue({ data: { data: { no: 'MO20260812-001' } } })
-    const no = await productionApi.createOrder({
+  it('createOrder 返回单号与工单 id（新建后直开详情，不依赖列表回查）', async () => {
+    vi.mocked(http.post).mockResolvedValue({
+      data: { data: { no: 'MO20260812-001', id: 42 } },
+    })
+    const res = await productionApi.createOrder({
       product_id: 1,
       quantity: 10,
       plan_date: '2026-08-12',
@@ -34,7 +36,7 @@ describe('productionApi 工单', () => {
       quantity: 10,
       plan_date: '2026-08-12',
     })
-    expect(no).toBe('MO20260812-001')
+    expect(res).toEqual({ no: 'MO20260812-001', id: 42 })
   })
 
   it('releaseOrder 返回缺料警告列表', async () => {

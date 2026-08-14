@@ -59,4 +59,41 @@ describe('InventoryReportView', () => {
     expect(wrapper.text()).toContain('暂无数据')
     expect(wrapper.text()).toContain('0.00')
   })
+
+  it('快速切换维度时旧响应不覆盖新结果（bug #4 回归）', async () => {
+    // 竞态回归：第一次请求（category）挂起未返回，第二次（warehouse）先返回并渲染；
+    // 随后旧响应才返回——序号守卫必须丢弃旧响应，最终展示 warehouse 结果
+    let resolveFirst!: (v: unknown) => void
+    inventorySummary
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockResolvedValueOnce({
+        items: [
+          { group_name: '仓组', quantity_total: '2.00', product_count: 1, amount_total: null },
+        ],
+        total: { quantity_total: '2.00', product_count: 1, amount_total: null },
+        truncated: false,
+      })
+    const wrapper = mount(InventoryReportView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    // 切换「按仓库」维度：第二次请求立即返回
+    await wrapper.findAll('input[type="radio"]')[1]!.setValue()
+    await flushPromises()
+    expect(wrapper.text()).toContain('仓组')
+    // 旧响应（category 数据）此时才返回：必须被丢弃
+    resolveFirst({
+      items: [
+        { group_name: '旧分类组', quantity_total: '1.00', product_count: 1, amount_total: null },
+      ],
+      total: { quantity_total: '1.00', product_count: 1, amount_total: null },
+      truncated: false,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('仓组')
+    expect(wrapper.text()).not.toContain('旧分类组')
+  })
 })

@@ -322,7 +322,7 @@ onMounted(async () => {
         placeholder="状态"
         clearable
         style="width: 120px"
-        @change="loadList"
+        @change="search"
       >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />

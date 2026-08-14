@@ -178,18 +178,25 @@ async function save() {
       dialogVisible.value = false
       loadList()
     } else {
-      const no = await productionApi.createOrder(payload)
-      // 新建成功：重置筛选定位新单（列表按 id 倒序，新草稿必在首页）→ 取详情展示 BOM 展开结果
+      const res = await productionApi.createOrder(payload)
+      ElMessage.success(`工单 ${res.no} 创建成功`)
+      // 新建成功：直接以创建响应 id 拉详情打开 BOM 展开弹窗（不依赖列表回查——
+      // 旧实现列表刷新失败时误报「创建失败」误导用户重复提交，bug #11 回归）
+      expandData.value = await productionApi.orderDetail(res.id)
+      dialogVisible.value = false
+      expandVisible.value = true
+      // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
       query.page = 1
       query.keyword = ''
       query.product_id = undefined
       query.status = undefined
-      await loadList()
-      const created = list.value.find((r) => r.no === no)
-      if (!created) throw new Error('工单已创建，请刷新列表查看')
-      expandData.value = await productionApi.orderDetail(created.id)
-      dialogVisible.value = false
-      expandVisible.value = true
+      try {
+        const refreshed = await productionApi.orders(query)
+        list.value = refreshed.items
+        total.value = refreshed.total
+      } catch {
+        ElMessage.warning('列表刷新失败，请手动刷新')
+      }
       // 新建弹窗提交后清空表单（下次打开即为空表单）
       Object.assign(form, {
         product_id: undefined,
@@ -366,7 +373,7 @@ onMounted(async () => {
         clearable
         filterable
         style="width: 180px"
-        @change="loadList"
+        @change="search"
       >
         <el-option
           v-for="p in products"
@@ -380,7 +387,7 @@ onMounted(async () => {
         placeholder="状态"
         clearable
         style="width: 130px"
-        @change="loadList"
+        @change="search"
       >
         <el-option
           v-for="(label, key) in STATUS_OPTIONS"

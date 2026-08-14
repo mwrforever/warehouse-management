@@ -312,10 +312,10 @@ export const productionApi = {
     const { data } = await http.get(`/production/orders/${id}`)
     return data.data as ProductionOrderDetail
   },
-  // 新建草稿（响应单号）
+  // 新建草稿（响应单号 + 工单 id——新建成功后直接以 id 拉详情，不依赖列表回查，防刷新失败误报创建失败）
   async createOrder(payload: ProductionOrderPayload) {
     const { data } = await http.post('/production/orders', payload)
-    return data.data.no
+    return data.data as { no: string; id: number }
   },
   // 更新草稿（物料/工序快照重建）
   async updateOrder(id: number, payload: ProductionOrderPayload) {

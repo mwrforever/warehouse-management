@@ -48,7 +48,19 @@ function stepStatus(status: number) {
 // 加载工序（选单/报工成功后调用，步骤条随工序状态自动推进）
 async function loadOperations() {
   const orderId = selectedOrder.value
-  if (!orderId) return
+  if (!orderId) {
+    // 清除工单选择：重置详情/工序/报工表单——防止旧工单残留数据被误提交（bug #3 回归）
+    detail.value = null
+    operations.value = []
+    Object.assign(reportForm, {
+      qualified_qty: null,
+      defective_qty: 0,
+      hours: null,
+      operator: '',
+      remark: '',
+    })
+    return
+  }
   loading.value = true
   try {
     detail.value = await productionApi.orderDetail(orderId)
@@ -91,9 +103,10 @@ function validateHours() {
   }
 }
 
-// 提交报工：校验链（合格数必填且 ≤ 计划数 → 工时 ≥0）→ report → 成功提示 → 重新加载工序（步骤条推进）
+// 提交报工：校验链（已选工单且有进行中工序 → 合格数必填且 ≤ 计划数 → 工时 ≥0）→ report → 成功提示 → 重新加载工序（步骤条推进）
 async function submitReport() {
-  if (!currentOp.value) return
+  // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）
+  if (!selectedOrder.value || !detail.value || !currentOp.value) return
   if (reportForm.qualified_qty == null || Number(reportForm.qualified_qty) < 0) {
     ElMessage.warning('请填写合格的合格数')
     return

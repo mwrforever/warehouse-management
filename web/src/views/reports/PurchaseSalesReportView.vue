@@ -132,7 +132,11 @@ const chartOption = computed<EChartsOption>(() => ({
   ],
 }))
 
+// 请求序号守卫：快速切换日期/粒度时旧响应不得覆盖新结果（bug #4 回归）
+let requestSeq = 0
+
 async function load() {
+  const seq = ++requestSeq
   loading.value = true
   try {
     const res = await reportApi.purchaseSales({
@@ -140,12 +144,15 @@ async function load() {
       date_to: dateRange.value[1],
       granularity: granularity.value,
     })
+    if (seq !== requestSeq) return // 已有更新的请求在途：丢弃本次过期响应
     items.value = res.items
     totals.value = res.totals
   } catch (e) {
+    if (seq !== requestSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    loading.value = false
+    // 仅最新请求复位 loading（过期响应不干扰进行中的请求态）
+    if (seq === requestSeq) loading.value = false
   }
 }
 
