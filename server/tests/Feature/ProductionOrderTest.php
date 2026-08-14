@@ -95,6 +95,9 @@ class ProductionOrderTest extends TestCase
         $this->assertMatchesRegularExpression('/^MO\d{8}-001$/', $no);
         $order = ProductionOrder::where('no', $no)->first();
         $this->assertSame(ProductionOrder::STATUS_DRAFT, $order->status);
+        // 响应含 id：前端新建成功后直接以 id 拉详情，不依赖列表回查（bug #11 修复）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', $this->payload());
+        $res->assertJsonPath('code', 0)->assertJsonPath('data.id', ProductionOrder::where('no', $res->json('data.no'))->first()->id);
         // 物料快照：需求 = 数量 × 用量（bcmath）
         $mats = $order->materials()->with('material')->get()->keyBy('material_id');
         $this->assertSame('20.00', $mats[$this->mat->id]->required_qty);

@@ -144,7 +144,8 @@ class ProductionOrderController extends Controller
             return $this->fail($e->getCode() ?: 1501, $e->getMessage());
         }
 
-        return $this->ok(['no' => $order->no]);
+        // 响应含 id：前端新建成功后直接以 id 拉详情打开 BOM 展开弹窗，不依赖列表回查（防刷新失败误报创建失败）
+        return $this->ok(['no' => $order->no, 'id' => $order->id]);
     }
 
     /** 详情：抬头 + 物料需求（需求/已领/剩余）+ 工序列表（状态与累计合格/不良/工时） */

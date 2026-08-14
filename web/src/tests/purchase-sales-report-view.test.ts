@@ -67,4 +67,37 @@ describe('PurchaseSalesReportView', () => {
     // 空态三要素之「KPI 显示 0」：采购金额卡 formatThousand('0') 恒为 '0.00'
     expect(wrapper.findAll('.kpi-card').at(0)!.text()).toContain('0.00')
   })
+
+  it('快速切换粒度时旧响应不覆盖新结果（bug #4 回归）', async () => {
+    // 竞态回归：第一次请求（day）挂起未返回，第二次（month）先返回并渲染；
+    // 随后旧响应才返回——序号守卫必须丢弃旧响应，KPI 保持新值
+    let resolveFirst!: (v: unknown) => void
+    purchaseSales
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockResolvedValueOnce({
+        items: [],
+        totals: { purchase_amount: '222.22', sales_amount: '0', purchase_qty: '0', sales_qty: '0' },
+        truncated: false,
+      })
+    const wrapper = mount(PurchaseSalesReportView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    // 切换「按月」粒度：第二次请求立即返回
+    await wrapper.findAll('input[type="radio"]')[1]!.setValue()
+    await flushPromises()
+    expect(wrapper.findAll('.kpi-card').at(0)!.text()).toContain('222.22')
+    // 旧响应此时才返回：必须被丢弃
+    resolveFirst({
+      items: [],
+      totals: { purchase_amount: '999.99', sales_amount: '0', purchase_qty: '0', sales_qty: '0' },
+      truncated: false,
+    })
+    await flushPromises()
+    expect(wrapper.findAll('.kpi-card').at(0)!.text()).toContain('222.22')
+    expect(wrapper.findAll('.kpi-card').at(0)!.text()).not.toContain('999.99')
+  })
 })

@@ -79,19 +79,26 @@ function percent(row: InventorySummaryItem): string {
   return `${((v / t) * 100).toFixed(2)}%`
 }
 
+// 请求序号守卫：快速切换维度时旧响应不得覆盖新结果（bug #4 回归）
+let requestSeq = 0
+
 async function load() {
+  const seq = ++requestSeq
   loading.value = true
   try {
     const res = await reportApi.inventorySummary({ group_by: groupBy.value })
-    items.value = res.items
-    total.value = res.total
     // 预警商品数：库存预警接口按商品去重（低库存或超上限任一行命中即计入）
     const alerts = await inventoryApi.alerts()
+    if (seq !== requestSeq) return // 已有更新的请求在途：丢弃本次过期响应
+    items.value = res.items
+    total.value = res.total
     alertCount.value = new Set(alerts.items.map((a) => a.product_code)).size
   } catch (e) {
+    if (seq !== requestSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    loading.value = false
+    // 仅最新请求复位 loading（过期响应不干扰进行中的请求态）
+    if (seq === requestSeq) loading.value = false
   }
 }
 
