@@ -1,4 +1,6 @@
 * text=auto eol=lf
+# Windows 批处理必须 CRLF 行尾（cmd.exe 解析 LF-only 批处理会跳过命令导致闪退）
+*.bat text eol=crlf
 *.png binary
 *.jpg binary
 *.jpeg binary
