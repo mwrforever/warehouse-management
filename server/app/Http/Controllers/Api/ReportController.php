@@ -46,16 +46,10 @@ class ReportController extends Controller
             'source_type' => ['sometimes', 'nullable', 'string', 'in:'.implode(',', InventoryMovement::SOURCE_TYPES)],
         ]);
 
-        // 区间跨度上限（P2-2①）：日粒度 ≤ 366 天、月粒度 ≤ 36 个月，超出 1601「日期区间过长」——
+        // 区间跨度上限（日粒度 ≤ 366 天、月粒度 ≤ 36 个月，超出 1601「日期区间过长」）——
         // 防区间无上限导致流水全量遍历（复用 1601 业务码，与倒置区间消息区分）
         $granularity = $v['granularity'] ?? 'day';
-        $span = (new \DateTime($range['date_to']))->diff(new \DateTime($range['date_from']));
-        if ($granularity === 'day') {
-            if ($span->days > 366) {
-                return $this->fail(1601, '日期区间过长');
-            }
-        } elseif ($span->y * 12 + $span->m > 36 || ($span->y * 12 + $span->m === 36 && $span->d > 0)) {
-            // 月粒度含天数分量：36 个月 + 1 天以上同样超限（与日粒度 366 天口径对齐，防月+日拼接绕过）
+        if ($this->spanTooLong($range, $granularity)) {
             return $this->fail(1601, '日期区间过长');
         }
 
@@ -76,6 +70,10 @@ class ReportController extends Controller
         $range = $this->validDateRange($request);
         if ($range === null) {
             return $this->fail(1601, '开始日期不能晚于结束日期');
+        }
+        // 区间跨度上限（无粒度参数，按日粒度 366 天上限）：防区间无上限导致区间工单全量装载
+        if ($this->spanTooLong($range)) {
+            return $this->fail(1601, '日期区间过长');
         }
         $v = $request->validate([
             'product_id' => ['sometimes', 'nullable', 'integer'],
@@ -98,6 +96,11 @@ class ReportController extends Controller
             'granularity' => ['sometimes', 'string', 'in:day,month'],
         ]);
 
+        // 区间跨度上限（与出入库汇总同款）：防区间无上限导致单据+明细全量装载
+        if ($this->spanTooLong($range, $v['granularity'] ?? 'day')) {
+            return $this->fail(1601, '日期区间过长');
+        }
+
         return $this->ok($this->service->purchaseSales($range['date_from'], $range['date_to'], $v['granularity'] ?? 'day'));
     }
 
@@ -115,5 +118,20 @@ class ReportController extends Controller
 
         // 倒置区间：业务码 1601（spec §7），Y-m-d 字符串比较=日期比较
         return $v['date_from'] > $v['date_to'] ? null : $v;
+    }
+
+    /**
+     * 区间跨度上限校验（出入库/采购销售/生产共用）：日粒度 ≤ 366 天、月粒度 ≤ 36 个月
+     * 月粒度含天数分量：36 个月 + 1 天以上同样超限（与日粒度 366 天口径对齐，防月+日拼接绕过）；
+     * 无粒度参数的接口（生产统计）默认按日粒度上限
+     */
+    private function spanTooLong(array $range, string $granularity = 'day'): bool
+    {
+        $span = (new \DateTime($range['date_to']))->diff(new \DateTime($range['date_from']));
+        if ($granularity === 'day') {
+            return $span->days > 366;
+        }
+
+        return $span->y * 12 + $span->m > 36 || ($span->y * 12 + $span->m === 36 && $span->d > 0);
     }
 }

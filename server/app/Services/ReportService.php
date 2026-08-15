@@ -16,6 +16,7 @@ use App\Models\PurchaseInbound;
 use App\Models\PurchaseInboundItem;
 use App\Models\ReturnListItem;
 use App\Models\SalesOutbound;
+use App\Models\SalesOutboundItem;
 use Illuminate\Support\Carbon;
 
 class ReportService
@@ -25,6 +26,9 @@ class ReportService
 
     /** 商品类型中文标签（按类型分组维度展示用） */
     private const TYPE_LABELS = ['raw_material' => '原料', 'semi_finished' => '半成品', 'finished' => '成品'];
+
+    // 成本价 map 走共享服务（含缓存，采购入库审核时失效）——与仪表盘 KPI 共用一份缓存
+    public function __construct(private readonly CostPriceService $costPriceService) {}
 
     /**
      * 库存报表聚合：按维度汇总当前余额（group_by=category/warehouse/type）
@@ -55,19 +59,8 @@ class ReportService
             ->get();
 
         // 成本价估算：每商品取最近一次「已审核」采购入库单价（created_at DESC, id DESC 首条生效；无记录则不参与金额）
-        // 限定余额行商品集（whereIn 单查），消除全表 cursor 扫描（性能债）；
-        // whereHas 过滤已审核入库单——与 movementsSummary/purchaseSales 的 status=1 口径一致（草稿价参与会导致金额跳变，bug #7）
-        $prices = [];
-        $productIds = $rows->pluck('product_id')->unique()->all();
-        $priceQuery = PurchaseInboundItem::query()
-            ->whereIn('product_id', $productIds)
-            ->whereHas('purchaseInbound', fn ($q) => $q->where('status', PurchaseInbound::STATUS_APPROVED))
-            ->select('product_id', 'price')
-            ->orderByDesc('created_at')
-            ->orderByDesc('id');
-        foreach ($priceQuery->cursor() as $item) {
-            $prices[$item->product_id] = $prices[$item->product_id] ?? $item->price;
-        }
+        // 全量 map 含缓存（采购入库审核时失效），消除每次报表加载的历史明细扫描+filesort——口径与失效契约见 CostPriceService
+        $prices = $this->costPriceService->latestPriceMap();
 
         $groups = [];
         $totalQty = '0';
@@ -353,6 +346,9 @@ class ReportService
      * 采购口径=purchase_inbounds（status=1，inbound_at 闭区间，total_amount 合计）；
      * 销售口径=sales_outbounds（status=1，outbound_at 闭区间，total_amount 合计）；
      * 数量=已审核单据明细 quantity 合计。金额 bcdiv(,100,2) 输出元（2 位字符串）。
+     * totals=全区间 SQL 聚合（KPI 口径，不受分桶剪枝影响）；分桶按时间升序遍历 + 500 周期
+     * 预剪枝——第 501 个周期出现即置截断并 break（与旧「全量装载+ksort+截断」语义等价，
+     * 同 movementsSummary 先例；区间内单据/明细传输量受控，不再全量装载）。
      *
      * @param  string  $dateFrom  起始日期 Y-m-d（含当天 00:00:00）
      * @param  string  $dateTo  结束日期 Y-m-d（含当天 23:59:59）
@@ -360,60 +356,119 @@ class ReportService
      */
     public function purchaseSales(string $dateFrom, string $dateTo, string $granularity): array
     {
+        $periodFormat = $granularity === 'month' ? 'Y-m' : 'Y-m-d';
         $groups = [];
-        $totals = ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+        $truncated = false;
 
-        // 采购侧：已审核入库单 + 明细（含 period 计算与数量合计）
+        // totals 下推 SQL：单行聚合取全区间合计（跨层口径与剪枝前一致；SUM 标准 SQL 无方言差异，
+        // 空集返回 null 统一归 '0'，与旧实现空区间输出 '0' 的契约一致）
+        $totals = [
+            'purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0',
+        ];
+        $amount = PurchaseInbound::query()
+            ->where('status', 1)
+            ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
+            ->where('inbound_at', '<=', $dateTo.' 23:59:59')
+            ->selectRaw('SUM(total_amount) as a')
+            ->value('a');
+        $qty = PurchaseInboundItem::query()
+            ->join('purchase_inbounds', 'purchase_inbounds.id', '=', 'purchase_inbound_items.inbound_id')
+            ->where('purchase_inbounds.status', 1)
+            ->where('purchase_inbounds.inbound_at', '>=', $dateFrom.' 00:00:00')
+            ->where('purchase_inbounds.inbound_at', '<=', $dateTo.' 23:59:59')
+            ->selectRaw('SUM(purchase_inbound_items.quantity) as q')
+            ->value('q');
+        // 金额/数量各自独立判空：存在单据但无明细行时金额非空而数量 SUM 为 null（归 '0'，与旧实现一致）
+        if ($amount !== null) {
+            // 金额分→元（与分桶口径一致）；bcmath 归一跨库 SUM 形态
+            $totals['purchase_amount'] = bcdiv(bcadd((string) $amount, '0', 2), '100', 2);
+        }
+        if ($qty !== null) {
+            $totals['purchase_qty'] = bcadd((string) $qty, '0', 2);
+        }
+        $amount = SalesOutbound::query()
+            ->where('status', 1)
+            ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
+            ->where('outbound_at', '<=', $dateTo.' 23:59:59')
+            ->selectRaw('SUM(total_amount) as a')
+            ->value('a');
+        $qty = SalesOutboundItem::query()
+            ->join('sales_outbounds', 'sales_outbounds.id', '=', 'sales_outbound_items.outbound_id')
+            ->where('sales_outbounds.status', 1)
+            ->where('sales_outbounds.outbound_at', '>=', $dateFrom.' 00:00:00')
+            ->where('sales_outbounds.outbound_at', '<=', $dateTo.' 23:59:59')
+            ->selectRaw('SUM(sales_outbound_items.quantity) as q')
+            ->value('q');
+        if ($amount !== null) {
+            $totals['sales_amount'] = bcdiv(bcadd((string) $amount, '0', 2), '100', 2);
+        }
+        if ($qty !== null) {
+            $totals['sales_qty'] = bcadd((string) $qty, '0', 2);
+        }
+
+        // 分桶遍历（升序 + 500 周期预剪枝）：lazy 分块装载并按块预载明细（cursor 不执行预载，
+        // 会退化为逐单懒加载 N+1，故用 lazy）；明细数量合计保留 PHP 侧分桶（跨库方言无关）
         $inbounds = PurchaseInbound::query()
             ->with('items')
             ->where('status', 1)
             ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('inbound_at', '<=', $dateTo.' 23:59:59')
-            ->get();
+            ->orderBy('inbound_at')
+            ->orderBy('id')
+            ->lazy();
         foreach ($inbounds as $in) {
-            $period = Carbon::parse($in->inbound_at)->format($granularity === 'month' ? 'Y-m' : 'Y-m-d');
-            $groups[$period] ??= ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+            $period = Carbon::parse($in->inbound_at)->format($periodFormat);
+            if (! isset($groups[$period])) {
+                if (count($groups) >= self::MAX_ROWS) {
+                    $truncated = true;
+                    break;
+                }
+                $groups[$period] = ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+            }
             $yuan = bcdiv($in->total_amount, '100', 2);
             $groups[$period]['purchase_amount'] = bcadd($groups[$period]['purchase_amount'], $yuan, 2);
-            $totals['purchase_amount'] = bcadd($totals['purchase_amount'], $yuan, 2);
             $qty = '0';
             foreach ($in->items as $item) {
                 $qty = bcadd($qty, $item->quantity, 2);
             }
             $groups[$period]['purchase_qty'] = bcadd($groups[$period]['purchase_qty'], $qty, 2);
-            $totals['purchase_qty'] = bcadd($totals['purchase_qty'], $qty, 2);
         }
 
-        // 销售侧：已审核出库单 + 明细（同结构）
+        // 销售侧：同构（升序 + 500 周期预剪枝；截断标志两侧共用，任一侧触及即置位）
         $outbounds = SalesOutbound::query()
             ->with('items')
             ->where('status', 1)
             ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('outbound_at', '<=', $dateTo.' 23:59:59')
-            ->get();
+            ->orderBy('outbound_at')
+            ->orderBy('id')
+            ->lazy();
         foreach ($outbounds as $out) {
-            $period = Carbon::parse($out->outbound_at)->format($granularity === 'month' ? 'Y-m' : 'Y-m-d');
-            $groups[$period] ??= ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+            $period = Carbon::parse($out->outbound_at)->format($periodFormat);
+            if (! isset($groups[$period])) {
+                if (count($groups) >= self::MAX_ROWS) {
+                    $truncated = true;
+                    break;
+                }
+                $groups[$period] = ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+            }
             $yuan = bcdiv($out->total_amount, '100', 2);
             $groups[$period]['sales_amount'] = bcadd($groups[$period]['sales_amount'], $yuan, 2);
-            $totals['sales_amount'] = bcadd($totals['sales_amount'], $yuan, 2);
             $qty = '0';
             foreach ($out->items as $item) {
                 $qty = bcadd($qty, $item->quantity, 2);
             }
             $groups[$period]['sales_qty'] = bcadd($groups[$period]['sales_qty'], $qty, 2);
-            $totals['sales_qty'] = bcadd($totals['sales_qty'], $qty, 2);
         }
 
-        ksort($groups);
+        // period 按升序遍历自然有序（Y-m-d / Y-m 字典序=时间序，无需 ksort）
         $items = collect($groups)
             ->map(fn ($g, $period) => ['period' => $period] + $g)
             ->values()
             ->all();
-        $truncated = count($items) > self::MAX_ROWS;
 
         return [
-            'items' => $truncated ? array_slice($items, 0, self::MAX_ROWS) : $items,
+            'items' => $items,
             'totals' => $totals,
             'truncated' => $truncated,
         ];

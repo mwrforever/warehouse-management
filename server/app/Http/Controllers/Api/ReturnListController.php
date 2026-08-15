@@ -258,6 +258,8 @@ class ReturnListController extends Controller
                 }
                 $movements = [];
                 $writeOff = []; // [material_id => 本次冲销量] 待回写
+                /** @var array<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
+                $pmMap = [];
                 /** @var ReturnListItem $item */
                 foreach ($locked->items as $item) {
                     // 锁物料需求行：防并发超退（多张退料单同时审同一物料时串行化）
@@ -273,6 +275,8 @@ class ReturnListController extends Controller
                         throw new ProductionException('退料数量超过已领数量', 1517);
                     }
                     $writeOff[$item->product_id] = bcadd((string) ($writeOff[$item->product_id] ?? '0'), (string) $item->quantity, 2);
+                    // 锁定行留存复用（同物料多行明细指向同一需求行，覆盖存入等价）
+                    $pmMap[$item->product_id] = $pm;
                     $movements[] = [
                         'product_id' => $item->product_id,
                         'warehouse_id' => $locked->warehouse_id,
@@ -287,10 +291,10 @@ class ReturnListController extends Controller
                 }
                 // 统一引擎写流水+加余额（同事务双写）
                 $this->inventoryService->apply($movements, auth()->id());
-                // 冲销工单物料需求 issued_qty（bcmath 减法）
+                // 冲销工单物料需求 issued_qty（bcmath 减法）：复用第一循环已锁定的行对象——
+                // 行已被本事务锁定且期间无人可改，二次查询纯属多余（N 条明细省 N 次查询）
                 foreach ($writeOff as $materialId => $qty) {
-                    $pm = ProductionOrderMaterial::where('order_id', $locked->order_id)
-                        ->where('material_id', $materialId)->firstOrFail();
+                    $pm = $pmMap[$materialId];
                     $pm->issued_qty = bcsub((string) $pm->issued_qty, $qty, 2);
                     $pm->save();
                 }

@@ -137,6 +137,37 @@ class ReportApiTest extends TestCase
             ->assertJsonPath('code', 1601);
     }
 
+    public function test_purchase_sales_day_span_over_366_days_return_1601(): void
+    {
+        // 核心路径（P2-1 回归）：采购销售日粒度跨度超 366 天 → 1601（防单据+明细区间全量装载）
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/purchase-sales?date_from=2025-08-01&date_to=2026-08-14&granularity=day')
+            ->assertOk()
+            ->assertJson(['code' => 1601, 'message' => '日期区间过长']);
+    }
+
+    public function test_purchase_sales_month_span_over_36_months_return_1601(): void
+    {
+        // 核心路径（P2-1 回归）：月粒度超 36 个月 → 1601；恰好 36 个月放行
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/purchase-sales?date_from=2025-01-01&date_to=2028-02-01&granularity=month')
+            ->assertOk()
+            ->assertJson(['code' => 1601, 'message' => '日期区间过长']);
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/purchase-sales?date_from=2025-01-01&date_to=2028-01-01&granularity=month')
+            ->assertOk()
+            ->assertJson(['code' => 0]);
+    }
+
+    public function test_production_day_span_over_366_days_return_1601(): void
+    {
+        // 核心路径（P2-1 回归）：生产统计（无粒度参数，按日粒度 366 天上限）超限 → 1601（防区间工单全量装载）
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/production?date_from=2025-08-01&date_to=2026-08-14')
+            ->assertOk()
+            ->assertJson(['code' => 1601, 'message' => '日期区间过长']);
+    }
+
     public function test_movements_summary_missing_dates_return_422(): void
     {
         // 边界路径：缺日期参数 → 422 格式层

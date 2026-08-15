@@ -90,12 +90,14 @@ class InventoryController extends Controller
         if ($request->filled('direction')) {
             $query->where('inventory_movements.direction', (int) $request->input('direction'));
         }
-        // 日期范围闭区间筛选（created_at 流水时间）
+        // 日期范围闭区间筛选（created_at 流水时间）：字符串比较替代 whereDate——
+        // whereDate 对列套 DATE() 函数使 movement_created_at 索引失效，流水表只增不删会退化为全表扫描；
+        // 闭区间写法与 ReportService::movementsSummary 同款（'Y-m-d 00:00:00'/'Y-m-d 23:59:59'，行为等价）
         if ($request->filled('date_from')) {
-            $query->whereDate('inventory_movements.created_at', '>=', $request->input('date_from'));
+            $query->where('inventory_movements.created_at', '>=', $request->input('date_from').' 00:00:00');
         }
         if ($request->filled('date_to')) {
-            $query->whereDate('inventory_movements.created_at', '<=', $request->input('date_to'));
+            $query->where('inventory_movements.created_at', '<=', $request->input('date_to').' 23:59:59');
         }
 
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));

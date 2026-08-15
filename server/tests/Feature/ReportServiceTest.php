@@ -660,4 +660,35 @@ class ReportServiceTest extends TestCase
         $this->assertSame('0', $res['totals']['purchase_amount']);
         $this->assertSame('0', $res['totals']['sales_amount']);
     }
+
+    public function test_purchase_sales_truncates_at_500_periods_but_totals_cover_full_range(): void
+    {
+        // 边界路径（P2-1 剪枝回归）：501 个周期 → items 截断为最小 500 周期且 truncated=true；
+        // totals 为全区间 SQL 合计不受剪枝影响（KPI 口径与剪枝前等价）
+        $sup = Supplier::create(['name' => '供应商A', 'code' => 'SUP-A', 'status' => 1]);
+        $p = $this->makeProduct('MAT-T', 'raw_material', '原材料');
+        for ($i = 0; $i < 501; $i++) {
+            $in = PurchaseInbound::create([
+                'no' => 'PI-T-'.$i, 'supplier_id' => $sup->id,
+                'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+                'status' => 1, 'total_amount' => 100,
+                'inbound_at' => Carbon::create(2026, 1, 1)->addDays($i)->toDateTimeString(),
+            ]);
+            PurchaseInboundItem::create([
+                'inbound_id' => $in->id, 'product_id' => $p->id,
+                'quantity' => 1, 'price' => 100, 'amount' => 100,
+            ]);
+        }
+
+        $res = $this->service->purchaseSales('2026-01-01', '2027-05-17', 'day');
+
+        $this->assertCount(500, $res['items']);
+        $this->assertTrue($res['truncated']);
+        // 前 500 个最小周期保留：首周期 2026-01-01、末周期 2027-05-15（第 501 天 2027-05-16 被剪掉）
+        $this->assertSame('2026-01-01', $res['items'][0]['period']);
+        $this->assertSame('2027-05-15', $res['items'][499]['period']);
+        // totals 仍为全区间合计：501 × 1.00 元、501 × 数量 1
+        $this->assertSame('501.00', $res['totals']['purchase_amount']);
+        $this->assertSame('501.00', $res['totals']['purchase_qty']);
+    }
 }
