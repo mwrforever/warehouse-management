@@ -54,7 +54,8 @@ class ReportController extends Controller
             if ($span->days > 366) {
                 return $this->fail(1601, '日期区间过长');
             }
-        } elseif ($span->y * 12 + $span->m > 36) {
+        } elseif ($span->y * 12 + $span->m > 36 || ($span->y * 12 + $span->m === 36 && $span->d > 0)) {
+            // 月粒度含天数分量：36 个月 + 1 天以上同样超限（与日粒度 366 天口径对齐，防月+日拼接绕过）
             return $this->fail(1601, '日期区间过长');
         }
 

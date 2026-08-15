@@ -110,6 +110,15 @@ class ReportApiTest extends TestCase
             ->assertJson(['code' => 0]);
     }
 
+    public function test_movements_summary_month_span_36_months_plus_days_return_1601(): void
+    {
+        // 边界路径（G2 回归）：月粒度恰好 36 个月 + 30 天 → 1601（天数分量参与上限判定，不再放行）
+        $this->actingAs($this->admin)
+            ->getJson('/api/v1/reports/movements-summary?date_from=2025-01-01&date_to=2028-01-31&granularity=month')
+            ->assertOk()
+            ->assertJson(['code' => 1601, 'message' => '日期区间过长']);
+    }
+
     public function test_production_inverted_dates_return_1601(): void
     {
         // 边界路径：生产统计同样拦截倒置日期

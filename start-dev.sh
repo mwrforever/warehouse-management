@@ -40,9 +40,11 @@ if ! docker compose up -d mysql; then
 fi
 
 echo "==> [2/5] 等待 MySQL 就绪..."
+# root 口令默认与 docker-compose.yml 一致，可用 MYSQL_ROOT_PASSWORD 环境变量覆盖（加固口令后无需改脚本）
+MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-root}"
 MYSQL_READY=0
 for i in $(seq 1 30); do
-    if docker exec php-design-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
+    if docker exec php-design-mysql mysqladmin ping -u root -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
         MYSQL_READY=1
         echo "    MySQL 就绪（等待 ${i}s）"
         break
@@ -50,7 +52,8 @@ for i in $(seq 1 30); do
     sleep 1
 done
 if [ "$MYSQL_READY" -ne 1 ]; then
-    echo "✗ MySQL 30 秒内未就绪：请检查 Docker 容器状态（docker logs php-design-mysql）"
+    echo "✗ MySQL 30 秒内未就绪：请检查 Docker 容器状态（docker logs php-design-mysql）；"
+    echo "  若已加固过 root 口令，请用 MYSQL_ROOT_PASSWORD 环境变量传入与 docker-compose.yml 一致的密码"
     exit 1
 fi
 
@@ -61,7 +64,8 @@ if ! (cd server && php artisan migrate --seed); then
 fi
 
 # 端口占用预检：8000（后端）/ 5173（前端）任一被占用则退出，避免起服务失败后留下半启动状态
-if netstat -ano 2>/dev/null | grep -qE "LISTENING.*(:8000|:5173)"; then
+# 注意 netstat 输出中端口列在状态列之前，故端口号须出现在 LISTENING 之前；[^0-9] 防 :51733 之类子串误命中
+if netstat -ano 2>/dev/null | grep -qE "(:8000|:5173)[^0-9].*(LISTENING|LISTEN)"; then
     echo "✗ 端口 8000 或 5173 已被占用（服务可能已在运行），请先停止后重试"
     exit 1
 fi
@@ -73,14 +77,29 @@ BACK_PID=$!
 FRONT_PID=$!
 
 echo "==> [5/5] 等待服务就绪并打开浏览器..."
+# 就绪探测：超时未就绪（端口被占、npm 编译失败、后端启动报错）则报错退出，不打开浏览器、不打印成功横幅
+BACK_READY=0
 for i in $(seq 1 60); do
-    curl -sf http://127.0.0.1:8000 >/dev/null 2>&1 && break
+    if curl -sf http://127.0.0.1:8000 >/dev/null 2>&1; then
+        BACK_READY=1
+        break
+    fi
     sleep 1
 done
+FRONT_READY=0
 for i in $(seq 1 90); do
-    curl -sf http://localhost:5173 >/dev/null 2>&1 && break
+    if curl -sf http://localhost:5173 >/dev/null 2>&1; then
+        FRONT_READY=1
+        break
+    fi
     sleep 1
 done
+if [ "$BACK_READY" -ne 1 ] || [ "$FRONT_READY" -ne 1 ]; then
+    echo "✗ 服务未在预期时间内就绪，不打开浏览器："
+    [ "$BACK_READY" -ne 1 ] && echo "  后端 :8000 60 秒内未就绪（查看上方 php artisan serve 输出，检查端口占用）"
+    [ "$FRONT_READY" -ne 1 ] && echo "  前端 :5173 90 秒内未就绪（查看上方 npm run dev 输出，检查端口占用/编译错误）"
+    exit 1
+fi
 
 # 打开默认浏览器（Windows 用 explorer.exe；macOS/Linux 用 open/xdg-open）
 if command -v explorer.exe >/dev/null 2>&1; then

@@ -10,6 +10,7 @@ use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class RbacSeeder extends Seeder
 {
@@ -145,16 +146,18 @@ class RbacSeeder extends Seeder
             [
                 'name' => '管理员',
                 'email' => 'admin@php-design.local',
-                'password' => env('ADMIN_PASSWORD', 'admin123'),
+                'password' => config('app.admin_password') ?: 'admin123',
                 'status' => 1,
             ]
         );
-        // 密码轮换：既有 admin 与 env 口令不一致时同步更新（重跑种子会按 env 轮换 admin 密码——
-        // 保证 ADMIN_PASSWORD 安全修复在已初始化环境同样生效，而非仅首次建号；User 模型 password cast 已自动哈希）
-        $password = env('ADMIN_PASSWORD', 'admin123');
-        if (! Hash::check($password, $adminUser->password)) {
-            $adminUser->password = $password;
+        // 密码轮换：仅当显式配置 ADMIN_PASSWORD 时，既有 admin 密码与配置不一致才同步更新
+        // （fail-closed：env 缺失时跳过，防止重跑种子把用户改过的强口令静默降级回公开弱口令 admin123；
+        // 经 config 读取，config:cache 后生产环境同样生效；User 模型 password cast 已自动哈希）
+        $envPassword = config('app.admin_password');
+        if ($envPassword !== null && $envPassword !== '' && ! Hash::check($envPassword, $adminUser->password)) {
+            $adminUser->password = $envPassword;
             $adminUser->save();
+            Log::info('admin 密码已按 ADMIN_PASSWORD 环境变量轮换');
         }
         $adminUser->roles()->syncWithoutDetaching([$admin->id]);
 

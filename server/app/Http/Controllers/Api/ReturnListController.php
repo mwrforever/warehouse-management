@@ -85,9 +85,9 @@ class ReturnListController extends Controller
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(422, '仓库与库位不能为空');
         }
-        // 工单状态校验：spec §5.1 生产中→退料（草稿/已下达/已完成/已关闭工单不可退料；1517 退料族码段）
+        // 工单状态校验：退料允许生产中/已完成（完工余料退回，G1 放行）；草稿/已下达未领料、关闭后无操作（PRD-14）仍拒绝
         $order = ProductionOrder::find($data['order_id']);
-        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+        if (! $order || ! in_array($order->status, [ProductionOrder::STATUS_PRODUCING, ProductionOrder::STATUS_COMPLETED], true)) {
             return $this->fail(1517, '工单当前状态不可退料');
         }
         if ($fail = $this->validatePickBelongs($data)) {
@@ -171,9 +171,9 @@ class ReturnListController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(422, '仓库与库位不能为空');
             }
-            // 工单状态校验：spec §5.1 生产中→退料（同 store 口径）
+            // 工单状态校验：生产中/已完成可退料（同 store 口径，G1 完工余料退回放行）
             $order = ProductionOrder::find($data['order_id']);
-            if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+            if (! $order || ! in_array($order->status, [ProductionOrder::STATUS_PRODUCING, ProductionOrder::STATUS_COMPLETED], true)) {
                 return $this->fail(1517, '工单当前状态不可退料');
             }
             if ($fail = $this->validatePickBelongs($data)) {
@@ -250,10 +250,10 @@ class ReturnListController extends Controller
                 if ($locked->status === ReturnList::STATUS_APPROVED) {
                     throw new ProductionException('该退料单已审核', 1519);
                 }
-                // 锁工单行校验状态：spec §5.1 生产中→退料；锁序 单据行→工单行→物料行
-                // （全局无「物料→工单」反向路径，与领料审核同构，无 ABBA 环）
+                // 锁工单行校验状态：生产中/已完成可退料（同 store 口径，G1 完工余料退回放行）；
+                // 锁序 单据行→工单行→物料行（全局无「物料→工单」反向路径，与领料审核同构，无 ABBA 环）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
-                if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+                if (! in_array($order->status, [ProductionOrder::STATUS_PRODUCING, ProductionOrder::STATUS_COMPLETED], true)) {
                     throw new ProductionException('工单当前状态不可退料', 1519);
                 }
                 $movements = [];

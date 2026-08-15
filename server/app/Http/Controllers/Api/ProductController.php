@@ -70,7 +70,8 @@ class ProductController extends Controller
             'category_id' => 'required|exists:categories,id',
             'unit_id' => 'required|exists:units,id',
             'spec' => 'nullable|string|max:100',
-            'barcode' => 'nullable|string|max:50',
+            // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
+            'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
             'safety_min' => 'nullable|numeric|min:0',
             'safety_max' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:0,1',
@@ -112,7 +113,8 @@ class ProductController extends Controller
             'category_id' => 'required|exists:categories,id',
             'unit_id' => 'required|exists:units,id',
             'spec' => 'nullable|string|max:100',
-            'barcode' => 'nullable|string|max:50',
+            // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
+            'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
             'safety_min' => 'nullable|numeric|min:0',
             'safety_max' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:0,1',

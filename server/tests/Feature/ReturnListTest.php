@@ -157,6 +157,20 @@ class ReturnListTest extends TestCase
         $this->assertSame('20.00', $this->order->materials()->where('material_id', $this->mat->id)->first()->issued_qty);
     }
 
+    public function test_store_and_approve_return_on_completed_order_succeeds(): void
+    {
+        // G1 回归：工单完工（已完成）后仍可退料——草稿创建+审核成功（库存+、已领-），完工余料有退库路径
+        $this->order->status = ProductionOrder::STATUS_COMPLETED;
+        $this->order->save();
+        $no = $this->createReturn($this->payload());
+        $return = ReturnList::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/returns/{$return->id}/approve")
+            ->assertJsonPath('code', 0);
+        // 冲销生效：库存 10→12、已领 20→18（与生产中工单同口径）
+        $this->assertSame('12.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+        $this->assertSame('18.00', $this->order->materials()->where('material_id', $this->mat->id)->first()->issued_qty);
+    }
+
     public function test_store_rejects_material_not_issued_with_1517(): void
     {
         // 异常路径：商品从未领过（已领 0）→ 1517（超已领自然拦截）

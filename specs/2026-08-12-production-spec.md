@@ -80,7 +80,7 @@ finished_inbound_items  id, finished_inbound_id, product_id, quantity
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
-| `/api/v1/production/returns` | GET / POST | 列表 / 新建。POST `{order_id, pick_id(可空), warehouse_id, location_id, remark, items:[{product_id, quantity}]}`；数量 ≤ 该商品已领总量：`{code:1517, message:"退料数量超过已领数量"}` |
+| `/api/v1/production/returns` | GET / POST | 列表 / 新建。POST `{order_id, pick_id(可空), warehouse_id, location_id, remark, items:[{product_id, quantity}]}`；数量 ≤ 该商品已领总量：`{code:1517, message:"退料数量超过已领数量"}`；仅生产中/已完成工单可退料（草稿/已下达/关闭拒绝 `{code:1517, message:"工单当前状态不可退料"}`） |
 | `/api/v1/production/returns/{id}` | GET / PUT / DELETE | 详情 / 更新草稿 / 删除草稿（已审核：`{code:1518}`） |
 | `/api/v1/production/returns/{id}/approve` | POST | 审核：写 `return` 流水(+1) → 余额+ → 冲销领料 issued_qty。重复审核：`{code:1519}` |
 
@@ -109,7 +109,7 @@ finished_inbound_items  id, finished_inbound_id, product_id, quantity
 ### 5.1 生产工单页（`/production/orders`）
 
 - 列表：单号、成品、计划数、完工数、进度（el-progress，完成率 %）、计划日期、状态标签（草稿灰/已下达蓝/生产中琥珀/已完成绿/关闭红）、操作
-- 操作：草稿→「编辑/删除/下 达」；已下达→「开 工/详情」；生产中→「领料/退料/报工/委外/成品入库/详情」；已完成→「关 闭/详情」
+- 操作：草稿→「编辑/删除/下 达」；已下达→「开 工/详情」；生产中→「领料/退料/报工/委外/成品入库/详情」；已完成→「退料/关 闭/详情」（完工后已领余料可退库，与生产中同口径）
 - 新建弹窗：成品*（el-select 仅成品，选中后自动校验存在启用 BOM，无则提示 1501）、数量*、计划日期*、BOM 版本（默认启用版）、备注
 - 保存后弹「展开确认」：显示 BOM 展开的物料需求与工序序列（只读确认）
 - 下达：confirm「确认下达工单 MO…？」→ release → 若有缺料 warnings 用 amber 提示条展示（不阻断）
