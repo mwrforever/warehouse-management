@@ -1,4 +1,6 @@
-/* 全局基础样式：reset 与通用排版，配合 tokens.css 设计令牌 */
+/* 全局基础样式 + Element Plus 主题化覆写 + 动效层（衡序 HENGXU 设计系统）
+   对照 docs/design/ui-redesign-mockup.html 视图二/视图三；
+   动效纪律：仅 transform/opacity（MOTION 6/10），全部 reduced-motion 门控 */
 * {
   margin: 0;
   padding: 0;
@@ -11,13 +13,453 @@ body {
 }
 
 body {
-  font-family: 'Fira Sans', system-ui, sans-serif;
-  background: var(--color-background);
-  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--t1);
+  font-size: 14px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+/* 数据文本（新代码使用）：等宽数字 + 精密读数对齐 */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+
+/* 细滚动条：与 slate 中性层同族 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--p-300);
+  border-radius: var(--r-full);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--p-400);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============ Element Plus 组件主题化 ============ */
+
+/* 按钮：库存绿主按钮 + 焦点可见环（键盘可达性） */
+.el-button {
+  border-radius: var(--r-md);
+  font-weight: 500;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.15s ease;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--a-600);
+  --el-button-border-color: var(--a-600);
+  --el-button-hover-bg-color: var(--a-700);
+  --el-button-hover-border-color: var(--a-700);
+  --el-button-active-bg-color: var(--a-700);
+  --el-button-active-border-color: var(--a-700);
+}
+
+.el-button:focus-visible {
+  outline: 2px solid var(--a-500);
+  outline-offset: 2px;
+}
+
+.el-button:not(.is-disabled):active {
+  transform: scale(0.98);
+}
+
+/* 输入类：聚焦绿环，悬停描边加深 */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
+  transition: box-shadow 0.2s ease;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--p-500) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow:
+    0 0 0 1px var(--a-500) inset,
+    0 0 0 3px rgb(5 150 105 / 12%);
+}
+
+/* 表单：标签次文本色 + 错误提示紧跟输入框 */
+.el-form-item__label {
+  color: var(--t2);
+  font-weight: 500;
+}
+
+.el-form-item__error {
+  font-size: 12px;
+  padding-top: 2px;
+}
+
+/* 表格：浅色表头 + 细边框 + 行悬停（与原业务语义一致） */
+.el-table {
+  --el-table-border-color: var(--p-100);
+  --el-table-header-bg-color: var(--p-50);
+  --el-table-header-text-color: var(--t3);
+  --el-table-text-color: var(--t1);
+  --el-table-row-hover-bg-color: var(--p-50);
+
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+/* 对话框 / 消息框：大圆角 + 柔和分层阴影 */
+.el-dialog {
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  padding: 0;
+}
+
+.el-dialog__header {
+  margin-right: 0;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--p-100);
+}
+
+.el-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.el-dialog__body {
+  padding: 20px 24px;
+}
+
+.el-dialog__footer {
+  padding: 10px 24px 18px;
+}
+
+.el-message-box {
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+}
+
+.el-message-box__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.el-message-box__message {
+  line-height: 1.7;
+}
+
+/* 消息提示：语义色浅底深字（AA 对比度） */
+.el-message {
+  border-radius: var(--r-md);
+  border-width: 1px;
+  box-shadow: var(--sh-md);
+}
+
+.el-message--success {
+  --el-message-bg-color: var(--ok-bg);
+  --el-message-border-color: var(--a-200);
+  --el-message-text-color: #15803d;
+}
+
+.el-message--warning {
+  --el-message-bg-color: var(--warn-bg);
+  --el-message-border-color: #fde68a;
+  --el-message-text-color: #b45309;
+}
+
+.el-message--error {
+  --el-message-bg-color: var(--err-bg);
+  --el-message-border-color: #fecaca;
+  --el-message-text-color: #b91c1c;
+}
+
+.el-message--info {
+  --el-message-bg-color: var(--info-bg);
+  --el-message-border-color: #bfdbfe;
+  --el-message-text-color: #1d4ed8;
+}
+
+/* 状态标签：胶囊 + 与后端状态机枚举一致的语义色（成功绿/警告琥珀/信息蓝/危险红/中性灰） */
+.el-tag {
+  border-radius: var(--r-full);
+  font-weight: 500;
+}
+
+.el-tag--success {
+  --el-tag-bg-color: var(--ok-bg);
+  --el-tag-border-color: var(--a-200);
+  --el-tag-text-color: #15803d;
+}
+
+.el-tag--warning {
+  --el-tag-bg-color: var(--warn-bg);
+  --el-tag-border-color: #fde68a;
+  --el-tag-text-color: #b45309;
+}
+
+.el-tag--danger {
+  --el-tag-bg-color: var(--err-bg);
+  --el-tag-border-color: #fecaca;
+  --el-tag-text-color: #b91c1c;
+}
+
+.el-tag--info {
+  --el-tag-bg-color: var(--p-100);
+  --el-tag-border-color: var(--p-200);
+  --el-tag-text-color: var(--t2);
+}
+
+/* primary 型标签（部分入库/生产中）对齐「信息蓝」语义，避免与成功绿混淆 */
+.el-tag--primary {
+  --el-tag-bg-color: var(--info-bg);
+  --el-tag-border-color: #bfdbfe;
+  --el-tag-text-color: #1d4ed8;
+}
+
+/* 页签 / 分页 / 单选 / 复选 / 开关：激活态统一库存绿 */
+.el-tabs__item {
+  font-size: 13.5px;
+  color: var(--t2);
+}
+
+.el-tabs__item.is-active,
+.el-tabs__item:hover {
+  color: var(--a-600);
+}
+
+.el-tabs__active-bar {
+  background-color: var(--a-600);
+}
+
+.el-pagination {
+  --el-pagination-button-bg-color: var(--surface);
+
+  font-size: 13px;
+}
+
+.el-pagination .el-pager li,
+.el-pagination .btn-prev,
+.el-pagination .btn-next {
+  border-radius: var(--r-sm);
+}
+
+.el-radio__input.is-checked .el-radio__inner,
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  background: var(--a-600);
+  border-color: var(--a-600);
+}
+
+.el-radio__input.is-checked + .el-radio__label,
+.el-checkbox__input.is-checked + .el-checkbox__label {
+  color: var(--a-700);
+}
+
+.el-radio-button:first-child .el-radio-button__inner {
+  border-radius: var(--r-sm) 0 0 var(--r-sm);
+}
+
+.el-radio-button:last-child .el-radio-button__inner {
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+.el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--a-600);
+  border-color: var(--a-600);
+  box-shadow: -1px 0 0 0 var(--a-600);
+}
+
+.el-switch.is-checked .el-switch__core {
+  background: var(--a-600);
+  border-color: var(--a-600);
+}
+
+/* 树 / 进度条 / 步骤条 / 描述列表 / 提示卡片：圆角与激活色统一 */
+.el-tree {
+  --el-tree-node-hover-bg-color: var(--p-100);
+
+  color: var(--t2);
+}
+
+.el-tree-node.is-current > .el-tree-node__content {
+  background: var(--a-50);
+  color: var(--a-700);
+}
+
+.el-progress-bar__outer {
+  border-radius: var(--r-full);
+  background: var(--p-100);
+}
+
+.el-progress-bar__inner {
+  border-radius: var(--r-full);
+}
+
+.el-step__head.is-finish {
+  color: var(--a-600);
+  border-color: var(--a-600);
+}
+
+.el-descriptions__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.el-descriptions__label {
+  color: var(--t3);
+  font-weight: 500;
+}
+
+.el-alert {
+  border-radius: var(--r-md);
+}
+
+.el-card {
+  border-radius: var(--r-lg);
+  border-color: var(--border);
+}
+
+/* 下拉菜单 / 悬浮层：大圆角 + 柔和阴影 */
+.el-dropdown-menu {
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  padding: 6px;
+}
+
+.el-dropdown-menu__item {
+  border-radius: var(--r-md);
+  font-size: 13.5px;
+  padding: 8px 12px;
+}
+
+.el-dropdown-menu__item:not(.is-disabled):focus {
+  background: var(--p-100);
+  color: var(--t1);
+}
+
+.el-popper {
+  border-radius: var(--r-md);
+}
+
+.el-popper.is-light {
+  border-color: var(--border);
+  box-shadow: var(--sh-md);
+}
+
+.el-popper.is-dark {
+  box-shadow: var(--sh-md);
+}
+
+/* 加载遮罩：轻微模糊提示后台加载中 */
+.el-loading-mask {
+  background: rgb(255 255 255 / 72%);
+  backdrop-filter: blur(1px);
+}
+
+/* 空态描述：辅助文本色 */
+.el-empty__description p {
+  color: var(--t3);
+  font-size: 13px;
+}
+
+/* ============ 动效层（克制级：仅 transform/opacity，入场一次） ============ */
+@keyframes hx-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hx-grow-up {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes hx-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(220 38 38 / 40%);
+  }
+
+  70% {
+    box-shadow: 0 0 0 7px rgb(220 38 38 / 0%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(220 38 38 / 0%);
+  }
+}
+
+/* 页面根容器（业务页 .page-card / 仪表盘 .panel）挂载入场；
+   注意 fill-mode 用 backwards 而非 both：both 会在动画结束后残留 transform（即使为 identity matrix），
+   使后代 position:fixed 元素（el-dialog 遮罩）以本容器为包含块，弹窗被限制在卡片区域内（列表短时尤甚） */
+.page-card,
+.panel {
+  animation: hx-fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* 列表页筛选工具栏统一规范：flex 单行/换行 + 控件垂直居中 + 等距间隔；
+   未在页面内自定义 .toolbar 样式的视图（盘点/预警/报表等）由此兜底 */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+
+/* 日期区间选择器：EP 根元素同时带 el-input__wrapper 类（自带 flex-grow:1），
+   直接作为工具栏 flex 子项时会被撑满整行，这里取消其伸展 */
+.toolbar .el-date-editor {
+  flex: none;
+}
+
+/* 无障碍：尊重系统减弱动效设置，全部动效降级为瞬时 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

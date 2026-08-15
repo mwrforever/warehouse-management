@@ -630,8 +630,8 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
 }
 .page-title {
   font-size: 18px;

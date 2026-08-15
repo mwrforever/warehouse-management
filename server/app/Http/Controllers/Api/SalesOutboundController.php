@@ -332,6 +332,8 @@ class SalesOutboundController extends Controller
                 }
                 $movements = [];
                 $shipped = []; // [order_item_id => 本次累计出库量] 待回写
+                /** @var array<int, SalesOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
+                $oiMap = [];
                 /** @var SalesOutboundItem $item */
                 foreach ($locked->items as $item) {
                     if ($item->order_item_id) {
@@ -352,6 +354,8 @@ class SalesOutboundController extends Controller
                             throw new SalesException('出库数量超过订单剩余数量', 1407);
                         }
                         $shipped[$oi->id] = bcadd((string) ($shipped[$oi->id] ?? '0'), (string) $item->quantity, 2);
+                        // 锁定行留存复用（明细按 商品+订单行 查重，同订单行不会重复出现）
+                        $oiMap[$oi->id] = $oi;
                     }
                     // 防超卖：锁余额行校验（并发审核同一商品在此串行化；消息含商品名与当前库存快照）
                     $balance = InventoryBalance::where('product_id', $item->product_id)
@@ -382,9 +386,11 @@ class SalesOutboundController extends Controller
                 }
                 // 统一引擎写流水+扣余额（同事务双写，恒等式由 InventoryService 保证；余额行已被本事务锁定，引擎内重复加锁幂等）
                 $this->inventoryService->apply($movements, auth()->id());
-                // 回写订单行累计出库量（bcmath 累加）并重算订单状态（全部出完 → 已完成）
+                // 回写订单行累计出库量（bcmath 累加）并重算订单状态（全部出完 → 已完成）：
+                // 复用第一循环已锁定的行对象——行已被本事务锁定且期间无人可改，
+                // 二次查询纯属多余（N 条订单行省 N 次查询；与采购入库/领退料审核回写同构）
                 foreach ($shipped as $oiId => $addQty) {
-                    $oi = SalesOrderItem::whereKey($oiId)->firstOrFail();
+                    $oi = $oiMap[$oiId];
                     $oi->shipped_qty = bcadd((string) $oi->shipped_qty, $addQty, 2);
                     $oi->save();
                 }

@@ -1,17 +1,85 @@
-/* 设计令牌：nexus-factory 设计系统（MASTER.md） */
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-
+/* 设计令牌：衡序 HENGXU 设计系统
+   对照 docs/design/ui-redesign-mockup.html 视图三（品牌色/强调色/状态色/字体/圆角/阴影/间距）。
+   西文字体 Space Grotesk 由 @fontsource-variable 自托管（main.ts 引入，内网离线可用）；
+   中文走系统栈（PingFang SC / 微软雅黑 / 思源黑体），零下载依赖。 */
 :root {
-  --color-primary: #334155; /* 主色-石板灰 */
+  /* 品牌主色阶：工业石板蓝（导航激活/标题强调/侧边栏深色底） */
+  --p-50: #f8fafc;
+  --p-100: #f1f5f9;
+  --p-200: #e2e8f0;
+  --p-300: #cbd5e1;
+  --p-400: #94a3b8;
+  --p-500: #64748b;
+  --p-600: #475569;
+  --p-700: #334155;
+  --p-800: #1e293b;
+  --p-900: #0f172a;
+
+  /* 强调色阶：库存绿（主按钮/激活态/成功反馈） */
+  --a-50: #ecfdf5;
+  --a-100: #d1fae5;
+  --a-200: #a7f3d0;
+  --a-300: #6ee7b7;
+  --a-400: #34d399;
+  --a-500: #10b981;
+  --a-600: #059669;
+  --a-700: #047857;
+  --a-800: #065f46;
+  --a-900: #064e3b;
+
+  /* 语义状态色（浅底深字组合，对比度 ≥ 4.5:1） */
+  --ok: #16a34a;
+  --ok-bg: #ecfdf5;
+  --warn: #d97706;
+  --warn-bg: #fffbeb;
+  --err: #dc2626;
+  --err-bg: #fef2f2;
+  --info: #2563eb;
+  --info-bg: #eff6ff;
+
+  /* 中性层 */
+  --bg: #f5f7fa;
+  --surface: #fff;
+  --t1: #0f172a; /* 主文本 */
+  --t2: #475569; /* 次文本 */
+  --t3: #64748b; /* 辅助文本（≥4.5:1） */
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* 圆角 / 阴影 / 间距（4px 基数节奏） */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-full: 999px;
+  --sh-sm: 0 1px 2px rgb(15 23 42 / 5%);
+  --sh-md: 0 4px 12px rgb(15 23 42 / 7%);
+  --sh-lg: 0 12px 32px rgb(15 23 42 / 10%);
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 40px;
+
+  /* 字体：西文/数字 Space Grotesk（自托管），中文系统栈；单据号/金额用等宽族 */
+  --font-sans:
+    'Space Grotesk Variable', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Noto Sans SC',
+    system-ui, sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, 'Cascadia Mono', 'JetBrains Mono', consolas, monospace;
+
+  /* ===== 旧令牌别名（兼容存量业务视图：值同新令牌，仅名字不同） ===== */
+  --color-primary: var(--p-700);
   --color-on-primary: #fff;
-  --color-secondary: #475569;
-  --color-accent: #059669; /* 强调-库存绿 */
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
-  --color-muted: #f2f3f4;
-  --color-border: #e6e8ea;
-  --color-destructive: #dc2626;
-  --color-ring: #334155;
+  --color-secondary: var(--p-600);
+  --color-accent: var(--a-600);
+  --color-background: var(--bg);
+  --color-foreground: var(--t1);
+  --color-muted: var(--p-100);
+  --color-border: var(--border);
+  --color-destructive: var(--err);
+  --color-ring: var(--p-700);
   --space-xs: 2px;
   --space-sm: 4px;
   --space-md: 8px;
@@ -19,14 +87,26 @@
   --space-xl: 16px;
   --space-2xl: 24px;
   --space-3xl: 32px;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 5%);
-  --shadow-md: 0 4px 6px rgb(0 0 0 / 10%);
-  --shadow-lg: 0 10px 15px rgb(0 0 0 / 10%);
-  --el-color-primary: #334155; /* Element Plus 主色定制 */
+  --shadow-sm: var(--sh-sm);
+  --shadow-md: var(--sh-md);
+  --shadow-lg: var(--sh-lg);
 
-  font-family: 'Fira Sans', system-ui, sans-serif;
+  /* ===== Element Plus 主题映射：主色 = 库存绿（主按钮/激活态/进度条），
+     成功/警告/危险/信息保持 EP 默认值，各组件级覆写见 main.css ===== */
+  --el-color-primary: #059669;
+  --el-color-primary-light-3: #50b696;
+  --el-color-primary-light-5: #82cbb4;
+  --el-color-primary-light-7: #b4e0d2;
+  --el-color-primary-light-8: #cdeae1;
+  --el-color-primary-light-9: #e6f5f0;
+  --el-color-primary-dark-2: #047854;
+  --el-border-radius-base: var(--r-sm);
+  --el-font-family: var(--font-sans);
+  --el-font-size-base: 14px;
 }
 
+/* 等宽数字类（存量视图引用）：单据号/金额/时间统一等宽 + 表格数字对齐 */
 .font-code {
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }

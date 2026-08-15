@@ -14,7 +14,6 @@ use App\Models\OutsourcingOrder;
 use App\Models\PickList;
 use App\Models\ProductionOrder;
 use App\Models\PurchaseInbound;
-use App\Models\PurchaseInboundItem;
 use App\Models\PurchaseOrder;
 use App\Models\ReturnList;
 use App\Models\SalesOrder;
@@ -33,6 +32,9 @@ class DashboardService
 
     /** 预警列表条数上限（spec §3：低库存前 10 条） */
     public const MAX_ALERTS = 10;
+
+    // 成本价 map 走共享服务（含缓存，采购入库审核时失效）——口径与失效契约见 CostPriceService
+    public function __construct(private readonly CostPriceService $costPriceService) {}
 
     /**
      * 待审核数据统计：9 类草稿单据按审核权限过滤（rows 供列表 / count 供 KPI）
@@ -146,22 +148,9 @@ class DashboardService
     {
         $balances = InventoryBalance::query()->select('product_id', 'quantity')->get();
 
-        // 成本价估算：每商品取最近一次「已审核」采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）
-        // 限定余额行商品集（whereIn 单查）消除全表 cursor 扫描（性能债 P1-1）；
-        // whereHas 过滤已审核入库单——草稿入库单 store 即写明细且审核不改 created_at，草稿价参与会导致金额跳变（bug #7）
-        $prices = [];
-        $productIds = $balances->pluck('product_id')->unique()->all();
-        foreach (
-            PurchaseInboundItem::query()
-                ->whereIn('product_id', $productIds)
-                ->whereHas('purchaseInbound', fn ($q) => $q->where('status', PurchaseInbound::STATUS_APPROVED))
-                ->select('product_id', 'price')
-                ->orderByDesc('created_at')
-                ->orderByDesc('id')
-                ->cursor() as $item
-        ) {
-            $prices[$item->product_id] = $prices[$item->product_id] ?? $item->price;
-        }
+        // 成本价估算：每商品取最近一次「已审核」采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）；
+        // 全量 map 含缓存（采购入库审核时失效），消除每次仪表盘加载的历史明细扫描+filesort——口径与失效契约见 CostPriceService
+        $prices = $this->costPriceService->latestPriceMap();
 
         $totalQty = '0';
         $totalValue = '0';

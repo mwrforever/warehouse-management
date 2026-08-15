@@ -38,7 +38,13 @@
       <el-table-column prop="category_name" label="分类" width="110" />
       <el-table-column prop="spec" label="规格" width="100" />
       <el-table-column prop="unit_name" label="单位" width="70" />
-      <el-table-column prop="barcode" label="条码" width="110" class-name="font-code" />
+      <!-- 条码列：有值渲染一维码图形，空值显示占位符 -->
+      <el-table-column label="条码" width="140" align="center">
+        <template #default="{ row }">
+          <BarcodeSvg v-if="row.barcode" :value="row.barcode" />
+          <span v-else class="no-barcode">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="安全库存" width="130">
         <template #default="{ row }">{{ row.safety_min }} ~ {{ row.safety_max }}</template>
       </el-table-column>
@@ -147,6 +153,7 @@ import { categoryApi, type CategoryItem } from '../../api/category'
 import { productApi, type ProductItem, type ProductType } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
+import BarcodeSvg from '../../components/BarcodeSvg.vue'
 
 const auth = useAuthStore()
 const rows = ref<ProductItem[]>([])
@@ -343,8 +350,9 @@ onMounted(async () => {
 }
 .toolbar {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-lg);
   margin-bottom: var(--space-xl);
 }
 .toolbar-right {
@@ -366,6 +374,9 @@ onMounted(async () => {
   color: var(--color-secondary);
   font-size: 12px;
   margin-top: var(--space-sm);
+}
+.no-barcode {
+  color: var(--p-300);
 }
 .tag-raw {
   background: rgba(59, 130, 246, 0.12);

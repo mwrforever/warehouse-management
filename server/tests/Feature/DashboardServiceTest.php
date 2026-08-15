@@ -184,6 +184,51 @@ class DashboardServiceTest extends TestCase
         $this->assertNull($res['inventory_value']);
     }
 
+    public function test_summary_cost_price_cache_invalidated_after_inbound_approve(): void
+    {
+        // 核心路径（P1-2b 回归）：成本价 map 缓存的失效契约——审核是价格集合唯一变化点，
+        // 先 summary 建缓存（150 分价）→ HTTP 审核更晚入库的新单价单（250 分）→ 再 summary 必须反映新价；
+        // 若漏失效，第二次读取旧缓存导致总值脏读（旧值 15.00）
+        $p = $this->makeProduct('MAT-C', 'raw_material');
+        $this->makeBalance($p, '10.00');
+        $sup = Supplier::create(['name' => '供应商C', 'code' => 'SUP-C', 'status' => 1]);
+        // 第一张：已审核、150 分（直插，created_at 早于第二张 → 非最新）
+        $first = PurchaseInbound::create([
+            'no' => 'PI-C-001', 'supplier_id' => $sup->id,
+            'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+            'status' => PurchaseInbound::STATUS_APPROVED, 'total_amount' => 150,
+            'inbound_at' => now()->subDay()->toDateTimeString(),
+        ]);
+        PurchaseInboundItem::create([
+            'inbound_id' => $first->id, 'product_id' => $p->id,
+            'quantity' => 1, 'price' => 150, 'amount' => 150,
+        ]);
+
+        // 第一次 summary：建立缓存（10 × 150 分 = 15.00 元）
+        $res1 = $this->service->summary($this->admin);
+        $this->assertSame('15.00', $res1['inventory_value']);
+
+        // 第二张：草稿、250 分、独立入库（无订单行引用，可直审）；审核成功路径执行缓存失效
+        $second = PurchaseInbound::create([
+            'no' => 'PI-C-002', 'supplier_id' => $sup->id,
+            'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+            'status' => PurchaseInbound::STATUS_DRAFT, 'total_amount' => 250,
+        ]);
+        PurchaseInboundItem::create([
+            'inbound_id' => $second->id, 'product_id' => $p->id,
+            'quantity' => 1, 'price' => 250, 'amount' => 250,
+        ]);
+        $this->actingAs($this->admin)
+            ->postJson("/api/v1/purchase/inbounds/{$second->id}/approve")
+            ->assertOk()
+            ->assertJsonPath('code', 0);
+
+        // 第二次 summary：审核后 250 分成为最新价，且审核入库使余额 +1（10+1=11）→ 11 × 250 分 = 27.50 元
+        $res2 = $this->service->summary($this->admin);
+        $this->assertSame('11.00', $res2['inventory_total_qty']);
+        $this->assertSame('27.50', $res2['inventory_value']);
+    }
+
     public function test_summary_pending_count_is_permission_filtered(): void
     {
         // 正常路径：待审核数按用户审核权限过滤（无采购权限 → 采购草稿不计）

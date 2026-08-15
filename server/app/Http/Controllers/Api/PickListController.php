@@ -291,6 +291,8 @@ class PickListController extends Controller
                 }
                 $movements = [];
                 $issueMap = []; // [material_id => 本次领用累计] 待回写
+                /** @var array<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
+                $pmMap = [];
                 /** @var PickListItem $item */
                 foreach ($locked->items as $item) {
                     // 锁物料需求行：防并发超领（两张领料单同时审同一物料时串行化）
@@ -307,6 +309,8 @@ class PickListController extends Controller
                         throw new ProductionException('领料数量超过需求数量', 1513);
                     }
                     $issueMap[$item->product_id] = bcadd((string) ($issueMap[$item->product_id] ?? '0'), (string) $item->pick_qty, 2);
+                    // 锁定行留存复用（同物料多行明细指向同一需求行，覆盖存入等价）
+                    $pmMap[$item->product_id] = $pm;
                     // 防超卖：锁余额行校验（并发审核同一商品在此串行化；消息含商品编码与精确库存快照）
                     $balance = InventoryBalance::where('product_id', $item->product_id)
                         ->where('warehouse_id', $locked->warehouse_id)
@@ -334,10 +338,10 @@ class PickListController extends Controller
                 }
                 // 统一引擎写流水+扣余额（同事务双写；余额行已被本事务锁定，引擎内重复加锁幂等）
                 $this->inventoryService->apply($movements, auth()->id());
-                // 回写工单物料需求 issued_qty（bcmath 累加）
+                // 回写工单物料需求 issued_qty（bcmath 累加）：复用第一循环已锁定的行对象——
+                // 行已被本事务锁定且期间无人可改，二次查询纯属多余（N 条明细省 N 次查询）
                 foreach ($issueMap as $materialId => $qty) {
-                    $pm = ProductionOrderMaterial::where('order_id', $locked->order_id)
-                        ->where('material_id', $materialId)->firstOrFail();
+                    $pm = $pmMap[$materialId];
                     $pm->issued_qty = bcadd((string) $pm->issued_qty, $qty, 2);
                     $pm->save();
                 }

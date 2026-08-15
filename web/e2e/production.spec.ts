@@ -625,7 +625,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
 
   test('TC-PRD-09 退料冲销', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // 新口径（spec §5.1 生产中→退料）：MO-001 已在前序用例完成/关闭，不可再对其退料——
+    // 退料口径：生产中/已完成工单可退料（完工余料退回）；MO-001 属前序用例共享工单，不依赖其状态——
     // 自建「生产中」工单并领料（issued=20）后走退料全流程（编辑/校验/保存/审核仍走 UI，见文档 §5 注）
     const moR = await apiPost(page, '/api/v1/production/orders', {
       product_id: finId,

@@ -324,18 +324,20 @@ class ProductionOrderController extends Controller
                 if ($locked->status !== ProductionOrder::STATUS_DRAFT) {
                     throw new ProductionException('当前状态不可下达', 1505);
                 }
-                // 缺料警告：全仓余额汇总 vs 需求（bcadd 累加防浮点；只读快照，允许下达）
-                // 物料与余额一次预取（with('material') + whereIn 单查分组），消除逐物料查询 N+1
+                // 缺料警告：全仓余额汇总 vs 需求（bcadd 归一防浮点；只读快照，允许下达）
+                // 物料一次预取（with('material')）+ 余额 SUM 下推 SQL groupBy——跨仓余额行在库端
+                // 归并为每物料一行（SUM 标准 SQL 无方言差异），消除整表余额行传输与 PHP 侧跨仓累加
                 $materials = $locked->materials()->with('material')->get();
-                $stockByMaterial = InventoryBalance::whereIn('product_id', $materials->pluck('material_id'))
+                $stockRows = InventoryBalance::query()
+                    ->whereIn('product_id', $materials->pluck('material_id'))
+                    ->selectRaw('product_id, SUM(quantity) as total')
+                    ->groupBy('product_id')
                     ->get()
-                    ->groupBy('product_id');
+                    ->keyBy('product_id');
                 $warnings = [];
                 foreach ($materials as $m) {
-                    $stock = '0.00';
-                    foreach ($stockByMaterial->get($m->material_id) ?? collect() as $b) {
-                        $stock = bcadd($stock, (string) $b->quantity, 2);
-                    }
+                    // SUM 跨库形态归一（SQLite int/float、MySQL decimal 字符串）→ 2 位小数字符串
+                    $stock = bcadd((string) ($stockRows->get($m->material_id)?->getAttribute('total') ?? '0'), '0', 2);
                     if (bccomp($stock, (string) $m->required_qty, 2) < 0) {
                         $warnings[] = [
                             'material_name' => $m->material->name ?? ('#'.$m->material_id),

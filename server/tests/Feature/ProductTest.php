@@ -114,6 +114,20 @@ class ProductTest extends TestCase
         ])->assertJsonPath('code', 1115);
     }
 
+    public function test_store_barcode_charset_limited_to_printable_ascii(): void
+    {
+        // 异常路径（B4）：非 ASCII 条码（中文/emoji，CODE128 渲染会崩溃）→ 422 格式层拦截
+        $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '中文条码', 'code' => 'MAT-010', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'barcode' => '条码001', 'status' => 1,
+        ])->assertJsonPath('code', 422);
+        // 正常路径：可打印 ASCII（含空格与符号）放行
+        $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => 'ASCII条码', 'code' => 'MAT-011', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'barcode' => 'ABC-123 45', 'status' => 1,
+        ])->assertJsonPath('code', 0);
+    }
+
     public function test_store_min_greater_than_max_fails_with_1122(): void
     {
         // 异常路径：安全库存下限大于上限 1122

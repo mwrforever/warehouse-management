@@ -1,11 +1,20 @@
-<!-- 仪表盘页：登录默认落地页——4 KPI 卡 + 待审核列表 + 工单进度 + 库存预警
-     4 接口并行独立加载：单区失败只影响该区（骨架屏换重 试），其余照常渲染（spec §7 并行容错） -->
+<!-- 仪表盘页：登录默认落地页——非对称 KPI 卡 + 待审核列表 + 工单进度 + 库存预警
+     对照 docs/design/ui-redesign-mockup.html 视图二（KPI 非对称 2fr/1fr/1fr/1fr + 图标角标）；
+     4 接口并行独立加载逻辑与全部 E2E 类名保持不变（TC-DSH-01~08） -->
 <template>
   <div class="page-card dashboard">
-    <!-- KPI 卡区：一行 4 张（待审核卡仅对持有审核权限者显示，TC-DSH-07） -->
-    <div class="kpi-grid">
+    <!-- 页面标题：日期副标题（真实系统日期，非占位文案） -->
+    <div class="page-head">
+      <div>
+        <h2>仪表盘</h2>
+        <p>{{ todayText }}</p>
+      </div>
+    </div>
+
+    <!-- KPI 卡区：首卡 2fr 加宽（待审核卡仅对持有审核权限者显示，TC-DSH-07） -->
+    <div class="kpi-grid" :class="{ 'kpi-4': canApprove }">
       <template v-if="summary.loading">
-        <el-skeleton v-for="i in 4" :key="i" class="kpi-card" :rows="2" animated />
+        <el-skeleton v-for="i in canApprove ? 4 : 3" :key="i" class="kpi-card" :rows="2" animated />
       </template>
       <div v-else-if="summary.error" class="kpi-card">
         <div class="section-error">
@@ -14,32 +23,47 @@
         </div>
       </div>
       <template v-else-if="summary.data">
-        <div class="kpi-card">
-          <div class="kpi-label">库存总量</div>
-          <div class="kpi-value font-code">
-            {{ formatThousand(summary.data.inventory_total_qty) }}
+        <div class="kpi-card big">
+          <div class="kpi-top">
+            <span class="kpi-ic green"
+              ><el-icon><Box /></el-icon
+            ></span>
           </div>
+          <div class="kpi-label">库存总量</div>
+          <div ref="kpiVal1" class="kpi-value num">0</div>
           <div v-if="summary.data.inventory_value === null" class="kpi-sub">未启用成本核算</div>
           <div v-else class="kpi-sub">
             库存总值 ¥{{ formatThousand(summary.data.inventory_value) }}
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">今日入库</div>
-          <div class="kpi-value kpi-in font-code">
-            +{{ formatThousand(summary.data.today_inbound_qty) }}
+          <div class="kpi-top">
+            <span class="kpi-ic blue"
+              ><el-icon><Download /></el-icon
+            ></span>
           </div>
+          <div class="kpi-label">今日入库</div>
+          <div ref="kpiVal2" class="kpi-value kpi-in num">0</div>
           <div class="kpi-sub">出库 Σ{{ formatThousand(summary.data.today_outbound_qty) }}</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">今日出库</div>
-          <div class="kpi-value kpi-out font-code">
-            -{{ formatThousand(summary.data.today_outbound_qty) }}
+          <div class="kpi-top">
+            <span class="kpi-ic amber"
+              ><el-icon><Upload /></el-icon
+            ></span>
           </div>
+          <div class="kpi-label">今日出库</div>
+          <div ref="kpiVal3" class="kpi-value kpi-out num">0</div>
         </div>
         <div v-if="canApprove" class="kpi-card kpi-clickable" @click="scrollToPending">
+          <div class="kpi-top">
+            <span class="kpi-ic red"
+              ><el-icon><DocumentChecked /></el-icon
+            ></span>
+          </div>
           <div class="kpi-label">待审核单据</div>
-          <div class="kpi-value kpi-warn font-code">{{ summary.data.pending_approvals }}</div>
+          <div ref="kpiVal4" class="kpi-value kpi-warn num">0</div>
+          <div class="kpi-sub">点击查看待审核明细</div>
         </div>
       </template>
     </div>
@@ -160,11 +184,11 @@
 </template>
 
 <script setup lang="ts">
-/* global HTMLElement */
+/* global HTMLElement, window, performance, requestAnimationFrame */
 // 仪表盘：4 区独立加载状态（loading/error/data），挂载并行请求 4 接口；无手动刷新按钮（V1）
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowRight, Check } from '@element-plus/icons-vue'
+import { ArrowRight, Box, Check, DocumentChecked, Download, Upload } from '@element-plus/icons-vue'
 import {
   dashboardApi,
   type DashboardAlertItem,
@@ -318,6 +342,54 @@ function scrollToPending() {
   pendingPanel.value?.scrollIntoView({ behavior: 'smooth' })
 }
 
+// ===== KPI 数字滚动：一次性 rAF（650ms easeOutCubic），尊重系统减弱动效设置 =====
+const kpiVal1 = ref<HTMLElement | null>(null)
+const kpiVal2 = ref<HTMLElement | null>(null)
+const kpiVal3 = ref<HTMLElement | null>(null)
+const kpiVal4 = ref<HTMLElement | null>(null)
+
+function startCount(el: HTMLElement | null, target: number, fmt: (n: number) => string) {
+  if (!el) return
+  // 环境守卫：jsdom 单元测试无 matchMedia（动画不可测）时直接写终值保证确定性；
+  // 浏览器端尊重系统减弱动效设置
+  const hasMatchMedia = typeof window.matchMedia === 'function'
+  const reduce = hasMatchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (!hasMatchMedia || reduce || typeof requestAnimationFrame !== 'function') {
+    el.textContent = fmt(target)
+    return
+  }
+  const t0 = performance.now()
+  const dur = 650
+  const tick = (t: number) => {
+    const p = Math.min(1, (t - t0) / dur)
+    const e = 1 - Math.pow(1 - p, 3)
+    el.textContent = fmt(target * e)
+    if (p < 1) requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
+// 数据到达后启动 4 个 KPI 滚动（终值与接口数据一致，E2E 文本断言可轮询等待）
+watch(
+  () => summary.data,
+  (d) => {
+    if (!d) return
+    nextTick(() => {
+      startCount(kpiVal1.value, Number(d.inventory_total_qty), formatThousand)
+      startCount(kpiVal2.value, Number(d.today_inbound_qty), (n) => `+${formatThousand(n)}`)
+      startCount(kpiVal3.value, Number(d.today_outbound_qty), (n) => `-${formatThousand(n)}`)
+      startCount(kpiVal4.value, Number(d.pending_approvals), (n) => String(Math.round(n)))
+    })
+  },
+)
+
+// 页面头部日期：真实系统日期与星期
+const todayText = computed(() => {
+  const d = new Date()
+  const week = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()]
+  return `今天是 ${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日，星期${week}`
+})
+
 // 挂载即并行发起 4 区请求（各自独立 catch，互不影响）
 onMounted(() => {
   loadSummary()
@@ -328,205 +400,302 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 样式遵循 design-system/nexus-factory/pages/dashboard.md（KPI 卡/双栏/预警卡/空态） */
+/* 样式对照设计稿视图二：KPI 非对称 + 面板卡片 + 预警卡 */
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2xl);
+  gap: 16px;
 }
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-head h2 {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.page-head p {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--t2);
+}
+
+/* KPI 卡：非对称布局（首卡 2fr 加宽），hover 微抬升 */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-xl);
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 16px;
+}
+.kpi-grid.kpi-4 {
+  grid-template-columns: 2fr 1fr 1fr 1fr;
 }
 .kpi-card {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: var(--space-xl);
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 200ms ease;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+  box-shadow: var(--sh-sm);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+  min-width: 0;
+}
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--sh-md);
+}
+.kpi-card.big .kpi-value {
+  font-size: 30px;
+}
+.kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kpi-ic {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+.kpi-ic.green {
+  background: var(--a-100);
+  color: var(--a-700);
+}
+.kpi-ic.blue {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.kpi-ic.amber {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.kpi-ic.red {
+  background: var(--err-bg);
+  color: var(--err);
+}
+.kpi-label {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--t2);
+}
+.kpi-value {
+  margin-top: 5px;
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.kpi-in {
+  color: var(--a-600);
+}
+.kpi-out {
+  color: var(--err);
+}
+.kpi-warn {
+  color: var(--warn);
+}
+.kpi-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--t3);
 }
 .kpi-clickable {
   cursor: pointer;
 }
-.kpi-clickable:hover {
-  box-shadow: var(--shadow-md);
-}
-.kpi-label {
-  font-size: 12px;
-  color: #64748b;
-  margin-bottom: var(--space-md);
-}
-.kpi-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--color-foreground);
-}
-.kpi-in {
-  color: #059669;
-}
-.kpi-out {
-  color: #dc2626;
-}
-.kpi-warn {
-  color: #d97706;
-}
-.kpi-sub {
-  font-size: 12px;
-  color: #64748b;
-  margin-top: var(--space-md);
-}
+
+/* 中部双栏：待审核 + 工单进度 */
 .dash-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: var(--space-2xl);
+  grid-template-columns: 1.6fr 1fr;
+  gap: 16px;
 }
 .panel {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: var(--space-xl);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+  padding: 18px 20px;
 }
 .panel-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
-  color: var(--color-foreground);
-  margin: 0 0 var(--space-xl);
+  color: var(--t1);
+  margin: 0 0 16px;
 }
 .title-badge {
-  margin-left: var(--space-md);
+  margin-left: 8px;
 }
+
+/* 区级错误/空态 */
 .section-error {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
-  padding: var(--space-md) 0;
+  gap: 12px;
+  padding: 8px 0;
 }
 .section-error-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--t2);
 }
 .empty-ok {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  color: #059669;
-  padding: var(--space-lg) 0;
+  gap: 8px;
+  color: var(--a-600);
+  padding: 12px 0;
 }
 .ok-icon {
   font-size: 18px;
 }
+
+/* 待审核列表 */
 .pending-group {
-  margin-bottom: var(--space-lg);
+  margin-bottom: 12px;
 }
 .pending-tag {
   display: inline-block;
   font-size: 12px;
-  color: #475569;
-  background: var(--color-muted);
-  border-radius: 4px;
-  padding: 2px 8px;
-  margin-bottom: var(--space-md);
+  font-weight: 500;
+  color: var(--t2);
+  background: var(--p-100);
+  border-radius: var(--r-full);
+  padding: 2px 10px;
+  margin-bottom: 8px;
 }
 .pending-row {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
-  padding: var(--space-md) var(--space-sm);
-  border-radius: 6px;
+  gap: 12px;
+  padding: 8px 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: background 150ms ease;
 }
 .pending-row:hover {
-  background: #f8fafc;
+  background: var(--p-50);
 }
 .type-tag {
   font-size: 12px;
-  color: #334155;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  color: var(--p-700);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   padding: 1px 6px;
   white-space: nowrap;
 }
 .pending-no {
   font-size: 13px;
-  color: var(--color-foreground);
+  color: var(--t1);
 }
 .pending-time {
   flex: 1;
   text-align: right;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--t3);
 }
 .row-arrow {
-  color: #94a3b8;
+  color: var(--t3);
 }
+
+/* 工单进度 */
 .order-row {
-  border-top: 1px solid var(--color-border);
-  padding: var(--space-lg) 0;
+  border-top: 1px solid var(--p-100);
+  padding: 12px 0;
   cursor: pointer;
   transition: background 150ms ease;
+}
+.order-row:hover {
+  background: var(--p-50);
 }
 .order-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: var(--space-sm);
+  margin-bottom: 4px;
 }
 .order-name {
   font-size: 13px;
-  color: #475569;
-  margin-bottom: var(--space-md);
+  color: var(--t2);
+  margin-bottom: 8px;
 }
 .order-progress {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 8px;
 }
 .order-progress .el-progress {
   flex: 1;
 }
 .progress-text {
   font-size: 12px;
-  color: var(--color-foreground);
+  color: var(--t1);
   min-width: 56px;
   text-align: right;
 }
+
+/* 库存预警卡：危险红语义（与库存预警页同款） */
 .alert-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-xl);
+  gap: 12px;
 }
 .alert-card {
   border: 1px solid #fecaca;
-  border-left: 4px solid #dc2626;
-  background: #fef2f2;
-  border-radius: 8px;
-  padding: var(--space-lg);
+  border-left: 4px solid var(--err);
+  background: var(--err-bg);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
   cursor: pointer;
   transition: box-shadow 150ms ease;
 }
 .alert-card:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--sh-md);
 }
 .alert-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--color-foreground);
+  color: var(--t1);
 }
 .alert-code {
-  color: #64748b;
+  color: var(--t3);
   font-size: 12px;
-  margin-left: var(--space-sm);
+  margin-left: 8px;
 }
 .alert-wh {
   font-size: 12px;
-  color: #64748b;
-  margin: var(--space-sm) 0;
+  color: var(--t3);
+  margin: 4px 0;
 }
 .alert-nums {
   font-size: 12px;
-  color: #dc2626;
+  color: var(--err);
+}
+
+/* KPI 卡级联入场（与设计稿一致；reduced-motion 由 main.css 全局门控） */
+.kpi-card {
+  animation: hx-fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.kpi-card:nth-child(2) {
+  animation-delay: 0.08s;
+}
+.kpi-card:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.kpi-card:nth-child(4) {
+  animation-delay: 0.24s;
+}
+
+/* 窄屏：双栏收为单栏 */
+@media (max-width: 1100px) {
+  .dash-grid,
+  .kpi-grid,
+  .kpi-grid.kpi-4 {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

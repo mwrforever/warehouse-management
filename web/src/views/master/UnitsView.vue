@@ -148,8 +148,9 @@ onMounted(load)
 }
 .toolbar {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-lg);
   margin-bottom: var(--space-xl);
 }
 .page-title {
