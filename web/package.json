@@ -18,9 +18,12 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@fontsource/fira-code": "^5.3.0",
     "axios": "^1.19.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.4",
+    "jsbarcode": "^3.12.3",
     "pinia": "^4.0.2",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"

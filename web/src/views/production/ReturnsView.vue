@@ -16,7 +16,7 @@ const list = ref<ReturnItem[]>([])
 const total = ref(0)
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
-// 生产中工单下拉（label 单号+成品，仅 status=2 可退料）
+// 生产中/已完成工单下拉（label 单号+成品，status=2/3 可退料：完工余料退回 G1 放行）
 const orders = ref<ProductionOrderItem[]>([])
 
 // 列表筛选（keyword 单号 / status 草稿/已审核两态）
@@ -247,8 +247,12 @@ onMounted(async () => {
   loadList()
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    // 仅生产中工单可退料（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
+    // 可退料工单 = 生产中(2) + 已完成(3)（G1 完工余料退回；per_page 100 覆盖全量）
+    const [producing, completed] = await Promise.all([
+      productionApi.orders({ status: 2, per_page: 100 }),
+      productionApi.orders({ status: 3, per_page: 100 }),
+    ])
+    orders.value = [...producing.items, ...completed.items]
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -351,7 +355,7 @@ onMounted(async () => {
           <el-form-item label="工单" required>
             <el-select
               v-model="form.order_id"
-              placeholder="选择生产中工单"
+              placeholder="选择生产中/已完成工单"
               filterable
               style="width: 100%"
               @change="onOrderChange"
@@ -432,8 +436,8 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
 }
 .page-title {
   font-size: 18px;

@@ -284,6 +284,8 @@ onMounted(load)
 /* 工具栏间距与主按钮样式（btn-primary 语义色） */
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-lg);
   margin-bottom: var(--space-xl);
 }

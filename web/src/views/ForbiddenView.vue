@@ -20,12 +20,15 @@ const router = useRouter()
   padding-top: 20vh;
 }
 .forbidden h1 {
-  font-size: 48px;
-  color: var(--color-primary);
+  font-family: var(--font-mono);
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--p-700);
   margin-bottom: var(--space-lg);
 }
 .forbidden p {
-  color: var(--color-secondary);
+  color: var(--t2);
   margin-bottom: var(--space-2xl);
 }
 </style>
