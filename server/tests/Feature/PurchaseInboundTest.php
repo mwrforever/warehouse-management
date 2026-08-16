@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\InventoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 class PurchaseInboundTest extends TestCase
@@ -245,6 +246,21 @@ class PurchaseInboundTest extends TestCase
         $this->approveInbound($no);
         $res = $this->approveInbound($no, false);
         $this->assertSame(1310, $res['code']);
+        $this->assertSame('160.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+    }
+
+    public function test_approve_succeeds_when_cost_price_cache_flush_fails(): void
+    {
+        // 边界路径（S-2）：审核已提交后缓存失效抛异常（如 database store 删除失败）不得把审核报成失败——
+        // 单据已生效，若 500 会让前端误判后重试，撞 1310 幂等造成「已审核却报失败」的困惑
+        $no = $this->createInbound($this->payload());
+        Cache::shouldReceive('forget')->once()->andThrow(new \RuntimeException('cache down'));
+
+        $res = $this->approveInbound($no);
+
+        $this->assertSame(0, $res['code']);
+        // 业务结果不受缓存层异常影响：单据确已审核、库存已加
+        $this->assertSame(PurchaseInbound::STATUS_APPROVED, PurchaseInbound::where('no', $no)->first()->status);
         $this->assertSame('160.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
     }
 

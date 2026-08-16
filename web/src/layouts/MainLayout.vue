@@ -90,13 +90,14 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <div class="um-head">
+                <!-- 用户信息头为纯展示：用 disabled item 保持 ul>li 合法结构（裸 div 破坏 HTML 语义且不参与菜单键盘导航） -->
+                <el-dropdown-item :disabled="true" class="um-head">
                   <span class="ava">{{ avatarChar }}</span>
                   <span class="meta">
                     <b>{{ auth.user?.name }}</b>
                     <span>{{ auth.user?.email ?? roleLabel }}</span>
                   </span>
-                </div>
+                </el-dropdown-item>
                 <el-dropdown-item command="logout" class="um-logout">
                   <el-icon><SwitchButton /></el-icon>
                   退出登录

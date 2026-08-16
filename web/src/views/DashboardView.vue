@@ -186,7 +186,7 @@
 <script setup lang="ts">
 /* global HTMLElement, window, performance, requestAnimationFrame */
 // 仪表盘：4 区独立加载状态（loading/error/data），挂载并行请求 4 接口；无手动刷新按钮（V1）
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Box, Check, DocumentChecked, Download, Upload } from '@element-plus/icons-vue'
 import {
@@ -348,6 +348,9 @@ const kpiVal2 = ref<HTMLElement | null>(null)
 const kpiVal3 = ref<HTMLElement | null>(null)
 const kpiVal4 = ref<HTMLElement | null>(null)
 
+// 进行中的 rAF 句柄：组件卸载时统一取消，避免动画期间卸载后循环仍写已分离 DOM
+const activeRafs: number[] = []
+
 function startCount(el: HTMLElement | null, target: number, fmt: (n: number) => string) {
   if (!el) return
   // 环境守卫：jsdom 单元测试无 matchMedia（动画不可测）时直接写终值保证确定性；
@@ -364,10 +367,16 @@ function startCount(el: HTMLElement | null, target: number, fmt: (n: number) => 
     const p = Math.min(1, (t - t0) / dur)
     const e = 1 - Math.pow(1 - p, 3)
     el.textContent = fmt(target * e)
-    if (p < 1) requestAnimationFrame(tick)
+    if (p < 1) activeRafs.push(requestAnimationFrame(tick))
   }
-  requestAnimationFrame(tick)
+  activeRafs.push(requestAnimationFrame(tick))
 }
+
+// 卸载时取消所有未完成的数字滚动动画（cancelAnimationFrame 幂等，已完成的句柄调用无副作用）
+onUnmounted(() => {
+  activeRafs.forEach((id) => window.cancelAnimationFrame(id))
+  activeRafs.length = 0
+})
 
 // 数据到达后启动 4 个 KPI 滚动（终值与接口数据一致，E2E 文本断言可轮询等待）
 watch(

@@ -18,6 +18,7 @@ use App\Services\PurchaseOrderService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PurchaseInboundController extends Controller
 {
@@ -383,7 +384,13 @@ class PurchaseInboundController extends Controller
             });
             // 审核成功（事务已提交）失效成本价缓存：审核是价格集合的唯一变化点（见 CostPriceService 失效契约）；
             // 回滚路径抛异常跳过此处，缓存最多早清（下次访问重建），无脏读风险
-            $this->costPriceService->flush();
+            try {
+                $this->costPriceService->flush();
+            } catch (\Throwable $e) {
+                // 缓存层失败不回滚已提交的审核（单据已生效）：最坏缓存脏一次、下次访问重建；
+                // 若向调用方抛错，前端会误判审核失败而重试，撞 1310 幂等造成困惑，故吞异常仅记 warn
+                Log::warning('采购入库审核后成本价缓存失效失败，已忽略：'.$e->getMessage());
+            }
         } catch (PurchaseException $e) {
             // 1310 幂等 / 1308 超量或订单状态不符（余额不足等防御性场景同样归 1308 语义族）
             return $this->fail($e->getCode() ?: 1308, $e->getMessage());
