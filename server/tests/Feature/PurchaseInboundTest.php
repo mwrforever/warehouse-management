@@ -249,6 +249,21 @@ class PurchaseInboundTest extends TestCase
         $this->assertSame('160.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
     }
 
+    public function test_approve_multiple_items_batch_locks_all_order_rows(): void
+    {
+        // 正常路径（P1-2 批量预锁回归）：两订单行一次锁定、订单头去重只锁一次——
+        // 两商品余额同时累加、received_qty 各自回写（whereIn 批量锁与逐行锁行为等价）
+        $no = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 60, 'price' => 500, 'order_item_id' => $this->matItemId],
+            ['product_id' => $this->semi->id, 'quantity' => 30, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]));
+        $this->approveInbound($no);
+        $this->assertSame('160.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+        $this->assertSame('60.00', InventoryBalance::where('product_id', $this->semi->id)->first()->quantity);
+        $this->assertSame('60.00', PurchaseOrderItem::find($this->matItemId)->received_qty);
+        $this->assertSame('30.00', PurchaseOrderItem::find($this->semiItemId)->received_qty);
+    }
+
     public function test_approve_succeeds_when_cost_price_cache_flush_fails(): void
     {
         // 边界路径（S-2）：审核已提交后缓存失效抛异常（如 database store 删除失败）不得把审核报成失败——

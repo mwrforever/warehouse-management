@@ -237,7 +237,7 @@ class ReturnListController extends Controller
     }
 
     /**
-     * 审核（核心）：事务内「锁单幂等 1519 → 逐行锁物料需求行复核 1517 → InventoryService 写 return 流水(+1)
+     * 审核（核心）：事务内「锁单幂等 1519 → 批量预锁物料需求行复核 1517 → InventoryService 写 return 流水(+1)
      * → 冲销 issued_qty」任一步失败整体回滚（入库方向无需余额校验）
      */
     public function approve(ReturnList $return)
@@ -258,15 +258,20 @@ class ReturnListController extends Controller
                 }
                 $movements = [];
                 $writeOff = []; // [material_id => 本次冲销量] 待回写
-                /** @var array<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
-                $pmMap = [];
+                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：物料需求行按唯一索引序一次锁定，
+                // 循环内查 map——明细 N 行时查询次数从 N 降为常数；批量锁按索引序获取与逐行等价，
+                // 且消除「两单明细顺序相反」时的交叉锁窗口（同索引序获取，无 ABBA 新方向）
+                /** @var Collection<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
+                $pmMap = ProductionOrderMaterial::query()
+                    ->where('order_id', $locked->order_id)
+                    ->whereIn('material_id', $locked->items->pluck('product_id'))
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('material_id');
                 /** @var ReturnListItem $item */
                 foreach ($locked->items as $item) {
-                    // 锁物料需求行：防并发超退（多张退料单同时审同一物料时串行化）
-                    $pm = ProductionOrderMaterial::where('order_id', $locked->order_id)
-                        ->where('material_id', $item->product_id)
-                        ->lockForUpdate()
-                        ->first();
+                    // 复核物料需求行：防并发超退（并发审核同一物料已在上方批量锁定串行化）
+                    $pm = $pmMap->get($item->product_id);
                     if (! $pm) {
                         throw new ProductionException('退料数量超过已领数量', 1517);
                     }
@@ -275,8 +280,6 @@ class ReturnListController extends Controller
                         throw new ProductionException('退料数量超过已领数量', 1517);
                     }
                     $writeOff[$item->product_id] = bcadd((string) ($writeOff[$item->product_id] ?? '0'), (string) $item->quantity, 2);
-                    // 锁定行留存复用（同物料多行明细指向同一需求行，覆盖存入等价）
-                    $pmMap[$item->product_id] = $pm;
                     $movements[] = [
                         'product_id' => $item->product_id,
                         'warehouse_id' => $locked->warehouse_id,

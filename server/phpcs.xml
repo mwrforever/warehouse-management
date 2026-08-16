@@ -32,6 +32,9 @@
         <exclude name="PSR2.Classes.ClassDeclaration.OpenBraceNewLine"/>
         <exclude name="Squiz.Functions.MultiLineFunctionDeclaration.BraceOnSameLine"/>
         <exclude name="Squiz.WhiteSpace.ScopeClosingBrace.ContentBefore"/>
+        <!-- 无参 new 去括号豁免：与 Pint laravel preset 的 new_with_parentheses 冲突
+             （Pint 要求无参 `new Foo` 去括号，PSR12 要求 `new Foo()`），写法由 Pint 统一管理 -->
+        <exclude name="PSR12.Classes.ClassInstantiation"/>
     </rule>
 
     <file>app</file>

@@ -204,7 +204,9 @@ class ReportService
      * 合格/不良/工时=operation_reports 按工单求和；物料耗用=Σ已审核领料-Σ已审核退料
      * （按物料分组；审核写流水的行数量与行明细一致，与 E2E 流水核对口径等价）。
      * 计划日期 [date_from, date_to] 闭区间；product_id 可空筛选成品。
-     * 返回 totals=全区间工单合计（order_count/计划/完工/合格/不良，KPI 口径；先于 items 截断计算）。
+     * 返回 totals=全区间工单合计（order_count/计划/完工/合格/不良，KPI 口径；SQL 下推聚合，
+     * 不受 items 截断影响）；items=plan_date 升序前 500 工单（P1-1：lazy 装载第 501 行即截断，
+     * 报工/领退料聚合仅对展示行执行——大区间传输量从「区间全量」降为「前 500 行+关联聚合」）。
      *
      * @param  string  $dateFrom  计划日期起始 Y-m-d
      * @param  string  $dateTo  计划日期结束 Y-m-d
@@ -212,20 +214,58 @@ class ReportService
      */
     public function production(string $dateFrom, string $dateTo, ?int $productId = null): array
     {
-        $query = ProductionOrder::query()
-            ->join('products', 'products.id', '=', 'production_orders.product_id')
+        // 窗口过滤（totals 与 items 三查共用同一口径：plan_date 闭区间 + 成品可空筛选）
+        $window = ProductionOrder::query()
             ->whereDate('production_orders.plan_date', '>=', $dateFrom)
-            ->whereDate('production_orders.plan_date', '<=', $dateTo)
+            ->whereDate('production_orders.plan_date', '<=', $dateTo);
+        if ($productId !== null) {
+            $window->where('production_orders.product_id', $productId);
+        }
+
+        // totals 下推 SQL（P1-1）：工单数/计划/完工由窗口单行聚合得出（空窗口 COUNT=0、SUM=null 归 '0'），
+        // 免去区间工单数千张时的全量装载+PHP 逐行累加；报工合格/不良 join 工单按同一窗口过滤
+        // （不依赖 id 列表；order_id 外键 cascade 保证与明细聚合同一行级口径）
+        $orderAgg = (clone $window)->selectRaw('COUNT(*) as c, SUM(quantity) as p, SUM(completed_qty) as cp')->first();
+        $reportQuery = OperationReport::query()
+            ->join('production_orders', 'production_orders.id', '=', 'operation_reports.order_id')
+            ->whereDate('production_orders.plan_date', '>=', $dateFrom)
+            ->whereDate('production_orders.plan_date', '<=', $dateTo);
+        if ($productId !== null) {
+            $reportQuery->where('production_orders.product_id', $productId);
+        }
+        $reportTotals = $reportQuery
+            ->selectRaw('SUM(operation_reports.qualified_qty) as q, SUM(operation_reports.defective_qty) as d')
+            ->first();
+
+        $totals = [
+            'order_count' => (int) ($orderAgg?->getAttribute('c') ?? 0),
+            'total_plan' => $this->normalizeQty((string) ($orderAgg?->getAttribute('p') ?? '0')),
+            'total_completed' => $this->normalizeQty((string) ($orderAgg?->getAttribute('cp') ?? '0')),
+            'total_qualified' => $this->normalizeQty((string) ($reportTotals?->getAttribute('q') ?? '0')),
+            'total_defective' => $this->normalizeQty((string) ($reportTotals?->getAttribute('d') ?? '0')),
+        ];
+
+        // items 装载端预剪枝（P1-1）：join 商品名/编码后按 (plan_date, id) 升序 lazy 分块遍历，
+        // 收集前 500 行——第 501 行出现即置截断并 break（首块 1000 行内 break，顺序与旧
+        // get()+array_slice(0,500) 逐字节等价；不触发跨块偏移分页）
+        $orders = [];
+        $truncated = false;
+        $ordersQuery = (clone $window)
+            ->join('products', 'products.id', '=', 'production_orders.product_id')
             ->select('production_orders.*', 'products.name as product_name', 'products.code as product_code')
             ->orderBy('production_orders.plan_date')
             ->orderBy('production_orders.id');
-        if ($productId !== null) {
-            $query->where('production_orders.product_id', $productId);
+        foreach ($ordersQuery->lazy() as $order) {
+            if (count($orders) >= self::MAX_ROWS) {
+                $truncated = true; // 第 501 行即知截断，该行不入展示与聚合
+                break;
+            }
+            $orders[] = $order;
         }
-        $orders = $query->get();
+        $orders = collect($orders);
         $orderIds = $orders->pluck('id')->all();
 
-        // 报工聚合：按工单求和（合格/不良/工时）
+        // 报工聚合：仅对展示行（截断后前 500 工单）执行——截断后工单的聚合数据不再传输（P1-1）
         $reports = collect();
         $materials = ['picks' => collect(), 'returns' => collect()];
         if ($orderIds !== []) {
@@ -263,23 +303,6 @@ class ReportService
             ->select('products.id', 'products.name', 'products.code', 'units.name as unit_name')
             ->get()
             ->keyBy('id');
-
-        // 全区间 totals：对窗口内全部工单求和（KPI 依赖全量口径，不受 items 500 行截断影响——
-        // 其他三接口 KPI 均用全区间 totals，production 此前缺失导致截断时 KPI 静默低估失真）
-        $totals = ['order_count' => 0, 'total_plan' => '0', 'total_completed' => '0', 'total_qualified' => '0', 'total_defective' => '0'];
-        foreach ($orders as $order) {
-            $agg = $reports->get($order->id);
-            $totals['order_count']++;
-            $totals['total_plan'] = bcadd($totals['total_plan'], (string) $order->quantity, 2);
-            $totals['total_completed'] = bcadd($totals['total_completed'], (string) $order->completed_qty, 2);
-            $totals['total_qualified'] = bcadd($totals['total_qualified'], (string) ($agg?->getAttribute('q') ?? '0'), 2);
-            $totals['total_defective'] = bcadd($totals['total_defective'], (string) ($agg?->getAttribute('d') ?? '0'), 2);
-        }
-        // 数量列与 items 归一约定一致：仅剥离 '.00' 尾零（'30'→'30'、'30.50'→'30.50'）
-        $totals['total_plan'] = preg_replace('/\.00$/', '', $totals['total_plan']);
-        $totals['total_completed'] = preg_replace('/\.00$/', '', $totals['total_completed']);
-        $totals['total_qualified'] = preg_replace('/\.00$/', '', $totals['total_qualified']);
-        $totals['total_defective'] = preg_replace('/\.00$/', '', $totals['total_defective']);
 
         $items = $orders->map(function ($order) use ($reports, $materials, $products) {
             $agg = $reports->get($order->id);
@@ -335,9 +358,9 @@ class ReportService
                 'material_used' => $materialUsed,
             ];
         })->all();
-        $truncated = count($items) > self::MAX_ROWS;
 
-        return ['items' => $truncated ? array_slice($items, 0, self::MAX_ROWS) : $items, 'totals' => $totals, 'truncated' => $truncated];
+        // 截断标志在装载循环内已置位（第 501 行出现即知），此处仅组装响应
+        return ['items' => $items, 'totals' => $totals, 'truncated' => $truncated];
     }
 
     /**
@@ -472,5 +495,12 @@ class ReportService
             'totals' => $totals,
             'truncated' => $truncated,
         ];
+    }
+
+    // 数量列归一（totals 与 items 展示共用口径）：bcmath 转 2 位小数字符串后仅剥离 '.00' 尾零
+    // （'30'→'30'、'30.50'→'30.50'，保留 2 位小数语义；SQL SUM 空值已由调用方归 '0'）
+    private function normalizeQty(string $value): string
+    {
+        return preg_replace('/\.00$/', '', bcadd($value, '0', 2));
     }
 }

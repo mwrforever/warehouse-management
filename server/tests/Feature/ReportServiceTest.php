@@ -576,6 +576,57 @@ class ReportServiceTest extends TestCase
         $this->assertSame('20.00', $res['items'][0]['material_used'][0]['used_qty']);
     }
 
+    public function test_production_truncates_to_500_orders_totals_cover_full_window(): void
+    {
+        // 边界路径（P1-1 预剪枝回归）：501 张工单 → items 截断为 plan_date 升序前 500、truncated=true；
+        // totals 为窗口全量 SQL 合计不受截断影响；截断行的报工/领料只计入 totals 不进 items
+        // （聚合仅对展示行执行，截断行不入展示）
+        $fin = $this->makeProduct('FIN-A', 'finished', '成品');
+        $mat = $this->makeProduct('MAT-A', 'raw_material', '原材料');
+        for ($i = 0; $i < 501; $i++) {
+            $o = $this->makeOrder(
+                $fin,
+                'MO-T-'.$i,
+                '1',
+                Carbon::create(2026, 1, 1)->addDays($i)->toDateString(),
+                3,
+                '1'
+            );
+            if ($i === 500) {
+                // 第 501 张（截断行）：报工 7/1 与领料 5 应计入 totals（合格/不良），但工单不在 items
+                $this->makeReport($o, '7', '1', '1.00');
+                $this->makePick($o, $mat, '5.00');
+            }
+        }
+
+        $res = $this->service->production('2026-01-01', '2027-05-17');
+
+        $this->assertTrue($res['truncated']);
+        $this->assertCount(500, $res['items']);
+        $this->assertSame('MO-T-0', $res['items'][0]['order_no']);
+        $this->assertSame('MO-T-499', $res['items'][499]['order_no']);
+        $this->assertNotContains('MO-T-500', array_column($res['items'], 'order_no'));
+        // totals 全区间口径：501 张工单、计划/完工各 501、合格/不良含截断行报工
+        $this->assertSame(501, $res['totals']['order_count']);
+        $this->assertSame('501', $res['totals']['total_plan']);
+        $this->assertSame('501', $res['totals']['total_completed']);
+        $this->assertSame('7', $res['totals']['total_qualified']);
+        $this->assertSame('1', $res['totals']['total_defective']);
+    }
+
+    public function test_production_empty_window_returns_empty_items_and_zero_totals(): void
+    {
+        // 边界路径（P1-1 SQL 下推）：空区间 → items 空、totals 全 0（SUM null 归 '0'）
+        $res = $this->service->production('2099-01-01', '2099-01-31');
+        $this->assertSame([], $res['items']);
+        $this->assertSame(0, $res['totals']['order_count']);
+        $this->assertSame('0', $res['totals']['total_plan']);
+        $this->assertSame('0', $res['totals']['total_completed']);
+        $this->assertSame('0', $res['totals']['total_qualified']);
+        $this->assertSame('0', $res['totals']['total_defective']);
+        $this->assertFalse($res['truncated']);
+    }
+
     // —— purchaseSales 用例 ——
 
     public function test_purchase_sales_month_sums_approved_documents_and_converts_to_yuan(): void
