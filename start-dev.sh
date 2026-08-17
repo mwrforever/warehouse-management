@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# warehouse 一键启动脚本（开发环境：MySQL + 后端 :8000 + 前端 :5173 + 自动打开浏览器）
+# warehouse 一键启动脚本（开发环境：MySQL + 后端 :7000 + 前端 :4000 + 自动打开浏览器）
 #
 # 用法：
 #   Git Bash 下执行  ./start-dev.sh
@@ -63,15 +63,15 @@ if ! (cd server && php artisan migrate --seed); then
     exit 1
 fi
 
-# 端口占用预检：8000（后端）/ 5173（前端）任一被占用则退出，避免起服务失败后留下半启动状态
-# 注意 netstat 输出中端口列在状态列之前，故端口号须出现在 LISTENING 之前；[^0-9] 防 :51733 之类子串误命中
-if netstat -ano 2>/dev/null | grep -qE "(:8000|:5173)[^0-9].*(LISTENING|LISTEN)"; then
-    echo "✗ 端口 8000 或 5173 已被占用（服务可能已在运行），请先停止后重试"
+# 端口占用预检：7000（后端）/ 4000（前端）任一被占用则退出，避免起服务失败后留下半启动状态
+# 注意 netstat 输出中端口列在状态列之前，故端口号须出现在 LISTENING 之前；[^0-9] 防 :40001 之类子串误命中
+if netstat -ano 2>/dev/null | grep -qE "(:7000|:4000)[^0-9].*(LISTENING|LISTEN)"; then
+    echo "✗ 端口 7000 或 4000 已被占用（服务可能已在运行），请先停止后重试"
     exit 1
 fi
 
-echo "==> [4/5] 启动后端 :8000 与前端 :5173（首次启动前端需编译，约 10-30s）..."
-(cd server && php artisan serve --host=127.0.0.1 --port=8000) &
+echo "==> [4/5] 启动后端 :7000 与前端 :4000（首次启动前端需编译，约 10-30s）..."
+(cd server && php artisan serve --host=127.0.0.1 --port=7000) &
 BACK_PID=$!
 (cd web && npm run dev) &
 FRONT_PID=$!
@@ -80,7 +80,7 @@ echo "==> [5/5] 等待服务就绪并打开浏览器..."
 # 就绪探测：超时未就绪（端口被占、npm 编译失败、后端启动报错）则报错退出，不打开浏览器、不打印成功横幅
 BACK_READY=0
 for i in $(seq 1 60); do
-    if curl -sf http://127.0.0.1:8000 >/dev/null 2>&1; then
+    if curl -sf http://127.0.0.1:7000 >/dev/null 2>&1; then
         BACK_READY=1
         break
     fi
@@ -88,7 +88,7 @@ for i in $(seq 1 60); do
 done
 FRONT_READY=0
 for i in $(seq 1 90); do
-    if curl -sf http://localhost:5173 >/dev/null 2>&1; then
+    if curl -sf http://localhost:4000 >/dev/null 2>&1; then
         FRONT_READY=1
         break
     fi
@@ -96,24 +96,24 @@ for i in $(seq 1 90); do
 done
 if [ "$BACK_READY" -ne 1 ] || [ "$FRONT_READY" -ne 1 ]; then
     echo "✗ 服务未在预期时间内就绪，不打开浏览器："
-    [ "$BACK_READY" -ne 1 ] && echo "  后端 :8000 60 秒内未就绪（查看上方 php artisan serve 输出，检查端口占用）"
-    [ "$FRONT_READY" -ne 1 ] && echo "  前端 :5173 90 秒内未就绪（查看上方 npm run dev 输出，检查端口占用/编译错误）"
+    [ "$BACK_READY" -ne 1 ] && echo "  后端 :7000 60 秒内未就绪（查看上方 php artisan serve 输出，检查端口占用）"
+    [ "$FRONT_READY" -ne 1 ] && echo "  前端 :4000 90 秒内未就绪（查看上方 npm run dev 输出，检查端口占用/编译错误）"
     exit 1
 fi
 
 # 打开默认浏览器（Windows 用 explorer.exe；macOS/Linux 用 open/xdg-open）
 if command -v explorer.exe >/dev/null 2>&1; then
-    explorer.exe "http://localhost:5173" >/dev/null 2>&1 &
+    explorer.exe "http://localhost:4000" >/dev/null 2>&1 &
 elif command -v open >/dev/null 2>&1; then
-    open http://localhost:5173 >/dev/null 2>&1 &
+    open http://localhost:4000 >/dev/null 2>&1 &
 else
-    xdg-open http://localhost:5173 >/dev/null 2>&1 &
+    xdg-open http://localhost:4000 >/dev/null 2>&1 &
 fi
 
 echo
 echo "=============================================="
-echo "  前端界面 : http://localhost:5173"
-echo "  后端 API  : http://127.0.0.1:8000"
+echo "  前端界面 : http://localhost:4000"
+echo "  后端 API  : http://127.0.0.1:7000"
 echo "  登录账号  : admin / admin123"
 echo "  停止服务  : Ctrl+C"
 echo "=============================================="
