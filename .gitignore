@@ -4,6 +4,7 @@
 
 # 本地工具与会话杂项
 .zcode/
+.workbuddy/
 
 # playwright-cli 登录态（本地测试产物）
 auth.json

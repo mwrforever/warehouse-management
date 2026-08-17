@@ -1,8 +1,8 @@
 <?php
 
-// 成本价扫描索引：purchase_inbound_items(product_id, created_at, id) 复合索引替代单列 product_id 索引——
-// 成本价估算按「商品内 created_at DESC, id DESC 取首条」遍历，复合索引最左前缀 product_id 继续服务
-// 既有单列查询，created_at+id 使遍历免 filesort、按索引序流式输出（cursor 首条即最新价）
+// 成本价查询索引：purchase_inbound_items(product_id, created_at, id) 复合索引替代单列 product_id 索引——
+// 最左前缀 product_id 继续服务既有单列查询；CostPriceService 全量重建的 ORDER BY 与该索引全序一致
+// （product_id, created_at, id 升序、末条即最新价），可经索引序扫描免 filesort、按序流式输出
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;

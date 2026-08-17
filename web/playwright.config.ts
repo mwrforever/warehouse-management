@@ -2,9 +2,9 @@
 // 后端启动前先 migrate:fresh --seed（含 admin/admin123 超管账号），E2E 数据每次全量重建
 import { defineConfig, devices } from '@playwright/test'
 
-// 后端：先重建种子库再常驻 serve（8000 端口，与 vite 代理一致）
+// 后端：先重建种子库再常驻 serve（7000 端口，与 vite 代理一致）
 const backendCommand =
-  'php artisan migrate:fresh --seed --force && php artisan serve --host=127.0.0.1 --port=8000'
+  'php artisan migrate:fresh --seed --force && php artisan serve --host=127.0.0.1 --port=7000'
 
 export default defineConfig({
   testDir: './e2e',
@@ -15,8 +15,8 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    // 前端 dev server 地址（vite 代理 /api → :8000）
-    baseURL: 'http://127.0.0.1:5173',
+    // 前端 dev server 地址（vite 代理 /api → :7000）
+    baseURL: 'http://127.0.0.1:4000',
     // 浏览器时区锁定 UTC：与后端 Laravel（config/app.php timezone=UTC）及 CI（GitHub Actions 默认 UTC）对齐——
     // 机器本地为东八区时，凌晨 0-8 点浏览器日期与后端 UTC 日期相差一天，
     // 日期联动断言（今日流水/工单计划日期）会跨日漂移失败
@@ -29,7 +29,7 @@ export default defineConfig({
       // 后端：E2E 专用 SQLite 文件库（相对 server/ 目录），migrate 后常驻
       command: backendCommand,
       cwd: '../server',
-      url: 'http://127.0.0.1:8000',
+      url: 'http://127.0.0.1:7000',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       env: {
@@ -38,9 +38,9 @@ export default defineConfig({
       },
     },
     {
-      // vite 默认绑定 IPv6 ::1，Playwright 探测 127.0.0.1 会超时：显式绑定 IPv4
+      // vite 默认绑定 IPv6 ::1，Playwright 探测 127.0.0.1 会超时：显式绑定 IPv4；端口由 vite.config.ts 的 port:4000 决定
       command: 'npm run dev -- --host 127.0.0.1',
-      url: 'http://127.0.0.1:5173',
+      url: 'http://127.0.0.1:4000',
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
     },

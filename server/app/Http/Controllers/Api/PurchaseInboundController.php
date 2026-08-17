@@ -16,8 +16,11 @@ use App\Services\DocumentSequenceService;
 use App\Services\InventoryService;
 use App\Services\PurchaseOrderService;
 use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PurchaseInboundController extends Controller
 {
@@ -311,7 +314,7 @@ class PurchaseInboundController extends Controller
     }
 
     /**
-     * 审核（核心）：事务内「锁单幂等 → 锁订单行验剩余量 → InventoryService 加库存
+     * 审核（核心）：事务内「锁单幂等 → 批量预锁订单行验剩余量 → 批量预锁订单头验状态 → InventoryService 加库存
      * → 回写 received_qty → syncStatus 重算订单状态」任一步失败整体回滚
      */
     public function approve(PurchaseInbound $inbound)
@@ -326,19 +329,34 @@ class PurchaseInboundController extends Controller
                 }
                 $movements = [];
                 $received = []; // [order_item_id => 本次累计入库量] 待回写
-                /** @var array<int, PurchaseOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
-                $oiMap = [];
+                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：订单行按 id 一次锁定、订单头按去重
+                // order_id 批量锁一次（同订单多明细不再重复锁同一行）；锁序保持「订单行→订单头」
+                // 全局方向，批量按索引序获取还消除了「两单明细顺序相反」时的交叉锁窗口（无 ABBA 新方向）
+                $orderItemIds = $locked->items->pluck('order_item_id')->filter()->values()->all();
+                /** @var Collection<int, PurchaseOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
+                $oiMap = $orderItemIds === []
+                    ? collect()
+                    : PurchaseOrderItem::query()->whereIn('id', $orderItemIds)->lockForUpdate()->get()->keyBy('id');
+                $orderIds = $oiMap->pluck('order_id')->unique()->values()->all();
+                /** @var Collection<int, PurchaseOrder> $orderMap 已锁定的订单头（状态复核复用） */
+                $orderMap = $orderIds === []
+                    ? collect()
+                    : PurchaseOrder::query()->whereIn('id', $orderIds)->lockForUpdate()->get()->keyBy('id');
                 /** @var PurchaseInboundItem $item */
                 foreach ($locked->items as $item) {
                     if ($item->order_item_id) {
-                        // 锁订单行：防并发超收（两张入库单同时审同一行时串行化）
-                        $oi = PurchaseOrderItem::whereKey($item->order_item_id)->lockForUpdate()->first();
+                        // 复核订单行：防并发超收（并发审核同一行已在上方批量锁定串行化）
+                        $oi = $oiMap->get($item->order_item_id);
                         // 防御：订单行已被删除或商品不一致（数据完整性，归 1308 语义族）
                         if (! $oi || $oi->product_id !== $item->product_id) {
                             throw new PurchaseException('入库明细与订单行不一致', 1308);
                         }
-                        // 锁订单头复查状态：关闭/已完成/草稿均不可入库（1308）
-                        $order = PurchaseOrder::whereKey($oi->order_id)->lockForUpdate()->firstOrFail();
+                        // 复核订单头状态：关闭/已完成/草稿均不可入库（1308）；
+                        // 头缺失（FK cascade 下不可达的防御路径）与 firstOrFail 同 404 语义
+                        $order = $orderMap->get($oi->order_id);
+                        if (! $order) {
+                            throw (new ModelNotFoundException)->setModel(PurchaseOrder::class, $oi->order_id);
+                        }
                         if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
                             throw new PurchaseException('该订单当前不可入库', 1308);
                         }
@@ -348,8 +366,6 @@ class PurchaseInboundController extends Controller
                             throw new PurchaseException('入库数量超过订单剩余数量', 1308);
                         }
                         $received[$oi->id] = bcadd((string) ($received[$oi->id] ?? '0'), (string) $item->quantity, 2);
-                        // 锁定行留存复用（明细按 商品+订单行 查重，同订单行不会重复出现）
-                        $oiMap[$oi->id] = $oi;
                     }
                     $movements[] = [
                         'product_id' => $item->product_id,
@@ -383,7 +399,13 @@ class PurchaseInboundController extends Controller
             });
             // 审核成功（事务已提交）失效成本价缓存：审核是价格集合的唯一变化点（见 CostPriceService 失效契约）；
             // 回滚路径抛异常跳过此处，缓存最多早清（下次访问重建），无脏读风险
-            $this->costPriceService->flush();
+            try {
+                $this->costPriceService->flush();
+            } catch (\Throwable $e) {
+                // 缓存层失败不回滚已提交的审核（单据已生效）：最坏缓存脏一次、下次访问重建；
+                // 若向调用方抛错，前端会误判审核失败而重试，撞 1310 幂等造成困惑，故吞异常仅记 warn
+                Log::warning('采购入库审核后成本价缓存失效失败，已忽略：'.$e->getMessage());
+            }
         } catch (PurchaseException $e) {
             // 1310 幂等 / 1308 超量或订单状态不符（余额不足等防御性场景同样归 1308 语义族）
             return $this->fail($e->getCode() ?: 1308, $e->getMessage());

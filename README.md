@@ -50,12 +50,12 @@ docker compose up -d
 cd server
 composer install
 cp .env.example .env && php artisan key:generate
-php artisan migrate --seed && php artisan serve   # http://localhost:8000
+php artisan migrate --seed && php artisan serve --port=7000   # http://localhost:7000
 
 # 3. 前端
 cd ../web
 npm install
-npm run dev                                       # http://localhost:5173
+npm run dev                                       # http://localhost:4000
 
 # 默认管理员账号 admin / admin123（生产环境务必经 ADMIN_PASSWORD 环境变量覆盖）
 ```

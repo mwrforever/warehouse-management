@@ -17,17 +17,23 @@
           v-for="group in menu"
           :key="group.title ?? 'home'"
           class="nav-group"
-          :class="{ closed: group.title ? closedGroups[group.title] : false }"
+          :class="{
+            // 限权角色下整组无可见菜单项时隐藏，避免留下空档与多余分隔线
+            'nav-group--empty': visibleItems(group).length === 0,
+            closed: group.title ? closedGroups[group.title] : false,
+          }"
         >
           <div
             v-if="group.title && visibleItems(group).length > 0"
             class="nav-group-title"
+            :class="{ 'group-active': groupActive(group) }"
             :data-tip="group.title"
             :data-desc="`${visibleItems(group).length} 个功能`"
             @click="toggleGroup(group.title)"
           >
             <el-icon class="g-icon"><component :is="group.icon" /></el-icon>
             <span>{{ group.title }}</span>
+            <span class="g-count">{{ visibleItems(group).length }}</span>
             <el-icon class="chev"><ArrowDown /></el-icon>
           </div>
           <div class="nav-items">
@@ -90,13 +96,14 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <div class="um-head">
+                <!-- 用户信息头为纯展示：用 disabled item 保持 ul>li 合法结构（裸 div 破坏 HTML 语义且不参与菜单键盘导航） -->
+                <el-dropdown-item :disabled="true" class="um-head">
                   <span class="ava">{{ avatarChar }}</span>
                   <span class="meta">
                     <b>{{ auth.user?.name }}</b>
                     <span>{{ auth.user?.email ?? roleLabel }}</span>
                   </span>
-                </div>
+                </el-dropdown-item>
                 <el-dropdown-item command="logout" class="um-logout">
                   <el-icon><SwitchButton /></el-icon>
                   退出登录
@@ -482,6 +489,11 @@ function visibleItems(group: MenuGroup): MenuItem[] {
   return group.items.filter((i) => !i.perm || auth.has(i.perm))
 }
 
+// 分组高亮：当前路由落在该组任一菜单项下时，分组标题切换为"所在分区"强调态
+function groupActive(group: MenuGroup): boolean {
+  return group.items.some((i) => route.path === i.to || route.path.startsWith(i.to + '/'))
+}
+
 // 分组折叠切换
 function toggleGroup(title: string) {
   closedGroups[title] = !closedGroups[title]
@@ -613,34 +625,68 @@ function onTipOut(e: MouseEvent) {
   scrollbar-color: var(--p-700) transparent;
 }
 .nav-group {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .nav-group:first-child {
   margin-top: 4px;
 }
+/* 整组无可见菜单项时隐藏（限权角色下不留空档） */
+.nav-group--empty {
+  display: none;
+}
+/* 分组间细分隔线：把"分组"从连续的菜单行中切分出来，形成分区节奏 */
+.nav-group + .nav-group {
+  margin-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 12px;
+}
+/* 分组标题 = 分区标签：小号加宽字距 + 弱化图标，与菜单项（亮色可点行）在字号、明度上强区分；
+   右侧数量徽标与折叠箭头是"可展开分组"的专属暗示，菜单项没有 */
 .nav-group-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 6px 10px;
   font-size: 11px;
-  letter-spacing: 1.5px;
+  letter-spacing: 1.4px;
   color: var(--p-400);
   font-weight: 600;
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
   white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 .nav-group-title .g-icon {
-  font-size: 15px;
+  font-size: 13px;
+  color: var(--p-600);
+}
+/* 功能数量徽标：圆角描边数字，一眼可辨"这是一组功能"而非单个页面 */
+.g-count {
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 99px;
   color: var(--p-500);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 .nav-group-title .chev {
-  margin-left: auto;
-  transition: transform 0.2s;
-  color: var(--p-500);
-  font-size: 13px;
+  transition:
+    transform 0.2s,
+    color 0.2s;
+  color: var(--p-600);
+  font-size: 12px;
+}
+/* 展开中的分组：箭头用强调色，直观提示"当前处于展开状态" */
+.nav-group:not(.closed) .nav-group-title .chev {
+  color: var(--a-500);
 }
 .nav-group.closed .nav-group-title .chev {
   transform: rotate(-90deg);
@@ -648,12 +694,36 @@ function onTipOut(e: MouseEvent) {
 .nav-group.closed .nav-items {
   display: none;
 }
+/* 分组标题悬停：淡底 + 提亮，反馈"可点"但保持标签质感，与菜单项的圆角药丸悬停区分 */
+.nav-group-title:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--p-200);
+}
+.nav-group-title:hover .g-icon {
+  color: var(--p-400);
+}
+.nav-group-title:hover .g-count {
+  color: var(--a-400);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.nav-group-title:hover .chev {
+  color: var(--a-400);
+}
+/* 当前路由所在分区的标题高亮（"所在分区"强调态） */
+.nav-group-title.group-active {
+  color: var(--p-100);
+}
+.nav-group-title.group-active .g-icon {
+  color: var(--a-400);
+}
 
 .nav-items {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
+  margin-top: 6px;
+  /* 菜单项统一缩进，空间上直观呈现"分组 → 页面"的父子层级 */
+  margin-left: 12px;
 }
 .nav-item {
   display: flex;
@@ -661,7 +731,8 @@ function onTipOut(e: MouseEvent) {
   gap: 11px;
   padding: 8.5px 10px;
   border-radius: 8px;
-  color: var(--p-400);
+  /* 菜单项是亮色可点行：文字近白 vs 分组标题的灰暗标签，拉开明度对比 */
+  color: var(--p-200);
   font-size: 13.5px;
   position: relative;
   transition:
@@ -671,10 +742,16 @@ function onTipOut(e: MouseEvent) {
 }
 .nav-item .n-icon {
   font-size: 17px;
+  /* 图标弱于文字，阅读重心放在菜单名上；hover 时再随行提亮 */
+  color: var(--p-400);
   flex: none;
+  transition: color 0.15s;
 }
 .nav-item:hover {
   background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.nav-item:hover .n-icon {
   color: var(--p-200);
 }
 /* hover 底部指示条（不与激活左条冲突） */
@@ -727,6 +804,10 @@ function onTipOut(e: MouseEvent) {
 .sidebar.collapsed .nav-group-title {
   justify-content: center;
   padding: 8px 0;
+}
+/* 折叠态取消菜单项缩进，图标水平居中 */
+.sidebar.collapsed .nav-items {
+  margin-left: 0;
 }
 .sidebar.collapsed .nav-item {
   justify-content: center;

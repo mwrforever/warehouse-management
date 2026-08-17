@@ -268,6 +268,46 @@ class PickListTest extends TestCase
         $this->assertSame(PickList::STATUS_DRAFT, $pick2->refresh()->status);
     }
 
+    public function test_approve_multiple_items_batch_locks_all_materials_and_balances(): void
+    {
+        // 正常路径（P1-2 批量预锁回归）：双物料领料——物料需求行/余额行各一次 whereIn 批量锁定，
+        // 两商品同时扣减、issued_qty 各自回写（批量锁与逐行锁行为等价）
+        $mat2 = Product::create(['name' => '测试钢板', 'code' => 'MAT-002', 'type' => 'raw_material',
+            'category_id' => $this->mat->category_id, 'unit_id' => $this->mat->unit_id, 'status' => 1]);
+        app(InventoryService::class)->apply([
+            ['product_id' => $mat2->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->a01->id,
+                'direction' => 1, 'quantity' => 30, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED-2', 'remark' => '测试基线'],
+        ]);
+        // 双物料启用 BOM（最新启用版，新单自动采用）→ 建单 → 下达 → 开工（MAT-001 需求 20、MAT-002 需求 20）
+        $bom2 = BomHeader::create([
+            'code' => 'BOM-002', 'product_id' => $this->fin->id, 'version' => 'v2',
+            'quantity' => 1, 'status' => 1,
+        ]);
+        $bom2->items()->create(['material_id' => $this->mat->id, 'quantity' => 2, 'unit_id' => $this->mat->unit_id]);
+        $bom2->items()->create(['material_id' => $mat2->id, 'quantity' => 2, 'unit_id' => $this->mat->unit_id]);
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->fin->id, 'quantity' => 10, 'plan_date' => now()->toDateString(),
+        ]);
+        $res->assertJsonPath('code', 0);
+        $order2 = ProductionOrder::where('no', $res->json('data.no'))->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order2->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order2->id}/start")->assertJsonPath('code', 0);
+
+        $no = $this->createPick($this->payload(['order_id' => $order2->id, 'items' => [
+            ['product_id' => $this->mat->id, 'pick_qty' => 20],
+            ['product_id' => $mat2->id, 'pick_qty' => 10],
+        ]]));
+        $pick = PickList::where('no', $no)->first();
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/approve")
+            ->assertJsonPath('code', 0);
+        // 余额：MAT-001 50-20=30、MAT-002 30-10=20；需求行 issued_qty 各自回写
+        $this->assertSame('30.00', InventoryBalance::where('product_id', $this->mat->id)->first()->quantity);
+        $this->assertSame('20.00', InventoryBalance::where('product_id', $mat2->id)->first()->quantity);
+        $this->assertSame('20.00', $order2->materials()->where('material_id', $this->mat->id)->first()->issued_qty);
+        $this->assertSame('10.00', $order2->materials()->where('material_id', $mat2->id)->first()->issued_qty);
+    }
+
     public function test_issue_sets_all_issued_status(): void
     {
         // 正常路径：审核后发料 → issue_status 全部发料（V1 一次发完）；响应含状态文案

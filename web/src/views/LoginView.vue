@@ -38,7 +38,7 @@
 
       <div class="hero-foot">
         <span>© 2026 衡序智造 HENGXU</span>
-        <span class="num">v1.0.0 · build 2026.08.14</span>
+        <span class="num">v{{ appVersion }}</span>
       </div>
     </aside>
 
@@ -89,8 +89,7 @@
           <div class="demo-hint">
             <el-icon class="hint-ic"><MagicStick /></el-icon>
             <span
-              >演示账号：<code>admin / admin123</code
-              >，生产环境请使用<code>管理员</code>分配的专属账号，密码策略见安全规范。</span
+              >演示环境默认口令请联系管理员获取；生产环境请使用管理员分配的专属账号，密码策略见安全规范。</span
             >
           </div>
         </div>
@@ -113,6 +112,9 @@ const router = useRouter()
 const auth = useAuthStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+
+// 版本角标：构建期由 vite define 注入 package.json 版本（见 vite.config.ts），发版后自动同步，避免硬编码失真
+const appVersion = import.meta.env.VITE_APP_VERSION
 
 const form = reactive({ username: '', password: '' })
 
@@ -169,6 +171,8 @@ async function submit() {
     linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: 44px 44px;
+  /* -webkit- 前缀：Safari < 15.4 不支持无前缀 mask-image（旧版优雅降级为全铺纹理） */
+  -webkit-mask-image: radial-gradient(120% 90% at 30% 20%, #000 55%, transparent 100%);
   mask-image: radial-gradient(120% 90% at 30% 20%, #000 55%, transparent 100%);
 }
 .login-hero::after {
@@ -404,14 +408,6 @@ async function submit() {
   font-size: 15px;
   color: var(--a-600);
   margin-top: 2px;
-}
-.demo-hint code {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--p-700);
-  background: var(--surface);
-  padding: 1px 6px;
-  border-radius: 4px;
 }
 .login-foot {
   margin-top: 34px;

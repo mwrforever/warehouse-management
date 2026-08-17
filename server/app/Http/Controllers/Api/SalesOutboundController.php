@@ -18,8 +18,10 @@ use App\Services\DocumentSequenceService;
 use App\Services\InventoryService;
 use App\Services\SalesOrderService;
 use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class SalesOutboundController extends Controller
@@ -317,8 +319,9 @@ class SalesOutboundController extends Controller
     }
 
     /**
-     * 审核（核心）：事务内「锁单幂等 1410 → 逐行锁订单行验剩余量 1407 → 逐行锁余额行校验余额充足 1409
-     * → InventoryService 扣库存 → 回写 shipped_qty → syncStatus 重算订单状态」任一步失败整体回滚
+     * 审核（核心）：事务内「锁单幂等 1410 → 批量预锁订单行验剩余量 1407 → 批量预锁订单头验状态
+     * → 批量预锁余额行校验余额充足 1409 → InventoryService 扣库存 → 回写 shipped_qty
+     * → syncStatus 重算订单状态」任一步失败整体回滚
      */
     public function approve(SalesOutbound $outbound)
     {
@@ -332,19 +335,43 @@ class SalesOutboundController extends Controller
                 }
                 $movements = [];
                 $shipped = []; // [order_item_id => 本次累计出库量] 待回写
-                /** @var array<int, SalesOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
-                $oiMap = [];
+                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：订单行按 id 一次锁定、订单头按去重
+                // order_id 批量锁一次（同订单多明细不再重复锁同一行）、余额行按商品一次锁定；
+                // 锁序保持「订单行→订单头→余额」全局方向，批量按索引序获取还消除了
+                // 「两单明细顺序相反」时的交叉锁窗口（无 ABBA 新方向）
+                $orderItemIds = $locked->items->pluck('order_item_id')->filter()->values()->all();
+                /** @var Collection<int, SalesOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
+                $oiMap = $orderItemIds === []
+                    ? collect()
+                    : SalesOrderItem::query()->whereIn('id', $orderItemIds)->lockForUpdate()->get()->keyBy('id');
+                $orderIds = $oiMap->pluck('order_id')->unique()->values()->all();
+                /** @var Collection<int, SalesOrder> $orderMap 已锁定的订单头（状态复核复用） */
+                $orderMap = $orderIds === []
+                    ? collect()
+                    : SalesOrder::query()->whereIn('id', $orderIds)->lockForUpdate()->get()->keyBy('id');
+                /** @var Collection<int, InventoryBalance> $balanceMap 已锁定的余额行（防超卖校验复用） */
+                $balanceMap = InventoryBalance::query()
+                    ->whereIn('product_id', $locked->items->pluck('product_id'))
+                    ->where('warehouse_id', $locked->warehouse_id)
+                    ->where('location_id', $locked->location_id)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('product_id');
                 /** @var SalesOutboundItem $item */
                 foreach ($locked->items as $item) {
                     if ($item->order_item_id) {
-                        // 锁订单行：防并发超收（两张出库单同时审同一行时串行化）
-                        $oi = SalesOrderItem::whereKey($item->order_item_id)->lockForUpdate()->first();
+                        // 复核订单行：防并发超收（并发审核同一行已在上方批量锁定串行化）
+                        $oi = $oiMap->get($item->order_item_id);
                         // 防御：订单行已被删除或商品不一致（数据完整性，归 1407 语义族）
                         if (! $oi || $oi->product_id !== $item->product_id) {
                             throw new SalesException('出库明细与订单行不一致', 1407);
                         }
-                        // 锁订单头复查状态：关闭/已完成/草稿均不可出库（1407）
-                        $order = SalesOrder::whereKey($oi->order_id)->lockForUpdate()->firstOrFail();
+                        // 复核订单头状态：关闭/已完成/草稿均不可出库（1407）；
+                        // 头缺失（FK cascade 下不可达的防御路径）与 firstOrFail 同 404 语义
+                        $order = $orderMap->get($oi->order_id);
+                        if (! $order) {
+                            throw (new ModelNotFoundException)->setModel(SalesOrder::class, $oi->order_id);
+                        }
                         if (! in_array($order->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
                             throw new SalesException('该订单当前不可出库', 1407);
                         }
@@ -354,15 +381,9 @@ class SalesOutboundController extends Controller
                             throw new SalesException('出库数量超过订单剩余数量', 1407);
                         }
                         $shipped[$oi->id] = bcadd((string) ($shipped[$oi->id] ?? '0'), (string) $item->quantity, 2);
-                        // 锁定行留存复用（明细按 商品+订单行 查重，同订单行不会重复出现）
-                        $oiMap[$oi->id] = $oi;
                     }
-                    // 防超卖：锁余额行校验（并发审核同一商品在此串行化；消息含商品名与当前库存快照）
-                    $balance = InventoryBalance::where('product_id', $item->product_id)
-                        ->where('warehouse_id', $locked->warehouse_id)
-                        ->where('location_id', $locked->location_id)
-                        ->lockForUpdate()
-                        ->first();
+                    // 防超卖：余额行已批量锁定，校验余额充足（并发审核同一商品在此串行化；消息含商品名与当前库存快照）
+                    $balance = $balanceMap->get($item->product_id);
                     $current = $balance ? (string) $balance->quantity : '0';
                     if (bccomp((string) $item->quantity, $current, 2) > 0) {
                         // 库存快照去掉小数尾零展示（14.00 → 14；0.00/缺行 → 0）

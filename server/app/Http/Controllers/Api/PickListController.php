@@ -270,7 +270,7 @@ class PickListController extends Controller
     }
 
     /**
-     * 审核（核心）：事务内「锁单幂等 1516 → 逐行锁物料需求行复核 1513 → 逐行锁余额行校验充足 1515
+     * 审核（核心）：事务内「锁单幂等 1516 → 批量预锁物料需求行复核 1513 → 批量预锁余额行校验充足 1515
      * → InventoryService 扣库存（pick, -1）→ 回写 issued_qty」任一步失败整体回滚
      */
     public function approve(PickList $pick)
@@ -291,15 +291,29 @@ class PickListController extends Controller
                 }
                 $movements = [];
                 $issueMap = []; // [material_id => 本次领用累计] 待回写
-                /** @var array<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
-                $pmMap = [];
+                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：物料需求行/余额行按唯一索引序一次锁定，
+                // 循环内查 map——明细 N 行时查询次数从 ~2N 降为常数；批量锁按索引序获取与逐行等价，
+                // 且消除「两单明细顺序相反」时的交叉锁窗口（同索引序获取，无 ABBA 新方向）
+                $productIds = $locked->items->pluck('product_id');
+                /** @var Collection<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
+                $pmMap = ProductionOrderMaterial::query()
+                    ->where('order_id', $locked->order_id)
+                    ->whereIn('material_id', $productIds)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('material_id');
+                /** @var Collection<int, InventoryBalance> $balanceMap 已锁定的余额行（防超卖校验复用） */
+                $balanceMap = InventoryBalance::query()
+                    ->whereIn('product_id', $productIds)
+                    ->where('warehouse_id', $locked->warehouse_id)
+                    ->where('location_id', $locked->location_id)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('product_id');
                 /** @var PickListItem $item */
                 foreach ($locked->items as $item) {
-                    // 锁物料需求行：防并发超领（两张领料单同时审同一物料时串行化）
-                    $pm = ProductionOrderMaterial::where('order_id', $locked->order_id)
-                        ->where('material_id', $item->product_id)
-                        ->lockForUpdate()
-                        ->first();
+                    // 复核物料需求行：防并发超领（并发审核同一物料已在上方批量锁定串行化）
+                    $pm = $pmMap->get($item->product_id);
                     if (! $pm) {
                         throw new ProductionException('领料数量超过需求数量', 1513);
                     }
@@ -309,14 +323,8 @@ class PickListController extends Controller
                         throw new ProductionException('领料数量超过需求数量', 1513);
                     }
                     $issueMap[$item->product_id] = bcadd((string) ($issueMap[$item->product_id] ?? '0'), (string) $item->pick_qty, 2);
-                    // 锁定行留存复用（同物料多行明细指向同一需求行，覆盖存入等价）
-                    $pmMap[$item->product_id] = $pm;
-                    // 防超卖：锁余额行校验（并发审核同一商品在此串行化；消息含商品编码与精确库存快照）
-                    $balance = InventoryBalance::where('product_id', $item->product_id)
-                        ->where('warehouse_id', $locked->warehouse_id)
-                        ->where('location_id', $locked->location_id)
-                        ->lockForUpdate()
-                        ->first();
+                    // 防超卖：余额行已批量锁定，校验余额充足（并发审核同一商品在此串行化；消息含商品编码与精确库存快照）
+                    $balance = $balanceMap->get($item->product_id);
                     $current = $balance ? (string) $balance->quantity : '0';
                     if (bccomp((string) $item->pick_qty, $current, 2) > 0) {
                         // 1515 消息契约不含库存快照，仅含商品编码（E2E 断言 MAT-001）
