@@ -13,7 +13,9 @@ import {
 } from '../../api/sales'
 import { customerApi, type CustomerItem } from '../../api/customer'
 import { productApi } from '../../api/product'
+import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import { formatYuan } from '../../utils/format'
@@ -21,10 +23,7 @@ import { formatYuan } from '../../utils/format'
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<SalesOutboundItem[]>([])
-const total = ref(0)
 const customers = ref<CustomerItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
@@ -34,13 +33,11 @@ const products = ref<{ id: number; name: string; code: string; barcode: string |
 // 今日已出库汇总（列表页顶部汇总行；空则隐藏）
 const todaySummary = ref<TodaySummaryItem[]>([])
 
-// 列表筛选
-const query = reactive({
-  keyword: '',
-  warehouse_id: undefined as number | undefined,
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', warehouse_id: undefined, status: undefined },
+  fetch: (q) => salesApi.outbounds(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态
@@ -149,23 +146,6 @@ function onScanItems(items: ScanItem[]) {
   }
 }
 
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await salesApi.outbounds(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-function search() {
-  query.page = 1
-  loadList()
-}
-
 // 新建弹窗（双入口）
 function openCreate(m: 'from-order' | 'standalone') {
   mode.value = m
@@ -258,7 +238,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -279,7 +259,7 @@ async function removeRowAction(row: SalesOutboundItem) {
   try {
     await salesApi.deleteOutbound(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -299,7 +279,7 @@ async function approveRow(row: SalesOutboundItem) {
   try {
     await salesApi.approveOutbound(row.id)
     ElMessage.success('出库成功，库存已更新')
-    loadList()
+    refresh()
   } catch (e) {
     // 1409 库存不足：红色错误显示后端精确消息（含商品名与当前库存），不刷新列表（单据仍草稿）
     ElMessage.error((e as Error).message)
@@ -316,7 +296,7 @@ async function openDetail(row: SalesOutboundItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     customers.value = (await customerApi.list({ per_page: 100, status: 1 })).items
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
@@ -347,28 +327,41 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">销售出库单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="销售出库单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <el-select
+        v-model="query.warehouse_id"
+        placeholder="仓库"
         clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
-      <el-select v-model="query.warehouse_id" placeholder="仓库" clearable style="width: 140px">
+        style="width: 140px"
+        @change="() => load()"
+      >
         <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
       </el-select>
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="() => load()"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <template v-if="auth.has('sales.outbound.create')">
-        <el-button class="btn-primary" @click="openCreate('from-order')">从订单生成</el-button>
-        <el-button class="btn-secondary" @click="openCreate('standalone')">新 建</el-button>
+      <template #actions>
+        <template v-if="auth.has('sales.outbound.create')">
+          <el-button class="btn-primary" @click="openCreate('from-order')">从订单生成</el-button>
+          <el-button class="btn-secondary" @click="openCreate('standalone')">新 建</el-button>
+        </template>
       </template>
-    </div>
+    </ListFilterBar>
 
     <!-- 今日已出库汇总行（当日累计，轻量统计；空隐藏） -->
     <div v-if="todaySummary.length" class="summary-bar">
@@ -434,7 +427,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -631,19 +624,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
 }
 .btn-primary {
   background: var(--color-accent);

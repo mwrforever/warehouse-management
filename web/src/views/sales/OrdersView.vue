@@ -10,26 +10,23 @@ import {
 } from '../../api/sales'
 import { customerApi, type CustomerItem } from '../../api/customer'
 import { productApi } from '../../api/product'
+import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { formatYuan, toLocalDateString } from '../../utils/format'
 
 const auth = useAuthStore()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<SalesOrderItem[]>([])
-const total = ref(0)
 const customers = ref<CustomerItem[]>([])
 // 可售商品：仅成品/半成品（原料禁售 SAL-10，两次调用合并）
 const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
 
-// 列表筛选
-const query = reactive({
-  keyword: '',
-  customer_id: undefined as number | undefined,
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', customer_id: undefined, status: undefined },
+  fetch: (q) => salesApi.orders(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态
@@ -106,24 +103,6 @@ function onScanItems(items: ScanItem[]) {
       form.items.push({ product_id: it.product_id, quantity: it.quantity, price: 0 })
     }
   }
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await salesApi.orders(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 新建/编辑弹窗
@@ -205,7 +184,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -226,7 +205,7 @@ async function removeRowAction(row: SalesOrderItem) {
   try {
     await salesApi.deleteOrder(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -245,7 +224,7 @@ async function approveRow(row: SalesOrderItem) {
   try {
     await salesApi.approveOrder(row.id)
     ElMessage.success('审核成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -264,7 +243,7 @@ async function closeRow(row: SalesOrderItem) {
   try {
     await salesApi.closeOrder(row.id)
     ElMessage.success('关闭成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -282,7 +261,7 @@ async function openDetail(row: SalesOrderItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     const res = await customerApi.list({ per_page: 100, status: 1 })
     customers.value = res.items
@@ -299,30 +278,43 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">销售订单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="销售订单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <el-select
+        v-model="query.customer_id"
+        placeholder="客户"
         clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
-      <el-select v-model="query.customer_id" placeholder="客户" clearable style="width: 180px">
+        style="width: 180px"
+        @change="() => load()"
+      >
         <el-option v-for="c in customers" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 130px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 130px"
+        @change="() => load()"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
         <el-option label="部分出库" :value="2" />
         <el-option label="已完成" :value="3" />
         <el-option label="关闭" :value="4" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <el-button v-if="auth.has('sales.order.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button v-if="auth.has('sales.order.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" class-name="font-code" min-width="150" />
@@ -383,7 +375,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -593,19 +585,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
 }
 .btn-primary {
   background: var(--color-accent);
