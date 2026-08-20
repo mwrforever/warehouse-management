@@ -39,7 +39,6 @@
       />
       <template #actions>
         <el-button class="btn-secondary" :disabled="loading" @click="doExport">导 出</el-button>
-        <el-button class="btn-secondary" @click="() => load()">查 询</el-button>
       </template>
     </ListFilterBar>
 
