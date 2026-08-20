@@ -1,12 +1,14 @@
 <!-- 字典管理页：字典列表 + 字典项管理弹窗 -->
 <template>
   <div>
-    <div class="toolbar">
-      <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
-    <el-table v-loading="loading" :data="rows">
+    <ListFilterBar title="字典管理" @search="search" @reset="reset" @refresh="refresh">
+      <template #actions>
+        <el-button v-if="auth.has('dictionary.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="code" label="编码" class-name="font-code" />
@@ -28,7 +30,7 @@
       :total="total"
       :page-size="10"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 字典新建/编辑弹窗 -->
@@ -116,13 +118,17 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dictionaryApi, type DictItem, type DictionaryItem } from '../../api/dictionary'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
 
-const rows = ref<DictionaryItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1 })
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, search, reset, refresh } = useListQuery({
+  defaultQuery: {},
+  fetch: (q) => dictionaryApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 
 // 字典表单：code 重复由后端 1005 拦截
@@ -152,18 +158,6 @@ interface DictItemForm {
 
 const itemForm = reactive<DictItemForm>({ id: null, label: '', value: '', sort: 0, status: 1 })
 
-// 加载字典列表
-async function load() {
-  loading.value = true
-  try {
-    const res = await dictionaryApi.list({ page: query.page, per_page: 10 })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
-}
-
 // 新建/编辑字典弹窗初始化
 function openCreate() {
   Object.assign(form, { id: null, name: '', code: '', remark: '' })
@@ -182,7 +176,7 @@ async function save() {
     else await dictionaryApi.create({ name: form.name, code: form.code, remark: form.remark })
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -214,7 +208,7 @@ async function remove(row: DictionaryItem) {
   try {
     await dictionaryApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -277,7 +271,7 @@ async function removeItem(row: DictItem) {
   }
 }
 
-onMounted(load)
+onMounted(search)
 </script>
 
 <style scoped>
