@@ -61,6 +61,13 @@ watch(
   },
 )
 
+// 函数 ref：模板字符串 ref 不支持点路径（ref="scan.inputRef" 永不绑定），
+// 必须经函数回调把 el-input 暴露实例写入组合式函数的 inputRef，否则自动聚焦/连续扫码聚焦静默失效
+// 参数取 unknown 以兼容 Vue 的 ref 回调签名（Element | ComponentPublicInstance | null），避免引入 DOM 全局类型
+function setInputRef(el: unknown) {
+  scan.inputRef.value = (el ?? null) as { focus: () => void } | null
+}
+
 function onClose() {
   emit('update:open', false)
   emit('add-items', scan.rows.value)
@@ -99,7 +106,7 @@ watch(scan.pending, async (p) => {
     </div>
 
     <el-input
-      ref="scan.inputRef"
+      :ref="setInputRef"
       v-model="scan.barcode.value"
       placeholder="扫描条码回车添加商品"
       clearable
