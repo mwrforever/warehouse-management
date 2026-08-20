@@ -103,6 +103,11 @@ function onRefresh() {
   width: 200px;
   flex: none;
 }
+/* 日期范围选择器保持固有宽度（Element Plus 根类 flex-grow:1 会被 flex 容器拉伸），
+   与 main.css .toolbar 下 .el-date-editor { flex: none } 口径一致 */
+.filter-bar :deep(.el-date-editor) {
+  flex: none;
+}
 /* 动作区（查询/重置/刷新 + 插槽中的新建等）靠右，避免与筛选项混排 */
 .actions {
   margin-left: auto;

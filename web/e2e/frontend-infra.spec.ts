@@ -107,14 +107,17 @@ async function createProducingOrder(page: Page): Promise<{ id: number; no: strin
 }
 
 // 直连库清理已开工工单：destroy 仅草稿（1504），经 artisan tinker 连 e2e.sqlite 级联删除（操作/物料/报工随 FK 级联）
+// 删除行数经 stdout 返回并断言非 0：清理失败立即报错，避免遗留生产中工单污染后跑 spec 的单行匹配假设
 function deleteStartedOrderByNo(no: string) {
   const serverDir = path.resolve(__dirname, '..', '..', 'server')
-  const cmd = `php artisan tinker --execute="App\\Models\\ProductionOrder::where('no', '${no}')->delete();"`
-  execSync(cmd, {
+  const cmd = `php artisan tinker --execute="echo App\\Models\\ProductionOrder::where('no', '${no}')->delete();"`
+  const stdout = execSync(cmd, {
     cwd: serverDir,
     env: { ...process.env, DB_CONNECTION: 'sqlite', DB_DATABASE: 'database/e2e.sqlite' },
     stdio: 'pipe',
+    encoding: 'utf8',
   })
+  expect(parseInt(stdout.trim(), 10)).toBeGreaterThan(0)
 }
 
 test.describe('前端交互基础设施', () => {
