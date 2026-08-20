@@ -9,25 +9,23 @@ import {
   type ProductionOrderItem,
 } from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<FinishedInboundItem[]>([])
-const total = ref(0)
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
 // 生产中工单下拉（label 单号+成品，仅 status=2 可成品入库）
 const orders = ref<ProductionOrderItem[]>([])
 
-// 列表筛选（keyword 单号 / status 草稿/已审核两态）
-const query = reactive({
-  keyword: '',
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', status: undefined },
+  fetch: (q) => productionApi.finishedInbounds(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态
@@ -50,24 +48,6 @@ const form = reactive({
 // 成品入库单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await productionApi.finishedInbounds(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 选工单 → 自动带出成品行（数量默认=剩余产量，可改；剩余=计划数-已完工）
@@ -192,7 +172,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -213,7 +193,7 @@ async function removeRowAction(row: FinishedInboundItem) {
   try {
     await productionApi.deleteFinishedInbound(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -237,14 +217,14 @@ async function approveRow(row: FinishedInboundItem) {
   try {
     await productionApi.approveFinishedInbound(row.id)
     ElMessage.success('审核成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
     // 仅生产中工单可成品入库（status=2，per_page 100 覆盖全量）
@@ -261,34 +241,34 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">成品入库</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
-        clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="成品入库"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.status"
         placeholder="状态"
         clearable
         style="width: 120px"
-        @change="search"
+        @change="() => load()"
       >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <div class="spacer" />
-      <el-button
-        v-if="auth.has('production.finished.create')"
-        class="btn-primary"
-        @click="openCreate()"
-        >从工单生成</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button
+          v-if="auth.has('production.finished.create')"
+          class="btn-primary"
+          @click="openCreate()"
+          >从工单生成</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" min-width="150" class-name="font-code" />
@@ -342,7 +322,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -424,22 +404,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
-.spacer {
-  flex: 1;
 }
 .btn-primary {
   background: var(--color-accent);

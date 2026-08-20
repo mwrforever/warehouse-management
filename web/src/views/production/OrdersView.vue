@@ -12,25 +12,22 @@ import {
 } from '../../api/production'
 import { bomApi } from '../../api/bom'
 import { productApi, type ProductItem } from '../../api/product'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { toLocalDateString } from '../../utils/format'
 
 const auth = useAuthStore()
 const router = useRouter()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<ProductionOrderItem[]>([])
-const total = ref(0)
 // 成品下拉：仅成品（type=finished，生产工单只针对成品）
 const products = ref<ProductItem[]>([])
 
-// 列表筛选（keyword 单号 / product_id 成品 / status 五态）
-const query = reactive({
-  keyword: '',
-  product_id: undefined as number | undefined,
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', product_id: undefined, status: undefined },
+  fetch: (q) => productionApi.orders(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 新建/编辑弹窗状态
@@ -83,24 +80,6 @@ function opTagType(status: number) {
   if (status === 0) return 'info'
   if (status === 1) return 'primary'
   return 'success'
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await productionApi.orders(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 选成品后即时校验启用 BOM（无启用版本 → 1501 文案并清空选择）
@@ -176,7 +155,7 @@ async function save() {
       await productionApi.updateOrder(editingId.value, payload)
       ElMessage.success('保存成功')
       dialogVisible.value = false
-      loadList()
+      search()
     } else {
       const res = await productionApi.createOrder(payload)
       ElMessage.success(`工单 ${res.no} 创建成功`)
@@ -186,17 +165,7 @@ async function save() {
       dialogVisible.value = false
       expandVisible.value = true
       // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
-      query.page = 1
-      query.keyword = ''
-      query.product_id = undefined
-      query.status = undefined
-      try {
-        const refreshed = await productionApi.orders(query)
-        list.value = refreshed.items
-        total.value = refreshed.total
-      } catch {
-        ElMessage.warning('列表刷新失败，请手动刷新')
-      }
+      reset()
       // 新建弹窗提交后清空表单（下次打开即为空表单）
       Object.assign(form, {
         product_id: undefined,
@@ -225,7 +194,7 @@ async function removeRowAction(row: ProductionOrderItem) {
   try {
     await productionApi.deleteOrder(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -250,7 +219,7 @@ async function releaseRow(row: ProductionOrderItem) {
     } else {
       ElMessage.success('下达成功')
     }
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -270,7 +239,7 @@ async function startRow(row: ProductionOrderItem) {
   try {
     await productionApi.startOrder(row.id)
     ElMessage.success('开工成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -290,7 +259,7 @@ async function completeRow(row: ProductionOrderItem) {
   try {
     await productionApi.completeOrder(row.id)
     ElMessage.success('完工成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -310,7 +279,7 @@ async function closeRow(row: ProductionOrderItem) {
   try {
     await productionApi.closeOrder(row.id)
     ElMessage.success('关闭成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -347,7 +316,7 @@ async function onReportOpChange(opId: number | undefined) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     // 成品下拉：仅成品（生产工单只针对成品，per_page 100 覆盖全量）
     products.value = (await productApi.list({ per_page: 100, type: 'finished' })).items
@@ -358,22 +327,22 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">生产工单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
-        clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="生产工单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.product_id"
         placeholder="成品"
         clearable
         filterable
         style="width: 180px"
-        @change="search"
+        @change="() => load()"
       >
         <el-option
           v-for="p in products"
@@ -387,7 +356,7 @@ onMounted(async () => {
         placeholder="状态"
         clearable
         style="width: 130px"
-        @change="search"
+        @change="() => load()"
       >
         <el-option
           v-for="(label, key) in STATUS_OPTIONS"
@@ -396,12 +365,15 @@ onMounted(async () => {
           :value="Number(key)"
         />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <div class="spacer" />
-      <el-button v-if="auth.has('production.order.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button
+          v-if="auth.has('production.order.create')"
+          class="btn-primary"
+          @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" width="150" class-name="font-code" />
@@ -533,7 +505,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -810,22 +782,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
-.spacer {
-  flex: 1;
 }
 .btn-primary {
   background: var(--color-accent);

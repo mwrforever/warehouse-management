@@ -10,25 +10,23 @@ import {
   type ProductionOrderItem,
 } from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<PickItem[]>([])
-const total = ref(0)
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
 // 生产中工单下拉（label 单号+成品，仅 status=2 可领料）
 const orders = ref<ProductionOrderItem[]>([])
 
-// 列表筛选（keyword 单号 / status 草稿/已审核两态）
-const query = reactive({
-  keyword: '',
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', status: undefined },
+  fetch: (q) => productionApi.picks(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态（V1 仅「从工单生成」入口，独立新建不开放——复用销售 1406 教训）
@@ -65,24 +63,6 @@ function issueTagType(issueStatus: number) {
   if (issueStatus === 0) return 'info'
   if (issueStatus === 1) return 'warning'
   return 'success'
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await productionApi.picks(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 选工单 → 从工单生成预填物料行（剩余量默认全量领用，可改）
@@ -214,7 +194,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -235,7 +215,7 @@ async function removeRowAction(row: PickItem) {
   try {
     await productionApi.deletePick(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -255,7 +235,7 @@ async function approveRow(row: PickItem) {
   try {
     await productionApi.approvePick(row.id)
     ElMessage.success('审核成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -275,7 +255,7 @@ async function issueRow(row: PickItem) {
   try {
     await productionApi.issuePick(row.id)
     ElMessage.success('发料成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -291,7 +271,7 @@ async function openDetail(row: PickItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
     // 仅生产中工单可领料（status=2，per_page 100 覆盖全量）
@@ -308,31 +288,34 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">领料单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
-        clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="领料单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.status"
         placeholder="状态"
         clearable
         style="width: 120px"
-        @change="search"
+        @change="() => load()"
       >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <div class="spacer" />
-      <el-button v-if="auth.has('production.pick.create')" class="btn-primary" @click="openCreate()"
-        >从工单生成</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button
+          v-if="auth.has('production.pick.create')"
+          class="btn-primary"
+          @click="openCreate()"
+          >从工单生成</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" min-width="150" class-name="font-code" />
@@ -391,7 +374,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -547,22 +530,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
-.spacer {
-  flex: 1;
 }
 .btn-primary {
   background: var(--color-accent);
