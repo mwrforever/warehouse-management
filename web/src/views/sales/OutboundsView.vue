@@ -1,6 +1,6 @@
 <!-- 销售出库单页：筛选列表 + 双入口新建弹窗（从订单生成/独立新建）+ 详情弹窗 + 审核（扣库存防超卖） -->
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -13,6 +13,7 @@ import {
 } from '../../api/sales'
 import { customerApi, type CustomerItem } from '../../api/customer'
 import { productApi } from '../../api/product'
+import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import { formatYuan } from '../../utils/format'
@@ -61,9 +62,6 @@ const form = reactive({
     order_item_id?: number
   }[],
 })
-// 扫码输入值（v-model 绑定，扫枪回车后命中清空，未命中保留便于重扫）
-const barcode = ref('')
-const barcodeInput = ref<{ focus: () => void } | null>(null)
 
 // 状态标签语义色（sales.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
@@ -132,27 +130,22 @@ function onProductChange(row: { product_id: number | undefined }, index: number)
   }
 }
 
-// 扫码添加商品行（扫枪回车 → 条码匹配 → 命中追加行并清空，未命中保留输入便于重扫）
-async function scanAdd() {
-  const code = barcode.value.trim()
-  if (!code) return
-  try {
-    const p = await productApi.byBarcode(code)
-    // 原料不可销售：与后端 422「原料商品不可销售」口径一致（商品下拉已过滤，扫码入口补齐）
-    if (p.type === 'raw_material') {
-      ElMessage.error('原料商品不可销售')
-      return
-    }
-    if (form.items.some((i) => i.product_id === p.id)) {
-      ElMessage.warning('明细存在重复商品')
+// 扫码弹窗状态 + 已存在行商品 id（累加关时弹窗内判重，避免撞已有行）
+const scanVisible = ref(false)
+const scanExcludedIds = computed(() =>
+  form.items.map((i) => i.product_id).filter((x): x is number => x != null),
+)
+
+// 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；
+// 扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+function onScanItems(items: ScanItem[]) {
+  for (const it of items) {
+    const existing = form.items.find((i) => i.product_id === it.product_id)
+    if (existing) {
+      existing.quantity = Number((existing.quantity + it.quantity).toFixed(2))
     } else {
-      form.items.push({ product_id: p.id, quantity: 1, price: 0 })
-      // 命中后清空，便于连续扫码
-      barcode.value = ''
+      form.items.push({ product_id: it.product_id, quantity: it.quantity, price: 0 })
     }
-  } catch (e) {
-    // 条码未匹配（后端 1117）：保留输入便于重扫
-    ElMessage.error((e as Error).message)
   }
 }
 
@@ -189,8 +182,6 @@ function openCreate(m: 'from-order' | 'standalone') {
     form.items.push({ product_id: undefined, quantity: 1, price: 0 })
   }
   dialogVisible.value = true
-  // 弹窗挂载后聚焦扫码框（nextTick 与采购入库单页扫码交互一致）
-  nextTick(() => barcodeInput.value?.focus())
 }
 
 // 编辑草稿（独立/关联均可，按详情回填）
@@ -507,15 +498,8 @@ onMounted(async () => {
             <el-input v-model="form.remark" maxlength="200" />
           </el-form-item>
         </div>
-        <div class="barcode-row">
-          <el-input
-            ref="barcodeInput"
-            v-model="barcode"
-            placeholder="扫描条码回车添加商品"
-            clearable
-            style="width: 260px"
-            @keyup.enter="scanAdd"
-          />
+        <div class="scan-entry">
+          <el-button class="btn-secondary" @click="scanVisible = true">扫码添加</el-button>
         </div>
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
@@ -582,6 +566,14 @@ onMounted(async () => {
         <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
       </template>
     </el-dialog>
+    <!-- 扫码录入独立弹窗（spec §4.4：原料禁售，扫描行关闭时回带合并；独立/从订单模式均可用） -->
+    <ScanInboundForm
+      v-model:open="scanVisible"
+      title="扫码录入明细"
+      :excluded-ids="scanExcludedIds"
+      :blocked-type="'raw_material'"
+      @add-items="onScanItems"
+    />
     <!-- 详情弹窗 -->
     <el-dialog v-model="detailVisible" title="出库单详情" width="900px">
       <template v-if="detail">
@@ -707,7 +699,7 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0 var(--space-lg);
 }
-.barcode-row {
+.scan-entry {
   margin-bottom: var(--space-md);
 }
 .add-row {

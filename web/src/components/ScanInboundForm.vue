@@ -5,6 +5,9 @@
 import { nextTick, ref, watch } from 'vue'
 import { useScanInbound, type ScanItem } from '../composables/useScanInbound'
 
+// 复导出 ScanItem 类型：宿主页按组件契约 `import { type ScanItem } from '.../ScanInboundForm.vue'` 消费
+export type { ScanItem }
+
 interface Props {
   open: boolean
   title?: string
