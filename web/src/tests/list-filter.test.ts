@@ -132,3 +132,73 @@ describe('useListQuery', () => {
     await vi.waitFor(() => expect(list.value).toEqual([{ n: 'new' }])) // 旧响应被丢弃
   })
 })
+
+// ListFilterBar 组件单测：关键字防抖、按钮事件、重置清空关键字
+import { mount, flushPromises } from '@vue/test-utils'
+import ElementPlus from 'element-plus'
+import ListFilterBar from '../components/ListFilterBar.vue'
+
+describe('ListFilterBar', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('关键字输入 300ms 防抖后发 keyword-change', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '' },
+      global: { plugins: [ElementPlus] },
+    })
+    const input = wrapper.find('input')
+    await input.setValue('abc')
+    expect(wrapper.emitted('keyword-change')).toBeUndefined()
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const emitted = wrapper.emitted('keyword-change')
+    expect(emitted).toBeTruthy()
+    expect(emitted![emitted!.length - 1]).toEqual(['abc'])
+    expect(wrapper.emitted('update:keyword')!.at(-1)).toEqual(['abc'])
+  })
+
+  it('无 keyword prop 时不渲染关键字输入框', () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '单位管理' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect(wrapper.find('input').exists()).toBe(false)
+  })
+
+  it('查询按钮点击发 search；1s 内重复点击合并', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '' },
+      global: { plugins: [ElementPlus] },
+    })
+    const btns = wrapper.findAll('button')
+    const queryBtn = btns.find((b) => b.text().includes('查'))
+    await queryBtn!.trigger('click')
+    await queryBtn!.trigger('click')
+    expect(wrapper.emitted('search')).toHaveLength(1)
+    vi.advanceTimersByTime(1000)
+  })
+
+  it('重置按钮清空关键字并发 reset', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: 'abc' },
+      global: { plugins: [ElementPlus] },
+    })
+    const btns = wrapper.findAll('button')
+    const resetBtn = btns.find((b) => b.text().includes('重'))
+    await resetBtn!.trigger('click')
+    expect(wrapper.emitted('reset')).toHaveLength(1)
+    expect(wrapper.emitted('update:keyword')!.at(-1)).toEqual([''])
+  })
+
+  it('刷新按钮发 refresh', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '' },
+      global: { plugins: [ElementPlus] },
+    })
+    const btns = wrapper.findAll('button')
+    const refreshBtn = btns.find((b) => b.text().includes('刷'))
+    await refreshBtn!.trigger('click')
+    expect(wrapper.emitted('refresh')).toHaveLength(1)
+  })
+})
