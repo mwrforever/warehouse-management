@@ -214,7 +214,7 @@ test.describe('采购管理模块', () => {
     )
     // 流水页筛「采购入库」：+60 流水、单号 PI、变动后余额 B₀+60（商品列仅渲染名称 → 按「测试铝材」定位）
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await pickOption(page, '采购入库')
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const mvRow = page.locator('.el-table__row', { hasText: '测试铝材' }).first()
