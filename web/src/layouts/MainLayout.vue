@@ -114,7 +114,13 @@
         </div>
       </header>
 
-      <main class="content"><RouterView /></main>
+      <main class="content">
+        <RouterView v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </RouterView>
+      </main>
     </div>
 
     <!-- 折叠态悬浮提示卡（仅折叠时展示菜单名与功能描述） -->
