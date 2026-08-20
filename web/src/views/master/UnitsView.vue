@@ -1,13 +1,14 @@
 <!-- 单位管理页：列表 + 新建/编辑弹窗 + 删除确认 -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">单位管理</span>
-      <el-button v-if="auth.has('unit.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
-    <el-table v-loading="loading" :data="rows">
+    <ListFilterBar title="单位管理" @search="search" @reset="reset" @refresh="refresh">
+      <template #actions>
+        <el-button v-if="auth.has('unit.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="code" label="编码" class-name="font-code" />
@@ -32,9 +33,9 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑单位' : '新建单位'" width="420px">
@@ -61,12 +62,16 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
-const rows = ref<UnitItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1 })
+// 列表查询状态（无关键字筛选，仅分页；统一组合式）
+const { query, list, total, loading, search, reset, refresh } = useListQuery({
+  defaultQuery: {},
+  fetch: (q) => unitApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 const saving = ref(false)
 
@@ -79,18 +84,6 @@ interface UnitForm {
 }
 
 const form = reactive<UnitForm>({ id: null, name: '', code: '', status: 1 })
-
-// 加载列表
-async function load() {
-  loading.value = true
-  try {
-    const res = await unitApi.list({ page: query.page, per_page: 10 })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
-}
 
 function openCreate() {
   Object.assign(form, { id: null, name: '', code: '', status: 1 })
@@ -111,7 +104,7 @@ async function save() {
     else await unitApi.create({ name: form.name, code: form.code, status: form.status })
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -129,34 +122,22 @@ async function remove(row: UnitItem) {
   try {
     await unitApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
 
-onMounted(load)
+onMounted(search)
 </script>
 
 <style scoped>
-/* 与 CategoriesView 相同页面骨架（工具栏/标题/主按钮），页面间保持一致 */
+/* 与 CategoriesView 相同页面骨架（主按钮），页面间保持一致 */
 .page-card {
   background: #fff;
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
 }
 .btn-primary {
   background: var(--color-accent);

@@ -1,33 +1,33 @@
 <!-- 商品管理页：筛选列表 + 新建/编辑弹窗（条码扫枪自动聚焦）+ 类型标签语义色 -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">商品管理</span>
-      <div class="toolbar-right">
-        <el-input
-          v-model="query.keyword"
-          placeholder="编码/名称/条码"
-          clearable
-          style="width: 220px"
-          @keyup.enter="load"
-        />
-        <el-select
-          v-model="query.type"
-          placeholder="类型"
-          clearable
-          style="width: 130px"
-          @change="load"
-        >
-          <el-option label="原料" value="raw_material" />
-          <el-option label="半成品" value="semi_finished" />
-          <el-option label="成品" value="finished" />
-        </el-select>
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="商品管理"
+      keyword-placeholder="编码/名称/条码"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <el-select
+        v-model="query.type"
+        placeholder="类型"
+        clearable
+        style="width: 130px"
+        @change="() => load()"
+      >
+        <el-option label="原料" value="raw_material" />
+        <el-option label="半成品" value="semi_finished" />
+        <el-option label="成品" value="finished" />
+      </el-select>
+      <template #actions>
         <el-button v-if="auth.has('product.create')" class="btn-primary" @click="openCreate"
           >新 建</el-button
         >
-      </div>
-    </div>
-    <el-table v-loading="loading" :data="rows">
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="code" label="编码" width="120" class-name="font-code" />
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column label="类型" width="90">
@@ -69,9 +69,9 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 新建/编辑弹窗：条码框自动聚焦；扫枪回车即时校验 -->
@@ -154,12 +154,19 @@ import { productApi, type ProductItem, type ProductType } from '../../api/produc
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
 import BarcodeSvg from '../../components/BarcodeSvg.vue'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
-const rows = ref<ProductItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1, keyword: '', type: '' as '' | ProductType })
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: {
+    keyword: '',
+    type: '' as '' | 'raw_material' | 'semi_finished' | 'finished',
+  },
+  fetch: (q) => productApi.list({ ...q, type: q.type || undefined }),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 const saving = ref(false)
 
@@ -204,23 +211,6 @@ function typeTagClass(type: ProductType) {
   return (
     { raw_material: 'tag-raw', semi_finished: 'tag-semi', finished: 'tag-fin' }[type] ?? 'tag-raw'
   )
-}
-
-// 加载列表：分页 + 关键字 + 类型过滤
-async function load() {
-  loading.value = true
-  try {
-    const res = await productApi.list({
-      page: query.page,
-      per_page: 10,
-      keyword: query.keyword,
-      type: query.type || undefined,
-    })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
 }
 
 // 弹窗打开后聚焦条码框（扫枪输入就绪）
@@ -304,7 +294,7 @@ async function save() {
     else await productApi.create(payload)
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -322,14 +312,14 @@ async function remove(row: ProductItem) {
   try {
     await productApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
 
 onMounted(async () => {
-  load()
+  search()
   try {
     categoryTree.value = await categoryApi.tree()
     units.value = (await unitApi.list({ page: 1, per_page: 100 })).items
@@ -347,23 +337,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.toolbar-right {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: center;
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
 }
 .btn-primary {
   background: var(--color-accent);
