@@ -1,19 +1,22 @@
 <!-- 用户管理页：搜索 + 列表 + 新建/编辑弹窗 + 删除确认 + 重置密码 -->
 <template>
   <div>
-    <div class="toolbar">
-      <el-input
-        v-model="query.keyword"
-        placeholder="用户名/姓名"
-        clearable
-        style="width: 220px"
-        @keyup.enter="load"
-      />
-      <el-button v-if="auth.has('user.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
-    <el-table v-loading="loading" :data="rows">
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="用户管理"
+      keyword-placeholder="用户名/姓名"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <template #actions>
+        <el-button v-if="auth.has('user.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="username" label="用户名" class-name="font-code" />
       <el-table-column prop="name" label="姓名" />
@@ -52,7 +55,7 @@
       :total="total"
       :page-size="10"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 新建/编辑弹窗 -->
@@ -88,14 +91,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { userApi, type UserItem } from '../../api/user'
 import { roleApi } from '../../api/role'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
 
-const rows = ref<UserItem[]>([])
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '' },
+  fetch: (q) => userApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const roles = ref<{ id: number; name: string }[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1, keyword: '' })
 const dialogVisible = ref(false)
 
 // 用户表单：password 仅新建时必填（编辑弹窗不展示）；role_ids 为多选角色 id 数组
@@ -118,18 +125,6 @@ const form = reactive<UserForm>({
   status: 1,
   role_ids: [],
 })
-
-// 加载列表：携带分页与关键字
-async function load() {
-  loading.value = true
-  try {
-    const res = await userApi.list({ page: query.page, per_page: 10, keyword: query.keyword })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
-}
 
 // 新建/编辑弹窗初始化（角色下拉复用角色列表接口）
 function openCreate() {
@@ -179,7 +174,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -197,7 +192,7 @@ async function remove(row: UserItem) {
   try {
     await userApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -221,7 +216,7 @@ async function openReset(row: UserItem) {
 }
 
 onMounted(async () => {
-  load()
+  search()
   try {
     roles.value = (await roleApi.list({ page: 1, per_page: 100 })).items
   } catch (e) {
@@ -232,14 +227,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 工具栏间距与主按钮样式（btn-primary 语义色） */
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
+/* 主按钮样式（btn-primary 语义色） */
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);

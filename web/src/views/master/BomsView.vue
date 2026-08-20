@@ -1,22 +1,22 @@
 <!-- BOM 管理页：列表 + 新建/编辑大弹窗（明细动态行）+ 明细查看 + 启用/停用切换 -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">BOM 管理</span>
-      <div class="toolbar-right">
-        <el-input
-          v-model="query.keyword"
-          placeholder="BOM 编码"
-          clearable
-          style="width: 220px"
-          @keyup.enter="load"
-        />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="BOM 管理"
+      keyword-placeholder="BOM 编码"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <template #actions>
         <el-button v-if="auth.has('bom.create')" class="btn-primary" @click="openCreate"
           >新 建</el-button
         >
-      </div>
-    </div>
-    <el-table v-loading="loading" :data="rows">
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="code" label="BOM 编码" width="170" class-name="font-code" />
       <el-table-column prop="product_name" label="成品名称" min-width="140" />
       <el-table-column prop="version" label="版本" width="80" class-name="font-code" />
@@ -52,9 +52,9 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 新建/编辑弹窗：单头 + 明细动态行（宽 800px） -->
@@ -145,12 +145,16 @@ import { bomApi, type BomItem, type BomRow } from '../../api/bom'
 import { productApi, type ProductItem } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
-const rows = ref<BomRow[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1, keyword: '' })
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '' },
+  fetch: (q) => bomApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 const saving = ref(false)
 
@@ -191,18 +195,6 @@ const itemsRows = ref<BomItem[]>([])
 // 单位名映射（明细行显示；unit_id 未选时为空）
 function unitName(id: number | null) {
   return units.value.find((u) => u.id === id)?.name ?? ''
-}
-
-// 加载列表
-async function load() {
-  loading.value = true
-  try {
-    const res = await bomApi.list({ page: query.page, per_page: 10, keyword: query.keyword })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
 }
 
 // 弹窗数据源：成品仅 finished；物料仅 raw_material/semi_finished
@@ -286,7 +278,7 @@ async function save() {
     else await bomApi.create(payload)
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -311,7 +303,7 @@ async function toggle(row: BomRow) {
   try {
     await bomApi.toggle(row.id, row.status === 1 ? 0 : 1)
     ElMessage.success(row.status === 1 ? '已停用' : '已启用')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -327,14 +319,14 @@ async function remove(row: BomRow) {
   try {
     await bomApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
 
 onMounted(async () => {
-  load()
+  search()
   const [fin, mat, unit] = await Promise.all([
     productApi.list({ page: 1, per_page: 100, type: 'finished' }),
     productApi.list({ page: 1, per_page: 100 }),
@@ -354,23 +346,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.toolbar-right {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: center;
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
 }
 .btn-primary {
   background: var(--color-accent);

@@ -1,6 +1,6 @@
 // 生产工单页组件测试：新建成功但列表刷新失败时不得误报创建失败（bug #11 回归）
 // 旧实现：create 成功 → 列表回查 find 单号 → 找不到 throw → 外层 catch 弹错误，诱导用户重复提交
-// 新实现：create 响应直接带 id → 以 id 拉详情打开 BOM 展开弹窗；列表刷新失败仅警告
+// 新实现：create 响应直接带 id → 以 id 拉详情打开 BOM 展开弹窗；列表刷新失败经 useListQuery.onError 错误提示
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -88,7 +88,7 @@ describe('OrdersView 新建成功但列表刷新失败', () => {
     })
   })
 
-  it('创建成功：以响应 id 直开 BOM 展开弹窗，列表刷新失败仅警告不误报（bug #11 回归）', async () => {
+  it('创建成功：以响应 id 直开 BOM 展开弹窗，列表刷新失败仅提示不误报（bug #11 回归）', async () => {
     const wrapper = mount(OrdersView, {
       attachTo: document.body,
       global: { plugins: [ElementPlus, pinia] },
@@ -129,9 +129,9 @@ describe('OrdersView 新建成功但列表刷新失败', () => {
     // BOM 展开弹窗已打开
     expect(wrapper.text()).toContain('BOM 展开确认')
     expect(wrapper.text()).toContain('工单已创建（草稿）')
-    // 提示语义：成功提示 + 列表刷新失败警告；不得出现「创建失败」类误导文案
+    // 提示语义：成功提示 + 列表刷新失败错误提示（后台刷新经 useListQuery.onError 展示）；不得出现「创建失败」类误导文案
     expect(document.body.textContent).toContain('创建成功')
-    expect(document.body.textContent).toContain('列表刷新失败，请手动刷新')
+    expect(document.body.textContent).toContain('网络异常')
     expect(document.body.textContent).not.toContain('工单已创建，请刷新列表查看')
     wrapper.unmount()
   })

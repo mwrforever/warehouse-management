@@ -1,33 +1,33 @@
 <!-- 库存盘点页：草稿 CRUD + 审核（确认/结果弹窗）+ 详情只读 -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">库存盘点</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
-        clearable
-        style="width: 200px"
-        @keyup.enter="reload"
-        @clear="reload"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="库存盘点"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.status"
         placeholder="状态"
         clearable
         style="width: 120px"
-        @change="reload"
+        @change="() => load()"
       >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
-      <el-button v-if="auth.has('check.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-      <el-button class="btn-secondary" @click="reload">查 询</el-button>
-    </div>
+      <template #actions>
+        <el-button v-if="auth.has('check.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
 
-    <el-table v-loading="loading" :data="rows">
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="no" label="单号" width="180" class-name="font-code" />
       <el-table-column prop="warehouse_name" label="仓库" width="110" />
       <el-table-column label="状态" width="100">
@@ -60,9 +60,9 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 新建/编辑弹窗：仓库 + 加载账面数 + 扫码 + 明细行实盘录入 -->
@@ -184,15 +184,20 @@ import {
 } from '../../api/inventory'
 import { productApi } from '../../api/product'
 import { warehouseApi } from '../../api/warehouse'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const rows = ref<CheckItem[]>([])
-const total = ref(0)
-const loading = ref(false)
 const warehouses = ref<{ id: number; name: string }[]>([])
-const query = reactive<{ page: number; keyword: string; status?: number }>({ page: 1, keyword: '' })
+
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', status: undefined as number | undefined },
+  fetch: (q) => inventoryApi.checks({ ...q, keyword: q.keyword || undefined }),
+  onError: (e) => ElMessage.error(e.message),
+})
 
 // 新建/编辑弹窗
 const dialogVisible = ref(false)
@@ -228,27 +233,22 @@ const detail = ref<{
   items: CheckDetailItem[]
 } | null>(null)
 
-async function load() {
-  loading.value = true
+// 删除草稿
+async function remove(row: CheckItem) {
   try {
-    const res = await inventoryApi.checks({
-      page: query.page,
-      keyword: query.keyword || undefined,
-      status: query.status,
-    })
-    rows.value = res.items
-    total.value = res.total
+    await ElMessageBox.confirm('确认删除该盘点单？', '提示', { type: 'warning' })
+  } catch {
+    // 用户取消删除
+    return
+  }
+  try {
+    await inventoryApi.deleteCheck(row.id)
+    ElMessage.success('删除成功')
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
   }
 }
-function reload() {
-  query.page = 1
-  load()
-}
-
 // 新建：打开弹窗并聚焦扫码框
 function openCreate() {
   Object.assign(form, { id: null, warehouse_id: undefined, remark: '', items: [] })
@@ -276,23 +276,6 @@ async function openEdit(row: CheckItem) {
     // 清空账面缓存，避免残留上一仓库数据导致扫码误判
     books.value = []
     dialogVisible.value = true
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  }
-}
-
-// 删除草稿
-async function remove(row: CheckItem) {
-  try {
-    await ElMessageBox.confirm('确认删除该盘点单？', '提示', { type: 'warning' })
-  } catch {
-    // 用户取消删除
-    return
-  }
-  try {
-    await inventoryApi.deleteCheck(row.id)
-    ElMessage.success('删除成功')
-    load()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -388,7 +371,8 @@ async function save() {
     else await inventoryApi.createCheck(payload)
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    // 保存后按当前页立即刷新（与既有行为一致：不重置页码）
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -419,7 +403,8 @@ async function approve(row: CheckItem) {
     } else {
       await ElMessageBox.alert('本次无差异，未生成流水', '审核完成', { confirmButtonText: '确 定' })
     }
-    load()
+    // 审核后按当前页立即刷新（状态流转后行变化，保持分页位置）
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -442,7 +427,7 @@ async function openDetail(id: number) {
 }
 
 onMounted(async () => {
-  load()
+  search()
   // 流水页单号跳转直达详情
   const id = route.params.id
   if (id) openDetail(Number(id))

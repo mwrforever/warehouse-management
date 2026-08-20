@@ -17,8 +17,20 @@ vi.mock('../api/production', () => ({
 }))
 
 // 报工提交权限：默认持有（提交按钮可见）
+// 共享可变 store 对象：预填用例需给 authStore.user 赋值后组件仍能读到（每次调用返回新对象会丢赋值）
+const authStore = {
+  user: null as { name: string } | null,
+  has: (p: string) => p === 'production.report.create',
+}
 vi.mock('../stores/auth', () => ({
-  useAuthStore: () => ({ has: (p: string) => p === 'production.report.create' }),
+  useAuthStore: () => authStore,
+}))
+
+// 用户选择器挂载即请求用户列表：mock 返回空列表走下拉模式（total=0 ≤ 50），避免真实 http 请求
+vi.mock('../api/user', () => ({
+  userApi: {
+    list: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 }),
+  },
 }))
 
 vi.mock('vue-router', () => ({
@@ -28,6 +40,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import ReportsView from '../views/production/ReportsView.vue'
+import { useAuthStore } from '../stores/auth'
 
 // 工单详情（含一道进行中工序）
 function okDetail() {
@@ -128,5 +141,36 @@ describe('ReportsView', () => {
     expect(wrapper.text()).not.toContain('当前工序')
     // 无任何报工请求发出
     expect(reportMock).not.toHaveBeenCalled()
+  })
+
+  it('操作人预填当前登录用户姓名', async () => {
+    // 共享 auth mock：给 user 赋值后组件 onMounted 预填操作人；切换工单/提交报工后均保留预填（不清空操作人）
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.user = { name: '测试管理员' } as never
+    const wrapper = mount(ReportsView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    // 操作人 UserSelect 仅在进行中工序卡片内渲染：先选中工单再断言
+    const select = wrapper.findComponent({ name: 'ElSelect' })
+    await select.vm.$emit('update:modelValue', 1)
+    await select.vm.$emit('change', 1)
+    await flushPromises()
+    // 操作人表单项展示预填的当前登录用户姓名（el-select 选中值以 span 渲染，不落入 input value）
+    const opItem = wrapper
+      .findAll('.el-form-item')
+      .find((f) => f.find('.el-form-item__label').text() === '操作人')
+    expect(opItem?.text()).toContain('测试管理员')
+    // 提交报工成功后：操作人仍保留预填（后续工序报工默认当前登录用户，spec §4.3）
+    const qtyItem = wrapper
+      .findAll('.el-form-item')
+      .find((f) => f.find('.el-form-item__label').text() === '合格数')
+    await qtyItem!.find('input').setValue('5')
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('报工'))!
+      .trigger('click')
+    await flushPromises()
+    expect(reportMock).toHaveBeenCalledWith(11, expect.objectContaining({ operator: '测试管理员' }))
+    expect(opItem?.text()).toContain('测试管理员')
   })
 })

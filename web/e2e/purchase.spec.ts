@@ -214,7 +214,7 @@ test.describe('采购管理模块', () => {
     )
     // 流水页筛「采购入库」：+60 流水、单号 PI、变动后余额 B₀+60（商品列仅渲染名称 → 按「测试铝材」定位）
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await pickOption(page, '采购入库')
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const mvRow = page.locator('.el-table__row', { hasText: '测试铝材' }).first()
@@ -381,24 +381,25 @@ test.describe('采购管理模块', () => {
     await expect(page.locator('.el-table__row', { hasText: 'PI' }).first()).toContainText('—')
   })
 
-  test('TC-PUR-09 扫码录明细', async ({ page }) => {
+  test('TC-PUR-09 扫码录明细（ScanInboundForm 独立弹窗）', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
+    // 进入采购入库页（沿用前序用例创建的供应商）
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /新\s*建/ }).click()
-    const dialog = page.locator('.el-dialog')
-    // 扫码 888888（FIN-002 成品B）→ 明细自动添加行（独立模式初始 1 个空行 → 共 2 行）
-    await dialog.getByPlaceholder('扫描条码回车添加商品').fill('888888')
-    await dialog.getByPlaceholder('扫描条码回车添加商品').press('Enter')
-    await expect(dialog.locator('.el-table__row', { hasText: 'FIN-002' })).toBeVisible()
-    // 未匹配条码 000000 → 红色错误提示，行数不变（不添加行）
-    const rowCount = await dialog.locator('.el-table__row').count()
-    await dialog.getByPlaceholder('扫描条码回车添加商品').fill('000000')
-    await dialog.getByPlaceholder('扫描条码回车添加商品').press('Enter')
-    await expect(page.locator('.el-message--error')).toContainText('条码未匹配')
-    await expect(dialog.locator('.el-table__row')).toHaveCount(rowCount)
-    // 关闭弹窗不保存（无残留草稿；el-dialog 关闭后元素仍在 DOM 但隐藏）
-    await dialog.getByRole('button', { name: /取\s*消/ }).click()
-    await expect(page.locator('.el-dialog')).toBeHidden()
+    const dialog = page.locator('.el-dialog').last()
+    await dialog.getByRole('button', { name: /扫码添加/ }).click()
+    const scanDialog = page.locator('.el-dialog').last()
+    // 默认逐件关：扫码后填数量再确定
+    await scanDialog.getByPlaceholder('扫描条码回车添加商品').fill('888888')
+    await scanDialog.getByPlaceholder('扫描条码回车添加商品').press('Enter')
+    await expect(scanDialog.locator('.pending-row')).toBeVisible()
+    await scanDialog.getByPlaceholder('数量').fill('5')
+    await scanDialog.getByRole('button', { name: /确\s*定/ }).click()
+    await expect(scanDialog.locator('.preview-table')).toContainText('FIN-002')
+    // 关闭弹窗回带明细
+    await scanDialog.getByRole('button', { name: /关\s*闭/ }).click()
+    await expect(dialog.locator('.el-table__row')).toContainText('FIN-002')
+    await expect(dialog.locator('.el-table__row')).toContainText('5')
   })
 
   test('TC-PUR-10 金额与价格边界', async ({ page }) => {

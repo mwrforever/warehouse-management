@@ -1,22 +1,22 @@
 <!-- 仓库管理页：列表 + 库位管理弹窗（库位 CRUD 在弹窗内完成） -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">仓库管理</span>
-      <div class="toolbar-right">
-        <el-input
-          v-model="query.keyword"
-          placeholder="名称/编码"
-          clearable
-          style="width: 200px"
-          @keyup.enter="load"
-        />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="仓库管理"
+      keyword-placeholder="名称/编码"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <template #actions>
         <el-button v-if="auth.has('warehouse.create')" class="btn-primary" @click="openCreate"
           >新 建</el-button
         >
-      </div>
-    </div>
-    <el-table v-loading="loading" :data="rows">
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="code" label="编码" width="100" class-name="font-code" />
       <el-table-column prop="name" label="名称" min-width="120" />
       <el-table-column prop="address" label="地址" show-overflow-tooltip />
@@ -49,9 +49,9 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 仓库新建/编辑弹窗 -->
@@ -147,12 +147,16 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
-const rows = ref<WarehouseItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1, keyword: '' })
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '' },
+  fetch: (q) => warehouseApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 const saving = ref(false)
 
@@ -190,18 +194,6 @@ interface LocationForm {
 }
 
 const locForm = reactive<LocationForm>({ id: null, name: '', code: '', status: 1 })
-
-// 加载仓库列表
-async function load() {
-  loading.value = true
-  try {
-    const res = await warehouseApi.list({ page: query.page, per_page: 10, keyword: query.keyword })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
-}
 
 function openCreate() {
   Object.assign(form, { id: null, name: '', code: '', address: '', manager: '', status: 1 })
@@ -242,7 +234,7 @@ async function save() {
       })
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -260,7 +252,7 @@ async function remove(row: WarehouseItem) {
   try {
     await warehouseApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -330,7 +322,7 @@ async function removeLocation(row: LocationItem) {
   }
 }
 
-onMounted(load)
+onMounted(search)
 </script>
 
 <style scoped>
@@ -340,23 +332,6 @@ onMounted(load)
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.toolbar-right {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: center;
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
 }
 .btn-primary {
   background: var(--color-accent);

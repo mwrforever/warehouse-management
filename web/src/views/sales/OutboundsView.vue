@@ -1,6 +1,6 @@
 <!-- 销售出库单页：筛选列表 + 双入口新建弹窗（从订单生成/独立新建）+ 详情弹窗 + 审核（扣库存防超卖） -->
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -13,6 +13,9 @@ import {
 } from '../../api/sales'
 import { customerApi, type CustomerItem } from '../../api/customer'
 import { productApi } from '../../api/product'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import { formatYuan } from '../../utils/format'
@@ -20,10 +23,7 @@ import { formatYuan } from '../../utils/format'
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<SalesOutboundItem[]>([])
-const total = ref(0)
 const customers = ref<CustomerItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
@@ -33,13 +33,11 @@ const products = ref<{ id: number; name: string; code: string; barcode: string |
 // 今日已出库汇总（列表页顶部汇总行；空则隐藏）
 const todaySummary = ref<TodaySummaryItem[]>([])
 
-// 列表筛选
-const query = reactive({
-  keyword: '',
-  warehouse_id: undefined as number | undefined,
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', warehouse_id: undefined, status: undefined },
+  fetch: (q) => salesApi.outbounds(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态
@@ -61,9 +59,6 @@ const form = reactive({
     order_item_id?: number
   }[],
 })
-// 扫码输入值（v-model 绑定，扫枪回车后命中清空，未命中保留便于重扫）
-const barcode = ref('')
-const barcodeInput = ref<{ focus: () => void } | null>(null)
 
 // 状态标签语义色（sales.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
@@ -132,45 +127,23 @@ function onProductChange(row: { product_id: number | undefined }, index: number)
   }
 }
 
-// 扫码添加商品行（扫枪回车 → 条码匹配 → 命中追加行并清空，未命中保留输入便于重扫）
-async function scanAdd() {
-  const code = barcode.value.trim()
-  if (!code) return
-  try {
-    const p = await productApi.byBarcode(code)
-    // 原料不可销售：与后端 422「原料商品不可销售」口径一致（商品下拉已过滤，扫码入口补齐）
-    if (p.type === 'raw_material') {
-      ElMessage.error('原料商品不可销售')
-      return
-    }
-    if (form.items.some((i) => i.product_id === p.id)) {
-      ElMessage.warning('明细存在重复商品')
-    } else {
-      form.items.push({ product_id: p.id, quantity: 1, price: 0 })
-      // 命中后清空，便于连续扫码
-      barcode.value = ''
-    }
-  } catch (e) {
-    // 条码未匹配（后端 1117）：保留输入便于重扫
-    ElMessage.error((e as Error).message)
-  }
-}
+// 扫码弹窗状态 + 已存在行商品 id（累加关时弹窗内判重，避免撞已有行）
+const scanVisible = ref(false)
+const scanExcludedIds = computed(() =>
+  form.items.map((i) => i.product_id).filter((x): x is number => x != null),
+)
 
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await salesApi.outbounds(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
+// 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；
+// 扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+function onScanItems(items: ScanItem[]) {
+  for (const it of items) {
+    const existing = form.items.find((i) => i.product_id === it.product_id)
+    if (existing) {
+      existing.quantity = Number((existing.quantity + it.quantity).toFixed(2))
+    } else {
+      form.items.push({ product_id: it.product_id, quantity: it.quantity, price: 0 })
+    }
   }
-}
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 新建弹窗（双入口）
@@ -189,8 +162,6 @@ function openCreate(m: 'from-order' | 'standalone') {
     form.items.push({ product_id: undefined, quantity: 1, price: 0 })
   }
   dialogVisible.value = true
-  // 弹窗挂载后聚焦扫码框（nextTick 与采购入库单页扫码交互一致）
-  nextTick(() => barcodeInput.value?.focus())
 }
 
 // 编辑草稿（独立/关联均可，按详情回填）
@@ -267,7 +238,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -288,7 +259,7 @@ async function removeRowAction(row: SalesOutboundItem) {
   try {
     await salesApi.deleteOutbound(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -308,7 +279,7 @@ async function approveRow(row: SalesOutboundItem) {
   try {
     await salesApi.approveOutbound(row.id)
     ElMessage.success('出库成功，库存已更新')
-    loadList()
+    refresh()
   } catch (e) {
     // 1409 库存不足：红色错误显示后端精确消息（含商品名与当前库存），不刷新列表（单据仍草稿）
     ElMessage.error((e as Error).message)
@@ -325,7 +296,7 @@ async function openDetail(row: SalesOutboundItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     customers.value = (await customerApi.list({ per_page: 100, status: 1 })).items
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
@@ -356,28 +327,41 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">销售出库单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="销售出库单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <el-select
+        v-model="query.warehouse_id"
+        placeholder="仓库"
         clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
-      <el-select v-model="query.warehouse_id" placeholder="仓库" clearable style="width: 140px">
+        style="width: 140px"
+        @change="() => load()"
+      >
         <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
       </el-select>
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 120px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 120px"
+        @change="() => load()"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <template v-if="auth.has('sales.outbound.create')">
-        <el-button class="btn-primary" @click="openCreate('from-order')">从订单生成</el-button>
-        <el-button class="btn-secondary" @click="openCreate('standalone')">新 建</el-button>
+      <template #actions>
+        <template v-if="auth.has('sales.outbound.create')">
+          <el-button class="btn-primary" @click="openCreate('from-order')">从订单生成</el-button>
+          <el-button class="btn-secondary" @click="openCreate('standalone')">新 建</el-button>
+        </template>
       </template>
-    </div>
+    </ListFilterBar>
 
     <!-- 今日已出库汇总行（当日累计，轻量统计；空隐藏） -->
     <div v-if="todaySummary.length" class="summary-bar">
@@ -443,7 +427,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -507,15 +491,8 @@ onMounted(async () => {
             <el-input v-model="form.remark" maxlength="200" />
           </el-form-item>
         </div>
-        <div class="barcode-row">
-          <el-input
-            ref="barcodeInput"
-            v-model="barcode"
-            placeholder="扫描条码回车添加商品"
-            clearable
-            style="width: 260px"
-            @keyup.enter="scanAdd"
-          />
+        <div class="scan-entry">
+          <el-button class="btn-secondary" @click="scanVisible = true">扫码添加</el-button>
         </div>
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
@@ -582,6 +559,14 @@ onMounted(async () => {
         <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
       </template>
     </el-dialog>
+    <!-- 扫码录入独立弹窗（spec §4.4：原料禁售，扫描行关闭时回带合并；独立/从订单模式均可用） -->
+    <ScanInboundForm
+      v-model:open="scanVisible"
+      title="扫码录入明细"
+      :excluded-ids="scanExcludedIds"
+      :blocked-type="'raw_material'"
+      @add-items="onScanItems"
+    />
     <!-- 详情弹窗 -->
     <el-dialog v-model="detailVisible" title="出库单详情" width="900px">
       <template v-if="detail">
@@ -640,19 +625,6 @@ onMounted(async () => {
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
 }
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
@@ -707,7 +679,7 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0 var(--space-lg);
 }
-.barcode-row {
+.scan-entry {
   margin-bottom: var(--space-md);
 }
 .add-row {

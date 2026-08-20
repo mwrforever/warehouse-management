@@ -214,7 +214,7 @@ test.describe('销售管理模块', () => {
     )
     // 流水页筛「销售出库」：-6 流水、单号 SOUT、变动后余额 S₁-6（商品列仅渲染名称 → 按「成品B」定位）
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await pickOption(page, '销售出库')
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const mvRow = page.locator('.el-table__row', { hasText: '成品B' }).first()

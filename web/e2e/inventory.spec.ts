@@ -40,14 +40,14 @@ test.describe('库存管理模块', () => {
     await expect(page.locator('.el-table__row', { hasText: 'SEMI-001' })).toContainText('30')
     await expect(page.locator('.el-table__row', { hasText: 'FIN-002' })).toContainText('20')
     // 仓库筛选「主仓」+ 关键字 MAT（el-select 占位符为 div 文本，非 input placeholder）
-    await page.locator('.toolbar').getByText('仓库', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('仓库', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '主仓' }).click()
     await page.getByPlaceholder('商品编码/名称/条码').fill('MAT')
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__row')).toHaveCount(1)
     await expect(page.locator('.el-table__row')).toContainText('MAT-001')
     // 类型筛选取「原料」
-    await page.locator('.toolbar').getByText('类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '原料' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__row')).toHaveCount(1)
@@ -78,7 +78,7 @@ test.describe('库存管理模块', () => {
     await expect(matRow).toContainText('采购入库')
     await expect(matRow).toContainText('100')
     // 方向选「出库 -」→ 基线无出库流水 → 空态（el-table 内建空文本）
-    await page.locator('.toolbar').getByText('方向', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('方向', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '出库 -' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__empty-text')).toContainText('暂无数据')
@@ -89,7 +89,7 @@ test.describe('库存管理模块', () => {
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__row').first()).toContainText('采购入库')
     // 单据类型选「盘盈」→ 当前无盘盈流水 → 空态
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '盘盈' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     await expect(page.locator('.el-table__empty-text')).toContainText('暂无数据')
@@ -265,7 +265,7 @@ test.describe('库存管理模块', () => {
     await expect(page.locator('.el-table__row', { hasText: 'MAT-001' })).toContainText('105')
     // 流水页筛「盘盈」：MAT-001 +5，来源单号 CK
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '盘盈' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const gainRow = page.locator('.el-table__row', { hasText: '测试铝材' })
@@ -309,7 +309,7 @@ test.describe('库存管理模块', () => {
     await expect(page.locator('.el-table__row', { hasText: 'SEMI-001' })).toContainText('28')
     // 流水页筛「盘亏」：SEMI-001 -2
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '盘亏' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const lossRow = page.locator('.el-table__row', { hasText: '半成品A' })

@@ -10,6 +10,7 @@ import {
   type ProductionOrderItem,
 } from '../../api/production'
 import { useAuthStore } from '../../stores/auth'
+import UserSelect from '../../components/UserSelect.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -49,14 +50,14 @@ function stepStatus(status: number) {
 async function loadOperations() {
   const orderId = selectedOrder.value
   if (!orderId) {
-    // 清除工单选择：重置详情/工序/报工表单——防止旧工单残留数据被误提交（bug #3 回归）
+    // 清除工单选择：重置详情/工序/报工表单——防止旧工单残留数据被误提交（bug #3 回归）。
+    // 操作人保留预填的当前登录用户（非工单相关字段，随工单切换不应被清空）
     detail.value = null
     operations.value = []
     Object.assign(reportForm, {
       qualified_qty: null,
       defective_qty: 0,
       hours: null,
-      operator: '',
       remark: '',
     })
     return
@@ -65,12 +66,11 @@ async function loadOperations() {
   try {
     detail.value = await productionApi.orderDetail(orderId)
     operations.value = detail.value.operations
-    // 切换工单后重置报工表单（新工序从零报工）
+    // 切换工单后重置报工表单（新工序从零报工）；操作人保留预填的当前登录用户，不被切换清空
     Object.assign(reportForm, {
       qualified_qty: null,
       defective_qty: 0,
       hours: null,
-      operator: '',
       remark: '',
     })
   } catch (e) {
@@ -129,11 +129,11 @@ async function submitReport() {
       remark: reportForm.remark.trim() || undefined,
     })
     ElMessage.success('报工成功')
+    // 提交成功重置数量/工时/备注；操作人保留当前登录用户，本工序完成后续报工仍默认预填（spec §4.3）
     Object.assign(reportForm, {
       qualified_qty: null,
       defective_qty: 0,
       hours: null,
-      operator: '',
       remark: '',
     })
     // 重新加载工序：本工序完成/下一工序进行中，步骤条自动推进
@@ -146,6 +146,8 @@ async function submitReport() {
 }
 
 onMounted(async () => {
+  // 操作人默认预填当前登录用户（spec §4.3 应用点，可改选）
+  reportForm.operator = auth.user?.name ?? ''
   try {
     // 仅生产中工单可报工（status=2，per_page 100 覆盖全量）
     orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
@@ -235,7 +237,7 @@ onMounted(async () => {
           />
         </el-form-item>
         <el-form-item label="操作人">
-          <el-input v-model="reportForm.operator" maxlength="50" placeholder="默认当前登录用户" />
+          <UserSelect v-model="reportForm.operator" placeholder="默认当前登录用户" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="reportForm.remark" maxlength="200" />

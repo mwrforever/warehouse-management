@@ -304,7 +304,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     expect(Number(mv.items[0].balance_after)).toBe(p1a - 20)
     // 流水页筛「领料出库」：-20 流水、单号 PL、变动后余额
     await page.goto('/inventory/movements')
-    await page.locator('.toolbar').getByText('单据类型', { exact: true }).click()
+    await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await pickOption(page, '领料出库')
     await page.getByRole('button', { name: /查\s*询/ }).click()
     const mvRow = page.locator('.el-table__row', { hasText: '测试铝材' }).first()

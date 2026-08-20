@@ -1,6 +1,6 @@
 <!-- 采购订单页：筛选列表 + 新建/编辑弹窗（900px 明细/扫码/实时合计）+ 详情弹窗（含入库记录） -->
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   purchaseApi,
@@ -10,24 +10,22 @@ import {
 } from '../../api/purchase'
 import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { productApi } from '../../api/product'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { formatYuan, toLocalDateString } from '../../utils/format'
 
 const auth = useAuthStore()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<PurchaseOrderItem[]>([])
-const total = ref(0)
 const suppliers = ref<SupplierItem[]>([])
 const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
 
-// 列表筛选
-const query = reactive({
-  keyword: '',
-  supplier_id: undefined as number | undefined,
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', supplier_id: undefined, status: undefined },
+  fetch: (q) => purchaseApi.orders(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 弹窗状态
@@ -44,9 +42,6 @@ const form = reactive({
   remark: '',
   items: [] as { product_id: number | undefined; quantity: number; price: number }[],
 })
-// 扫码输入值（v-model 绑定，扫枪回车后清空并重新聚焦）
-const barcode = ref('')
-const barcodeInput = ref<{ focus: () => void } | null>(null)
 
 // 状态标签语义色（purchase.md 五态：草稿灰/已审核绿/部分入库蓝/已完成深绿/关闭红）
 function statusTagType(status: number) {
@@ -91,42 +86,22 @@ function onProductChange(row: { product_id: number | undefined }, index: number)
   }
 }
 
-// 扫码添加商品行（扫枪回车 → 条码匹配 → 命中追加行，未命中提示）
-async function scanAdd() {
-  const code = barcode.value.trim()
-  if (!code) return
-  try {
-    const p = await productApi.byBarcode(code)
-    if (form.items.some((i) => i.product_id === p.id)) {
-      ElMessage.warning('明细存在重复商品')
+// 扫码弹窗状态 + 已存在行商品 id（累加关时弹窗内判重，避免撞已有行）
+const scanVisible = ref(false)
+const scanExcludedIds = computed(() =>
+  form.items.map((i) => i.product_id).filter((x): x is number => x != null),
+)
+
+// 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行）
+function onScanItems(items: ScanItem[]) {
+  for (const it of items) {
+    const existing = form.items.find((i) => i.product_id === it.product_id)
+    if (existing) {
+      existing.quantity = Number((existing.quantity + it.quantity).toFixed(2))
     } else {
-      form.items.push({ product_id: p.id, quantity: 1, price: 0 })
+      form.items.push({ product_id: it.product_id, quantity: it.quantity, price: 0 })
     }
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    // 清空扫码框并保持焦点，便于连续扫码
-    barcode.value = ''
-    barcodeInput.value?.focus()
   }
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await purchaseApi.orders(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 新建/编辑弹窗
@@ -142,8 +117,6 @@ function openCreate() {
   })
   form.items.push({ product_id: undefined, quantity: 1, price: 0 })
   dialogVisible.value = true
-  // 弹窗挂载后聚焦扫码框（nextTick 与 ChecksView 扫码交互一致）
-  nextTick(() => barcodeInput.value?.focus())
 }
 
 async function openEdit(row: PurchaseOrderItem) {
@@ -163,8 +136,6 @@ async function openEdit(row: PurchaseOrderItem) {
       })),
     })
     dialogVisible.value = true
-    // 弹窗挂载后聚焦扫码框（nextTick 与 ChecksView 扫码交互一致）
-    nextTick(() => barcodeInput.value?.focus())
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -212,7 +183,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -233,7 +204,7 @@ async function removeRowAction(row: PurchaseOrderItem) {
   try {
     await purchaseApi.deleteOrder(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -252,7 +223,7 @@ async function approveRow(row: PurchaseOrderItem) {
   try {
     await purchaseApi.approveOrder(row.id)
     ElMessage.success('审核成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -271,7 +242,7 @@ async function closeRow(row: PurchaseOrderItem) {
   try {
     await purchaseApi.closeOrder(row.id)
     ElMessage.success('关闭成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -289,7 +260,7 @@ async function openDetail(row: PurchaseOrderItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     const res = await supplierApi.list({ per_page: 100, status: 1 })
     suppliers.value = res.items
@@ -302,30 +273,43 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">采购订单</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="采购订单"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
+      <el-select
+        v-model="query.supplier_id"
+        placeholder="供应商"
         clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
-      <el-select v-model="query.supplier_id" placeholder="供应商" clearable style="width: 180px">
+        style="width: 180px"
+        @change="() => load()"
+      >
         <el-option v-for="s in suppliers" :key="s.id" :label="s.name" :value="s.id" />
       </el-select>
-      <el-select v-model="query.status" placeholder="状态" clearable style="width: 130px">
+      <el-select
+        v-model="query.status"
+        placeholder="状态"
+        clearable
+        style="width: 130px"
+        @change="() => load()"
+      >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
         <el-option label="部分入库" :value="2" />
         <el-option label="已完成" :value="3" />
         <el-option label="关闭" :value="4" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <el-button v-if="auth.has('purchase.order.create')" class="btn-primary" @click="openCreate"
-        >新 建</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button v-if="auth.has('purchase.order.create')" class="btn-primary" @click="openCreate"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" class-name="font-code" min-width="150" />
@@ -386,7 +370,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -434,15 +418,8 @@ onMounted(async () => {
             <el-input v-model="form.remark" maxlength="200" />
           </el-form-item>
         </div>
-        <div class="barcode-row">
-          <el-input
-            ref="barcodeInput"
-            v-model="barcode"
-            placeholder="扫描条码回车添加商品"
-            clearable
-            style="width: 260px"
-            @keyup.enter="scanAdd"
-          />
+        <div class="scan-entry">
+          <el-button class="btn-secondary" @click="scanVisible = true">扫码添加</el-button>
         </div>
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
@@ -508,6 +485,14 @@ onMounted(async () => {
         <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 扫码录入独立弹窗（spec §4.4：扫描行关闭时回带合并） -->
+    <ScanInboundForm
+      v-model:open="scanVisible"
+      title="扫码录入明细"
+      :excluded-ids="scanExcludedIds"
+      @add-items="onScanItems"
+    />
 
     <!-- 详情弹窗（含入库记录 tab） -->
     <el-dialog v-model="detailVisible" title="订单详情" width="900px">
@@ -590,19 +575,6 @@ onMounted(async () => {
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
 }
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
@@ -610,6 +582,13 @@ onMounted(async () => {
 }
 .btn-primary:hover {
   opacity: 0.9;
+}
+.btn-secondary {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.btn-secondary:hover {
+  background: var(--color-muted);
 }
 .pager {
   display: flex;
@@ -632,7 +611,7 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0 var(--space-lg);
 }
-.barcode-row {
+.scan-entry {
   margin-bottom: var(--space-md);
 }
 .add-row {

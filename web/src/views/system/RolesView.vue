@@ -1,12 +1,14 @@
 <!-- 角色管理页：列表 + 新建/编辑弹窗（权限树勾选） -->
 <template>
   <div>
-    <div class="toolbar">
-      <el-button v-if="auth.has('role.create')" class="btn-primary" @click="openEdit()"
-        >新 建</el-button
-      >
-    </div>
-    <el-table v-loading="loading" :data="rows">
+    <ListFilterBar title="角色管理" @search="search" @reset="reset" @refresh="refresh">
+      <template #actions>
+        <el-button v-if="auth.has('role.create')" class="btn-primary" @click="openEdit()"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="code" label="编码" class-name="font-code" />
@@ -30,7 +32,7 @@
       :total="total"
       :page-size="10"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
 
     <!-- 新建/编辑弹窗：表单 + 权限树勾选 -->
@@ -65,13 +67,17 @@ import { nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { roleApi, type PermissionItem, type RoleItem } from '../../api/role'
 import { useAuthStore } from '../../stores/auth'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
 
-const rows = ref<RoleItem[]>([])
-const total = ref(0)
-const loading = ref(false)
-const query = reactive({ page: 1 })
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, search, reset, refresh } = useListQuery({
+  defaultQuery: {},
+  fetch: (q) => roleApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 
 // 角色表单：id 为空表示新建
@@ -97,18 +103,6 @@ const treeData = ref<PermTreeNode[]>([])
 const checkedKeys = ref<number[]>([])
 // 权限树加载 Promise 缓存：列表与权限树并行加载，编辑弹窗回填前复用同一请求（防竞态丢勾选）
 let permTreePromise: Promise<void> | null = null
-
-// 加载角色列表
-async function load() {
-  loading.value = true
-  try {
-    const res = await roleApi.list({ page: query.page, per_page: 10 })
-    rows.value = res.items
-    total.value = res.total
-  } finally {
-    loading.value = false
-  }
-}
 
 // 加载权限清单并构造权限树（label 用权限 name）
 function loadPermissions(): Promise<void> {
@@ -188,7 +182,7 @@ async function save() {
       })
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -204,14 +198,14 @@ async function remove(row: RoleItem) {
   try {
     await roleApi.remove(row.id)
     ElMessage.success('删除成功')
-    load()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
 
 onMounted(async () => {
-  load()
+  search()
   try {
     await loadPermissions()
   } catch {
@@ -221,14 +215,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 工具栏间距与主按钮样式（btn-primary 语义色） */
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
+/* 主按钮样式（btn-primary 语义色） */
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);

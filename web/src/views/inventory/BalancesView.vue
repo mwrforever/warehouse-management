@@ -1,22 +1,21 @@
 <!-- 库存余额页：筛选 + 预警标签 + 行点击跳流水 + CSV 导出 -->
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">库存余额</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="商品编码/名称/条码"
-        clearable
-        style="width: 220px"
-        @keyup.enter="reload"
-        @clear="reload"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="库存余额"
+      keyword-placeholder="商品编码/名称/条码"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.warehouse_id"
         placeholder="仓库"
         clearable
         style="width: 160px"
-        @change="reload"
+        @change="() => load()"
       >
         <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
       </el-select>
@@ -25,7 +24,7 @@
         placeholder="类型"
         clearable
         style="width: 130px"
-        @change="reload"
+        @change="() => load()"
       >
         <el-option label="原料" value="raw_material" />
         <el-option label="半成品" value="semi_finished" />
@@ -36,13 +35,14 @@
         :active-value="1"
         :inactive-value="0"
         active-text="仅看预警"
-        @change="reload"
+        @change="() => load()"
       />
-      <el-button class="btn-secondary" :disabled="loading" @click="doExport">导 出</el-button>
-      <el-button class="btn-secondary" @click="reload">查 询</el-button>
-    </div>
+      <template #actions>
+        <el-button class="btn-secondary" :disabled="loading" @click="doExport">导 出</el-button>
+      </template>
+    </ListFilterBar>
 
-    <el-table v-loading="loading" :data="rows" @row-click="gotoMovements">
+    <el-table v-loading="loading" :data="list" @row-click="gotoMovements">
       <el-table-column prop="product_code" label="商品编码" width="130" class-name="font-code" />
       <el-table-column prop="product_name" label="商品名称" min-width="140" />
       <el-table-column label="类型" width="90">
@@ -73,38 +73,36 @@
     <el-pagination
       v-model:current-page="query.page"
       :total="total"
-      :page-size="10"
+      :page-size="query.per_page"
       layout="total, prev, pager, next"
-      @current-change="load"
+      @current-change="refresh"
     />
   </div>
 </template>
 
 <script setup lang="ts">
 // 库存余额页：列表/筛选/预警标签；点击行跳流水页并预填筛选；导出 CSV
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { inventoryApi, type BalanceItem, type ProductType } from '../../api/inventory'
 import { warehouseApi } from '../../api/warehouse'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const router = useRouter()
-const rows = ref<BalanceItem[]>([])
-const total = ref(0)
-const loading = ref(false)
 const warehouses = ref<{ id: number; name: string }[]>([])
-const query = reactive<{
-  page: number
-  keyword: string
-  warehouse_id?: number
-  type?: ProductType
-  alert: number
-}>({
-  page: 1,
-  keyword: '',
-  warehouse_id: undefined,
-  type: undefined,
-  alert: 0,
+
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: {
+    keyword: '',
+    warehouse_id: undefined as number | undefined,
+    type: undefined as ProductType | undefined,
+    alert: 0,
+  },
+  fetch: (q) => inventoryApi.balances({ ...q, keyword: q.keyword || undefined }),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 类型标签语义色（原料蓝/半成品琥珀/成品绿）
@@ -113,30 +111,6 @@ function typeLabel(type: ProductType): string {
 }
 function typeTagType(type: ProductType): 'primary' | 'warning' | 'success' {
   return type === 'raw_material' ? 'primary' : type === 'semi_finished' ? 'warning' : 'success'
-}
-
-// 加载列表（筛选变化后重置页码）
-async function load() {
-  loading.value = true
-  try {
-    const res = await inventoryApi.balances({
-      page: query.page,
-      keyword: query.keyword || undefined,
-      warehouse_id: query.warehouse_id,
-      type: query.type,
-      alert: query.alert,
-    })
-    rows.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-function reload() {
-  query.page = 1
-  load()
 }
 
 // 点击行：跳流水页并预填商品×仓库筛选
@@ -170,7 +144,7 @@ async function doExport() {
 }
 
 onMounted(async () => {
-  load()
+  search()
   // 仓库下拉（全量）
   try {
     const res = await warehouseApi.list({ per_page: 100 })
@@ -182,25 +156,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 页面骨架：卡片容器 + 工具栏（左标题右操作，筛选控件平铺换行） */
+/* 页面骨架：卡片容器（筛选栏样式由 ListFilterBar 提供） */
 .page-card {
   background: #fff;
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-lg);
-  align-items: center;
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: auto;
 }
 /* 次按钮：透明底 + 石板灰描边（设计系统 MASTER.md Buttons） */
 .btn-secondary {

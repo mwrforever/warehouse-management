@@ -463,3 +463,28 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* 路由转场（spec §4.5）：fade + 上移 8px，200ms ease-out-quart 曲线；
+   mode="out-in" 下旧组件先退场，避免双渲染争抢焦点；
+   结束态 transform 归零，防止残留 transform 使后代 position:fixed（el-dialog 遮罩）以容器为包含块 */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-enter-to {
+  opacity: 1;
+  transform: translateY(0);
+}

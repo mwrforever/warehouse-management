@@ -12,14 +12,13 @@ import {
 } from '../../api/production'
 import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const loading = ref(false)
 const saving = ref(false)
-const list = ref<OutsourcingItem[]>([])
-const total = ref(0)
 // 生产中工单下拉（label 单号+成品，仅 status=2 可委外）
 const orders = ref<ProductionOrderItem[]>([])
 const suppliers = ref<SupplierItem[]>([])
@@ -30,12 +29,11 @@ const processOptions = ref<ProductionOperation[]>([])
 // 当前工单计划数（委外量上限校验数据源）
 const orderPlanQty = ref(0)
 
-// 列表筛选（keyword 单号 / status 三态）
-const query = reactive({
-  keyword: '',
-  status: undefined as number | undefined,
-  page: 1,
-  per_page: 10,
+// 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '', status: undefined },
+  fetch: (q) => productionApi.outsourcings(q),
+  onError: (e) => ElMessage.error(e.message),
 })
 
 // 新建/编辑弹窗状态
@@ -72,24 +70,6 @@ function statusTagType(status: number) {
   if (status === 0) return 'info'
   if (status === 1) return 'primary'
   return 'success'
-}
-
-async function loadList() {
-  loading.value = true
-  try {
-    const res = await productionApi.outsourcings(query)
-    list.value = res.items
-    total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
-}
-
-function search() {
-  query.page = 1
-  loadList()
 }
 
 // 选工单 → 加载该工单未完成工序（委外工序下拉数据源）+ 计划数（数量上限）
@@ -212,7 +192,7 @@ async function save() {
     }
     ElMessage.success('保存成功')
     dialogVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -233,7 +213,7 @@ async function removeRowAction(row: OutsourcingItem) {
   try {
     await productionApi.deleteOutsourcing(row.id)
     ElMessage.success('删除成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -253,7 +233,7 @@ async function approveRow(row: OutsourcingItem) {
   try {
     await productionApi.approveOutsourcing(row.id)
     ElMessage.success('发出成功')
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -324,7 +304,7 @@ async function submitReceipt() {
     })
     ElMessage.success('回收成功')
     receiptVisible.value = false
-    loadList()
+    refresh()
   } catch (e) {
     ElMessage.error((e as Error).message)
   } finally {
@@ -343,7 +323,7 @@ async function openReceipts(row: OutsourcingItem) {
 }
 
 onMounted(async () => {
-  loadList()
+  search()
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
     suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
@@ -361,35 +341,35 @@ onMounted(async () => {
 </script>
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <span class="page-title">委外加工</span>
-      <el-input
-        v-model="query.keyword"
-        placeholder="单号"
-        clearable
-        style="width: 200px"
-        @keyup.enter="search"
-      />
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="委外加工"
+      keyword-placeholder="单号"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    >
       <el-select
         v-model="query.status"
         placeholder="状态"
         clearable
         style="width: 120px"
-        @change="search"
+        @change="() => load()"
       >
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
         <el-option label="已回收" :value="2" />
       </el-select>
-      <el-button class="btn-primary" @click="search">查 询</el-button>
-      <div class="spacer" />
-      <el-button
-        v-if="auth.has('production.outsource.create')"
-        class="btn-primary"
-        @click="openCreate()"
-        >新 建</el-button
-      >
-    </div>
+      <template #actions>
+        <el-button
+          v-if="auth.has('production.outsource.create')"
+          class="btn-primary"
+          @click="openCreate()"
+          >新 建</el-button
+        >
+      </template>
+    </ListFilterBar>
 
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" min-width="150" class-name="font-code" />
@@ -449,7 +429,7 @@ onMounted(async () => {
         :page-size="query.per_page"
         :total="total"
         layout="total, prev, pager, next"
-        @current-change="loadList"
+        @current-change="refresh"
       />
     </div>
 
@@ -625,22 +605,6 @@ onMounted(async () => {
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-lg);
-  margin-bottom: var(--space-xl);
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-foreground);
-  margin-right: var(--space-lg);
-}
-.spacer {
-  flex: 1;
 }
 .btn-primary {
   background: var(--color-accent);
