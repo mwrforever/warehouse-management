@@ -37,8 +37,6 @@ const emit = defineEmits<{
 const users = ref<UserItem[]>([])
 const total = ref(0)
 const loading = ref(false)
-const dialogVisible = ref(false)
-const dialogPage = ref(1)
 const dialogLoading = ref(false)
 
 // 弹窗搜索：300ms 防抖实时搜索 + 查询按钮
@@ -49,7 +47,6 @@ const searchPage = ref(1)
 function pick(name: string) {
   emit('update:modelValue', name)
   emit('change', name)
-  dialogVisible.value = false
 }
 
 // 首次加载：拉取全量用户判断走下拉还是弹窗；失败降级为占位不阻塞页面（spec §7）
@@ -91,7 +88,6 @@ async function searchDialog() {
 watch(searchKw.debounced, () => searchDialog())
 
 async function changeDialogPage(p: number) {
-  dialogPage.value = p
   dialogLoading.value = true
   try {
     const res = await userApi.list({
