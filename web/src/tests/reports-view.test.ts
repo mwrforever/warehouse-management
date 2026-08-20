@@ -144,7 +144,7 @@ describe('ReportsView', () => {
   })
 
   it('操作人预填当前登录用户姓名', async () => {
-    // 共享 auth mock：给 user 赋值后组件 onMounted 预填操作人；切换工单保留预填（不清空操作人）
+    // 共享 auth mock：给 user 赋值后组件 onMounted 预填操作人；切换工单/提交报工后均保留预填（不清空操作人）
     setActivePinia(createPinia())
     const auth = useAuthStore()
     auth.user = { name: '测试管理员' } as never
@@ -159,6 +159,18 @@ describe('ReportsView', () => {
     const opItem = wrapper
       .findAll('.el-form-item')
       .find((f) => f.find('.el-form-item__label').text() === '操作人')
+    expect(opItem?.text()).toContain('测试管理员')
+    // 提交报工成功后：操作人仍保留预填（后续工序报工默认当前登录用户，spec §4.3）
+    const qtyItem = wrapper
+      .findAll('.el-form-item')
+      .find((f) => f.find('.el-form-item__label').text() === '合格数')
+    await qtyItem!.find('input').setValue('5')
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('报工'))!
+      .trigger('click')
+    await flushPromises()
+    expect(reportMock).toHaveBeenCalledWith(11, expect.objectContaining({ operator: '测试管理员' }))
     expect(opItem?.text()).toContain('测试管理员')
   })
 })

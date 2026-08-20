@@ -129,11 +129,11 @@ async function submitReport() {
       remark: reportForm.remark.trim() || undefined,
     })
     ElMessage.success('报工成功')
+    // 提交成功重置数量/工时/备注；操作人保留当前登录用户，本工序完成后续报工仍默认预填（spec §4.3）
     Object.assign(reportForm, {
       qualified_qty: null,
       defective_qty: 0,
       hours: null,
-      operator: '',
       remark: '',
     })
     // 重新加载工序：本工序完成/下一工序进行中，步骤条自动推进
