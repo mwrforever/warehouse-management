@@ -131,9 +131,8 @@ class PickListController extends Controller
         }
 
         $pick = DB::transaction(function () use ($data, $materialMap) {
-            $pick = $this->sequenceService->nextNo(
+            $pick = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_PL,
-                'PL',
                 fn (string $no) => PickList::create([
                     'no' => $no,
                     'order_id' => $data['order_id'],
@@ -144,8 +143,8 @@ class PickListController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn () => ($no = PickList::where('no', 'like', 'PL'.date('Ymd').'-%')
-                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                fn (string $prefix, string $dateKey) => ($no = PickList::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             // 明细行：需求快照 + 本次领用量（需求快照取自预取 map，P1-4）
             $pick->items()->createMany(array_map(fn ($i) => [

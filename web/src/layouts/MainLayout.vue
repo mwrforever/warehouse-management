@@ -478,6 +478,14 @@ const menu: MenuGroup[] = [
         tip: '字典管理',
         desc: '数据字典维护',
       },
+      {
+        to: '/system/numbering',
+        label: '编号规则',
+        icon: Tickets,
+        perm: 'system.setting.list',
+        tip: '编号规则',
+        desc: '单据号与商品编码格式配置',
+      },
     ],
   },
 ]

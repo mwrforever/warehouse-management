@@ -34,10 +34,10 @@ export const productApi = {
     const { data } = await http.get('/products', { params: { per_page: 10, ...params } })
     return data.data as { items: ProductItem[]; total: number; page: number; per_page: number }
   },
-  // 新建商品
+  // 新建商品（编码留空则后端自动生成 PRD 前缀；保存后响应回填 code/barcode）
   async create(payload: {
     name: string
-    code: string
+    code?: string
     type: ProductType
     category_id: number
     unit_id: number
@@ -48,7 +48,8 @@ export const productApi = {
     status?: number
     remark?: string
   }) {
-    await http.post('/products', payload)
+    const { data } = await http.post('/products', payload)
+    return data.data as { id: number; code: string; barcode: string }
   },
   // 更新商品
   async update(

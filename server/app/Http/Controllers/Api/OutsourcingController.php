@@ -102,9 +102,8 @@ class OutsourcingController extends Controller
         }
 
         $os = DB::transaction(function () use ($data) {
-            $os = $this->sequenceService->nextNo(
+            $os = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_OS,
-                'OS',
                 fn (string $no) => OutsourcingOrder::create([
                     'no' => $no,
                     'order_id' => $data['order_id'],
@@ -117,8 +116,8 @@ class OutsourcingController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn () => ($no = OutsourcingOrder::where('no', 'like', 'OS'.date('Ymd').'-%')
-                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                fn (string $prefix, string $dateKey) => ($no = OutsourcingOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
 
             return $os;
@@ -339,9 +338,8 @@ class OutsourcingController extends Controller
                     'remark' => '委外回收',
                 ]], auth()->id());
                 // 创建回收单（创建即审核）：单号 OSR 先占号再补流水单号（先建单号引用唯一）
-                $receipt = $this->sequenceService->nextNo(
+                $receipt = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_OSR,
-                    'OSR',
                     fn (string $no) => OutsourcingReceipt::create([
                         'no' => $no,
                         'outsourcing_id' => $locked->id,
@@ -354,8 +352,8 @@ class OutsourcingController extends Controller
                         'remark' => $data['remark'] ?? null,
                     ]),
                     // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                    fn () => ($no = OutsourcingReceipt::where('no', 'like', 'OSR'.date('Ymd').'-%')
-                        ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                    fn (string $prefix, string $dateKey) => ($no = OutsourcingReceipt::where('no', 'like', $prefix.date('Ymd').'%')
+                        ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
                 // 流水单号回补（流水创建时回收单号未定，先以委外单号占位后回补——审计链完整）
                 DB::table('inventory_movements')

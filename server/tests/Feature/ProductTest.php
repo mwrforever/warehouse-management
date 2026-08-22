@@ -15,6 +15,7 @@ use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -77,6 +78,45 @@ class ProductTest extends TestCase
             'barcode' => '999999', 'safety_min' => 10, 'safety_max' => 100, 'status' => 1,
         ])->assertJsonPath('code', 0);
         $this->assertDatabaseHas('products', ['code' => 'MAT-001']);
+    }
+
+    public function test_store_auto_generates_code_and_barcode(): void
+    {
+        // 正常路径（Spec 2）：编码/条码留空 → 自动生成 PRD 前缀 6 位补零、条码=编码；响应回填
+        $this->seed(DocumentNumberConfigSeeder::class);
+        $res = $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '自动编码件', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ]);
+        $res->assertJsonPath('code', 0);
+        $this->assertMatchesRegularExpression('/^PRD\d{6}$/', $res->json('data.code'));
+        $this->assertSame($res->json('data.code'), $res->json('data.barcode'));
+        $this->assertDatabaseHas('products', ['code' => $res->json('data.code'), 'barcode' => $res->json('data.code')]);
+    }
+
+    public function test_store_auto_code_does_not_collide_with_manual_code(): void
+    {
+        // 异常边界：自动生成的编码不与既有商品编码冲突（老库衔接：已有 PRD000001 → 自动生成 PRD000002）
+        $this->seed(DocumentNumberConfigSeeder::class);
+        Product::create(['name' => '旧件', 'code' => 'PRD000001', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $res = $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '自动编码件二', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ]);
+        $res->assertJsonPath('code', 0);
+        $this->assertSame('PRD000002', $res->json('data.code'));
+    }
+
+    public function test_store_manual_code_still_enforced_unique_1114(): void
+    {
+        // 边界路径：手填编码仍走唯一校验 1114（自动生成不覆盖手动行为）
+        Product::create(['name' => '已存在', 'code' => 'MAT-001', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '重复编码', 'code' => 'MAT-001', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ])->assertJsonPath('code', 1114);
     }
 
     public function test_store_duplicate_code_fails_with_1114(): void

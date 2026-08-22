@@ -125,9 +125,8 @@ class CheckController extends Controller
         }
         $check = DB::transaction(function () use ($data, $items) {
             // 建单：单号走持久序列（并发撞号 1062/19 由服务换号重试；删除不回退号段）
-            $check = $this->sequenceService->nextNo(
+            $check = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_CHECK,
-                'CK',
                 fn (string $no) => InventoryCheck::create([
                     'no' => $no,
                     'warehouse_id' => $data['warehouse_id'],
@@ -135,8 +134,8 @@ class CheckController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // 老库衔接：序列行首次初始化时以当日既有 CK 单号段最大值为起点
-                fn () => (int) (InventoryCheck::where('no', 'like', 'CK'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($c) => (int) substr((string) $c->no, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = InventoryCheck::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             foreach ($items as $i) {
                 InventoryCheckItem::create(['check_id' => $check->id] + $i);

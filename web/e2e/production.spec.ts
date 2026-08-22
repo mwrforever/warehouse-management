@@ -195,7 +195,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const row = page.locator('.el-table__row', { hasText: 'MO' })
     await expect(row).toContainText('草稿')
     mo1No = (await row.locator('td').first().textContent())?.trim() ?? ''
-    expect(mo1No).toMatch(/^MO\d{8}-\d{3}$/)
+    expect(mo1No).toMatch(/^MO\d{12}\d{3}$/)
     // 详情（API 精确断言）：物料需求 20 + 工序 3 行待开工
     const list = await apiGet(page, '/api/v1/production/orders', { keyword: mo1No })
     mo1Id = list.items[0].id as number
@@ -283,7 +283,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const plRow = page.locator('.el-table__row', { hasText: 'PL' })
     await expect(plRow).toContainText('草稿')
     plNo = (await plRow.locator('td').first().textContent())?.trim() ?? ''
-    expect(plNo).toMatch(/^PL\d{8}-\d{3}$/)
+    expect(plNo).toMatch(/^PL\d{12}\d{3}$/)
     // 审核：confirm「库存将减少」→ 成功；余额 = P₁-20
     await plRow.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('审核后库存将减少')
@@ -483,7 +483,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const osRow = page.locator('.el-table__row', { hasText: 'OS' })
     await expect(osRow).toContainText('草稿')
     osNo = (await osRow.locator('td').first().textContent())?.trim() ?? ''
-    expect(osNo).toMatch(/^OS\d{8}-\d{3}$/)
+    expect(osNo).toMatch(/^OS\d{12}\d{3}$/)
     // 审核（发出）：confirm「库存将减少」→ 成功；FIN-002 = F₁-5（outsourcing_out 流水）
     await osRow.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('库存将减少')
@@ -520,7 +520,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const osId = osList.items[0].id as number
     const receipts = await apiGet(page, `/api/v1/production/outsourcings/${osId}/receipts`)
     osrNo = receipts.items[0].no as string
-    expect(osrNo).toMatch(/^OSR\d{8}-\d{3}$/)
+    expect(osrNo).toMatch(/^OSR\d{12}\d{3}$/)
     const mvIn = await apiGet(page, '/api/v1/inventory/movements', {
       source_type: 'outsourcing_in',
       source_no: osrNo,
@@ -577,7 +577,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const fiRow = page.locator('.el-table__row', { hasText: 'FI' })
     await expect(fiRow).toContainText('草稿')
     fiNo = (await fiRow.locator('td').first().textContent())?.trim() ?? ''
-    expect(fiNo).toMatch(/^FI\d{8}-\d{3}$/)
+    expect(fiNo).toMatch(/^FI\d{12}\d{3}$/)
     // 审核：confirm「成品库存将增加」→ 成功；FIN-002 = F₁+10（finished_inbound 流水，变动后余额 = F₁b+10）
     await fiRow.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('成品库存将增加')
@@ -659,7 +659,7 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     })
     expect(rl.code).toBe(0)
     rlNo = (rl.data as { no: string }).no
-    expect(rlNo).toMatch(/^RL\d{8}-\d{3}$/)
+    expect(rlNo).toMatch(/^RL\d{12}\d{3}$/)
     // 超已领（25 > 已领 20）→ 1517（草稿期后端拦截）
     const rlList = await apiGet(page, '/api/v1/production/returns', { keyword: rlNo })
     const rlId = rlList.items[0].id as number

@@ -115,9 +115,8 @@ class SalesOrderController extends Controller
 
         $order = DB::transaction(function () use ($data) {
             // 单号走持久序列（撞号自动换号；删除不回退；老库 max 衔接）
-            $order = $this->sequenceService->nextNo(
+            $order = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_SO,
-                'SO',
                 fn (string $no) => SalesOrder::create([
                     'no' => $no,
                     'customer_id' => $data['customer_id'],
@@ -128,8 +127,8 @@ class SalesOrderController extends Controller
                     'remark' => $data['remark'] ?? null,
                     'created_by' => auth()->id(),
                 ]),
-                fn () => (int) (SalesOrder::where('no', 'like', 'SO'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = SalesOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $order->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

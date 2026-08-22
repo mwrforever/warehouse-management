@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -42,6 +43,8 @@ class FinishedInboundTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -101,7 +104,7 @@ class FinishedInboundTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 FI{date}-001
         $no = $this->createInbound($this->payload());
-        $this->assertMatchesRegularExpression('/^FI\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^FI\d{12}001$/', $no);
         $fi = FinishedInbound::where('no', $no)->first();
         $this->assertSame(FinishedInbound::STATUS_DRAFT, $fi->status);
         $this->assertSame('10.00', $fi->items()->first()->quantity);
@@ -290,7 +293,7 @@ class FinishedInboundTest extends TestCase
         $this->withToken($this->token)->getJson('/api/v1/production/finished-inbounds')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
-            ->assertJsonPath('data.items.0.order_no', 'MO'.date('Ymd').'-001')
+            ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.product_name', '成品B')
             ->assertJsonPath('data.items.0.quantity', '10.00')
             ->assertJsonPath('data.items.0.status_label', '已审核');

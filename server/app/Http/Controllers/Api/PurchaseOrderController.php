@@ -114,9 +114,8 @@ class PurchaseOrderController extends Controller
 
         $order = DB::transaction(function () use ($data) {
             // 单号走持久序列（撞号自动换号；删除不回退；老库 max 衔接）
-            $order = $this->sequenceService->nextNo(
+            $order = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_PO,
-                'PO',
                 fn (string $no) => PurchaseOrder::create([
                     'no' => $no,
                     'supplier_id' => $data['supplier_id'],
@@ -127,8 +126,8 @@ class PurchaseOrderController extends Controller
                     'remark' => $data['remark'] ?? null,
                     'created_by' => auth()->id(),
                 ]),
-                fn () => (int) (PurchaseOrder::where('no', 'like', 'PO'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = PurchaseOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $order->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

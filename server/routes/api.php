@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CheckController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DictionaryController;
+use App\Http\Controllers\Api\DocumentNumberConfigController;
 use App\Http\Controllers\Api\FinishedInboundController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OperationReportController;
@@ -72,6 +73,16 @@ Route::prefix('v1')->group(function () {
             ->delete('/dictionaries/{dictionary}', [DictionaryController::class, 'destroy']);
         Route::middleware('permission:dictionary.delete')
             ->delete('/dictionaries/items/{item}', [DictionaryController::class, 'destroyItem']);
+    });
+
+    // 编号规则（Spec 2）：列表/预览登录可读（system.setting.list）；编辑需 system.setting.update
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:system.setting.list')
+            ->get('/document-number-configs', [DocumentNumberConfigController::class, 'index']);
+        Route::middleware('permission:system.setting.list')
+            ->post('/document-number-configs/preview', [DocumentNumberConfigController::class, 'preview']);
+        Route::middleware('permission:system.setting.update')
+            ->put('/document-number-configs/{config}', [DocumentNumberConfigController::class, 'update']);
     });
 
     // 分类：树形列表 + CRUD（category.list/create/update/delete）

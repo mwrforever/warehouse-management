@@ -105,14 +105,14 @@ test.describe('采购管理模块', () => {
       .getByRole('button', { name: /删\s*除/ })
       .nth(2)
       .click()
-    // 保存 → 列表出现 PO 草稿，金额列 1,000.00
+    // 保存 → 列表出现 PO 草稿（取首行：列表按 id 倒序，最新在建单在最上），金额列 1,000.00
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    const row = page.locator('.el-table__row', { hasText: 'PO' })
+    const row = page.locator('.el-table__row').first()
     await expect(row).toContainText('草稿')
     await expect(row).toContainText('¥1,000.00')
     poNo = (await row.locator('td').first().textContent())?.trim() ?? ''
-    expect(poNo).toMatch(/^PO\d{8}-\d{3}$/)
+    expect(poNo).toMatch(/^PO\d{12}\d{3}$/)
     // 编辑：MAT-001 数量改 120 → 合计 ¥1,100.00
     await row.getByRole('button', { name: /编\s*辑/ }).click()
     const ed = page.locator('.el-dialog')
@@ -120,7 +120,7 @@ test.describe('采购管理模块', () => {
     await ed.getByRole('button', { name: /保\s*存/ }).click()
     // 上一条「保存成功」可能未消失（3s 自动关闭），取最后一条避免 strict 冲突
     await expect(page.locator('.el-message--success').last()).toContainText('保存成功')
-    await expect(page.locator('.el-table__row', { hasText: 'PO' })).toContainText('¥1,100.00')
+    await expect(page.locator('.el-table__row').first()).toContainText('¥1,100.00')
   })
 
   test('TC-PUR-02 订单审核与修改保护', async ({ page }) => {
@@ -295,9 +295,9 @@ test.describe('采购管理模块', () => {
     await row.locator('.el-input-number input').first().fill('10')
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    // 等待列表刷新完成（刷新前旧列表仅 PO-001 一行，避免 po2No 取到旧列表首行）
-    await expect(page.locator('.el-table__row', { hasText: 'PO' })).toHaveCount(2)
-    const po2Row = page.locator('.el-table__row', { hasText: 'PO' }).first()
+    // 等待列表刷新完成（刷新前旧列表首行是上一单，避免 po2No 取到旧列表首行）
+    await expect(page.locator('.el-table__row').first()).not.toContainText(poNo)
+    const po2Row = page.locator('.el-table__row').first()
     const po2No = (await po2Row.locator('td').first().textContent())?.trim() ?? ''
     await po2Row.getByRole('button', { name: /审\s*核/ }).click()
     await page

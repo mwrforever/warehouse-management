@@ -17,6 +17,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -49,6 +50,8 @@ class SalesOutboundTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $u = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $u->roles()->sync([$role->id]);
@@ -131,7 +134,7 @@ class SalesOutboundTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 SOUT{date}-001，金额=Σ数量×单价（分）
         $no = $this->createOutbound($this->payload());
-        $this->assertMatchesRegularExpression('/^SOUT\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^ST\d{12}001$/', $no);
         $outbound = SalesOutbound::where('no', $no)->first();
         $this->assertSame(SalesOutbound::STATUS_DRAFT, $outbound->status);
         // 6×10000 + 5×2000 = 70000 分
@@ -208,7 +211,7 @@ class SalesOutboundTest extends TestCase
         // 正常路径：from-order 预填剩余量正确（未出库 → 剩余=订购数）
         $this->withToken($this->token)->getJson("/api/v1/sales/outbounds/from-order/{$this->orderId}")
             ->assertJsonPath('code', 0)
-            ->assertJsonPath('data.order_no', 'SO'.date('Ymd').'-001')
+            ->assertJsonPath('data.order_no', 'SO'.date('YmdHi').'001')
             ->assertJsonPath('data.customer_id', $this->customer->id)
             ->assertJsonPath('data.items.0.product_code', 'FIN-002')
             ->assertJsonPath('data.items.0.quantity', '10.00')
@@ -367,7 +370,7 @@ class SalesOutboundTest extends TestCase
             ->assertJsonPath('data.items.0.customer_name', '测试客户')
             ->assertJsonPath('data.items.0.warehouse_name', '主仓')
             ->assertJsonPath('data.items.0.location_name', 'B-01')
-            ->assertJsonPath('data.items.0.order_no', 'SO'.date('Ymd').'-001')
+            ->assertJsonPath('data.items.0.order_no', 'SO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.status_label', '已审核');
         $this->withToken($this->token)->getJson('/api/v1/sales/outbounds?status=0')
             ->assertJsonPath('data.total', 0);

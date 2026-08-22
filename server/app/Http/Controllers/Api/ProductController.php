@@ -7,10 +7,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\BomHeader;
 use App\Models\BomItem;
+use App\Models\DocumentSequence;
 use App\Models\Product;
+use App\Services\DocumentSequenceService;
 use App\Support\ApiResponse;
 use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
@@ -19,6 +22,8 @@ class ProductController extends Controller
 
     // 类型 → 中文标签映射（前端表格类型标签）
     private const TYPE_LABELS = ['raw_material' => '原料', 'semi_finished' => '半成品', 'finished' => '成品'];
+
+    public function __construct(private readonly DocumentSequenceService $sequenceService) {}
 
     /** 分页列表：编码/名称/条码模糊 + 类型/分类/状态过滤 */
     public function index(Request $request)
@@ -60,12 +65,13 @@ class ProductController extends Controller
         ];
     }
 
-    /** 新建商品：编码/条码唯一 + 安全库存上下限校验 */
+    /** 新建商品：编码/条码留空自动生成（Spec 2）+ 唯一校验 + 安全库存上下限校验 */
     public function store(Request $request)
     {
         $data = $request->validate([
             'name' => 'required|string|max:100',
-            'code' => 'required|string|max:50',
+            // Spec 2：编码留空则自动生成（type=prd 配置驱动）；手填仍唯一校验 1114
+            'code' => 'nullable|string|max:50',
             'type' => ['required', Rule::in(['raw_material', 'semi_finished', 'finished'])],
             'category_id' => 'required|exists:categories,id',
             'unit_id' => 'required|exists:units,id',
@@ -78,8 +84,8 @@ class ProductController extends Controller
             'remark' => 'nullable|string',
         ]);
 
-        // 编码唯一 1114；条码非空时唯一 1115
-        if (Product::where('code', $data['code'])->exists()) {
+        // 编码唯一 1114；条码非空时唯一 1115（手填场景；自动生成由持久序列保证不撞）
+        if (! empty($data['code']) && Product::where('code', $data['code'])->exists()) {
             return $this->fail(1114, '商品编码已存在');
         }
         if (! empty($data['barcode']) && Product::where('barcode', $data['barcode'])->exists()) {
@@ -92,15 +98,29 @@ class ProductController extends Controller
             return $this->fail(1122, '安全库存下限不能大于上限');
         }
 
-        $product = Product::create([
-            'name' => $data['name'], 'code' => $data['code'], 'type' => $data['type'],
-            'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
-            'spec' => $data['spec'] ?? null, 'barcode' => $data['barcode'] ?? null,
-            'safety_min' => $min, 'safety_max' => $max,
-            'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
-        ]);
+        $product = DB::transaction(function () use ($data, $min, $max) {
+            // 编码留空 → 走编号配置自动生成（商品编码 PRD 前缀全局自增，含老库衔接）；条码留空 → 默认 = 编码
+            $code = ! empty($data['code'])
+                ? $data['code']
+                : $this->sequenceService->nextNoByConfig(
+                    DocumentSequence::TYPE_PRD,
+                    fn (string $no) => $no,
+                    fn (string $prefix, string $dateKey) => ($no = Product::where('code', 'like', $prefix.'%')
+                        ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
+                );
+            $barcode = $data['barcode'] ?? $code;
 
-        return $this->ok(['id' => $product->id]);
+            return Product::create([
+                'name' => $data['name'], 'code' => $code, 'type' => $data['type'],
+                'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
+                'spec' => $data['spec'] ?? null, 'barcode' => $barcode,
+                'safety_min' => $min, 'safety_max' => $max,
+                'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
+            ]);
+        });
+
+        // 响应回填自动生成的编码/条码（前端弹窗保存后可展示，spec §5）
+        return $this->ok(['id' => $product->id, 'code' => $product->code, 'barcode' => $product->barcode]);
     }
 
     /** 更新商品：编码/条码唯一（排除自身） */

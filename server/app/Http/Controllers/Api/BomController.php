@@ -53,10 +53,9 @@ class BomController extends Controller
             if ($data['status'] === 1 && $this->hasEnabledVersion($data['product_id'], null)) {
                 return $this->fail(1120, '该成品已有启用版本的 BOM');
             }
-            // 生成单号：BOM{yyyyMMdd}-{3位流水}，持久序列原子取号（删除不回退，撞号自动重试）
-            $bom = $this->sequenceService->nextNo(
+            // 生成单号：按编号规则配置格式（BOM 前缀+日期段+补零），持久序列原子取号（删除不回退，撞号自动重试）
+            $bom = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_BOM,
-                'BOM',
                 fn (string $code) => BomHeader::create([
                     'code' => $code,
                     'product_id' => $data['product_id'],
@@ -66,8 +65,8 @@ class BomController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // 老库衔接：序列行首次初始化时以当日既有 BOM 单号段最大值为起点
-                fn () => (int) (BomHeader::where('code', 'like', 'BOM'.date('Ymd').'-%')
-                    ->get('code')->map(fn ($b) => (int) substr((string) $b->code, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = BomHeader::where('code', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $bom->items()->createMany($data['items']);
 
