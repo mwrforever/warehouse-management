@@ -50,6 +50,21 @@ class DocumentNumberConfigTest extends TestCase
         $this->assertMatchesRegularExpression('/^PO\d{12}\d{4}$/', $res->json('data.no'));
     }
 
+    public function test_update_accepts_empty_date_format(): void
+    {
+        // 正常路径（spec §3 边界）：date_format 空串=无日期段（商品编码场景），required 会误拒、present 放行
+        $cfg = DocumentNumberConfig::where('type', 'prd')->firstOrFail();
+        $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
+            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'enabled' => true, 'remark' => null,
+        ])->assertJsonPath('code', 0);
+        $this->assertSame('', $cfg->refresh()->date_format);
+        $res = $this->withToken($this->token)->postJson('/api/v1/document-number-configs/preview', [
+            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6,
+        ]);
+        $res->assertJsonPath('code', 0);
+        $this->assertMatchesRegularExpression('/^PRD\d{6}$/', $res->json('data.no'));
+    }
+
     public function test_update_rejects_bad_rule(): void
     {
         // 异常路径：seq_length 越界/前缀含小写/date_format 非法 → 422

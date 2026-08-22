@@ -33,16 +33,20 @@ class DocumentNumberConfigController extends Controller
         ]);
     }
 
-    /** 编辑规则：前缀大写字母 2~4 位、日期格式枚举、序列长度 1~10；type 禁止修改 */
+    /** 编辑规则：前缀大写字母 2~4 位、日期格式枚举（含空=无日期段）、序列长度 1~10；type 禁止修改 */
     public function update(Request $request, DocumentNumberConfig $config)
     {
         $data = $request->validate([
             'prefix' => 'required|string|max:10|regex:/^[A-Z]{2,4}$/',
-            'date_format' => ['required', Rule::in(['', 'Ymd', 'YmdHi', 'YmdHis'])],
+            // date_format 允许空字符串（无日期段，如商品编码全局自增）：present 保证键存在但空串合法（required 会误拒）
+            'date_format' => ['present', Rule::in(['', 'Ymd', 'YmdHi', 'YmdHis'])],
             'seq_length' => 'required|integer|between:1,10',
             'enabled' => 'required|boolean',
             'remark' => 'nullable|string|max:255',
         ]);
+        // date_format 允许空字符串（无日期段，如商品编码全局自增）：present 保证键存在但空串合法（required 会误拒）；
+        // 注意 ConvertEmptyStringsToNull 中间件会把 '' 转 null，写入前归一化回 ''（列 NOT NULL）
+        $data['date_format'] = $request->input('date_format') === null ? '' : $data['date_format'];
         $config->update($data);
 
         return $this->ok($this->payload($config->refresh()));
@@ -53,10 +57,12 @@ class DocumentNumberConfigController extends Controller
     {
         $data = $request->validate([
             'prefix' => 'required|string|max:10|regex:/^[A-Z]{2,4}$/',
-            'date_format' => ['required', Rule::in(['', 'Ymd', 'YmdHi', 'YmdHis'])],
+            // 同上：date_format 空串是合法规则（无日期段）；ConvertEmptyStringsToNull 会转 null，归一化回 '' 复用 update 方式
+            'date_format' => ['present', Rule::in(['', 'Ymd', 'YmdHi', 'YmdHis'])],
             'seq_length' => 'required|integer|between:1,10',
         ]);
-        $dateKey = $data['date_format'] === '' ? '' : date($data['date_format']);
+        $dateFormat = $request->input('date_format') === null ? '' : $data['date_format'];
+        $dateKey = $dateFormat === '' ? '' : date($dateFormat);
         $no = $data['prefix'].$dateKey.str_pad('1', $data['seq_length'], '0', STR_PAD_LEFT);
 
         return $this->ok(['no' => $no]);
