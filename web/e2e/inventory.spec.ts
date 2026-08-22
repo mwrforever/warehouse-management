@@ -263,14 +263,13 @@ test.describe('库存管理模块', () => {
     // 余额页：MAT-001 = 105
     await page.goto('/inventory/balances')
     await expect(page.locator('.el-table__row', { hasText: 'MAT-001' })).toContainText('105')
-    // 流水页筛「盘盈」：MAT-001 +5，来源单号 CK
+    // 流水页筛「盘盈」：MAT-001 +5，来源单号 CK（先等筛后列表出现盘盈行数字段 +5.00，避免旧列表残留行干扰）
     await page.goto('/inventory/movements')
     await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '盘盈' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
-    const gainRow = page.locator('.el-table__row', { hasText: '测试铝材' })
-    await expect(gainRow).toContainText('+')
-    await expect(gainRow).toContainText('5')
+    const gainRow = page.locator('.el-table__row', { hasText: '+5.00' }).first()
+    await expect(gainRow).toContainText('测试铝材')
     await expect(gainRow).toContainText('105')
     await expect(gainRow).toContainText('CK')
     // 单号点击：盘盈来源 → 跳盘点详情
@@ -307,14 +306,13 @@ test.describe('库存管理模块', () => {
     // 余额页：SEMI-001 = 28
     await page.goto('/inventory/balances')
     await expect(page.locator('.el-table__row', { hasText: 'SEMI-001' })).toContainText('28')
-    // 流水页筛「盘亏」：SEMI-001 -2
+    // 流水页筛「盘亏」：SEMI-001 -2（先等筛后列表出现盘亏行数量段 -2.00，避免旧列表残留行干扰）
     await page.goto('/inventory/movements')
     await page.locator('.filter-bar').getByText('单据类型', { exact: true }).click()
     await page.locator('.el-select-dropdown__item', { hasText: '盘亏' }).click()
     await page.getByRole('button', { name: /查\s*询/ }).click()
-    const lossRow = page.locator('.el-table__row', { hasText: '半成品A' })
-    await expect(lossRow).toContainText('-')
-    await expect(lossRow).toContainText('2')
+    const lossRow = page.locator('.el-table__row', { hasText: '-2.00' }).first()
+    await expect(lossRow).toContainText('半成品A')
     await expect(lossRow).toContainText('28')
     // 详情查看：diff 列 -2
     await page.goto('/inventory/checks')
