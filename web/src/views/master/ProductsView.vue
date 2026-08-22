@@ -83,7 +83,9 @@
     >
       <el-form :model="form" label-width="100px">
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="编码" required><el-input v-model="form.code" /></el-form-item>
+        <el-form-item label="编码" :required="!!form.id">
+          <el-input v-model="form.code" :placeholder="form.id ? '请输入编码' : '留空则自动生成'" />
+        </el-form-item>
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.type">
             <el-radio value="raw_material">原料</el-radio>
@@ -121,6 +123,7 @@
             @keyup.enter="scanBarcode"
           />
           <div v-if="scanHint" class="hint">{{ scanHint }}</div>
+          <div v-else-if="!form.id" class="hint">留空则自动生成且默认等于编码</div>
         </el-form-item>
         <el-form-item label="安全库存下限"
           ><el-input-number v-model="form.safety_min" :min="0"
@@ -268,17 +271,18 @@ function openEdit(row: ProductItem) {
   dialogVisible.value = true
 }
 
-// 保存：前端拦截 min>max；后端 1114/1115/1122 双保险
+// 保存：前端拦截 min>max；编码新建可留空（后端自动生成）；后端 1114/1115/1122 双保险
 async function save() {
-  if (!form.name || !form.code || !form.category_id || !form.unit_id)
-    return ElMessage.warning('请填写必填项')
+  if (!form.name || !form.category_id || !form.unit_id) return ElMessage.warning('请填写必填项')
+  if (form.id && !form.code) return ElMessage.warning('请填写编码')
   if (form.safety_max > 0 && form.safety_min > form.safety_max)
     return ElMessage.error('安全库存下限不能大于上限')
   saving.value = true
   try {
     const payload = {
       name: form.name,
-      code: form.code,
+      // 新建留空 → 不传 code（后端按 prd 配置自动生成）；编辑必填
+      code: form.code || undefined,
       type: form.type,
       category_id: form.category_id,
       unit_id: form.unit_id,
@@ -290,9 +294,13 @@ async function save() {
       status: form.status,
       remark: form.remark,
     }
-    if (form.id) await productApi.update(form.id, payload)
-    else await productApi.create(payload)
-    ElMessage.success('保存成功')
+    if (form.id) {
+      // 编辑场景 code 必填（上方已校验非空），此处收窄类型以满足 update 契约
+      await productApi.update(form.id, { ...payload, code: form.code })
+    } else {
+      const res = await productApi.create(payload)
+      ElMessage.success(res.code ? `保存成功，编码 ${res.code}` : '保存成功')
+    }
     dialogVisible.value = false
     refresh()
   } catch (e) {
