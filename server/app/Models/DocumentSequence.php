@@ -45,6 +45,9 @@ class DocumentSequence extends Model
 
     public const TYPE_FI = 'fi';
 
+    /** 商品编码序列（全局自增、无日期段，条码默认=编码） */
+    public const TYPE_PRD = 'prd';
+
     protected $fillable = ['type', 'date', 'seq'];
 
     protected function casts(): array

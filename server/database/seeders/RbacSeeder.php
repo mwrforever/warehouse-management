@@ -30,6 +30,8 @@ class RbacSeeder extends Seeder
             ['name' => '字典创建', 'code' => 'dictionary.create', 'group' => '系统管理'],
             ['name' => '字典更新', 'code' => 'dictionary.update', 'group' => '系统管理'],
             ['name' => '字典删除', 'code' => 'dictionary.delete', 'group' => '系统管理'],
+            ['name' => '编号规则列表', 'code' => 'system.setting.list', 'group' => '系统管理'],
+            ['name' => '编号规则更新', 'code' => 'system.setting.update', 'group' => '系统管理'],
             // 基础资料模块权限（8 资源 × 4 动作）
             ['name' => '商品列表', 'code' => 'product.list', 'group' => '基础资料'],
             ['name' => '商品创建', 'code' => 'product.create', 'group' => '基础资料'],

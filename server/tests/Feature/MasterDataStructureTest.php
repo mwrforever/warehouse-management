@@ -62,6 +62,18 @@ class MasterDataStructureTest extends TestCase
         $this->assertSame(2, $admin->permissions()->whereIn('code', ['product.list', 'bom.delete'])->count());
     }
 
+    public function test_document_number_configs_table_structure(): void
+    {
+        // 结构契约：type 唯一、seq_length 1~10、enabled 布尔（配置驱动编号的核心约束）
+        $cols = Schema::getColumnListing('document_number_configs');
+        $this->assertContains('type', $cols);
+        $this->assertContains('prefix', $cols);
+        $this->assertContains('date_format', $cols);
+        $this->assertContains('seq_length', $cols);
+        $this->assertContains('enabled', $cols);
+        $this->assertContains('remark', $cols);
+    }
+
     public function test_deletion_guard_returns_false_for_missing_table(): void
     {
         // 边界路径：未建表时守卫返回 false（不阻止删除）
