@@ -132,33 +132,41 @@ class PurchaseInboundController extends Controller
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(1307, '仓库与库位不能为空');
         }
-        if (empty($data['items'])) {
+        // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）；
+        // items 键可整体缺失（validatePayload 未 required），?? 兜底防 undefined key
+        $fromOrder = ! empty($data['order_id']);
+        $items = $fromOrder
+            ? array_values(array_filter($data['items'] ?? [], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
+            : ($data['items'] ?? []);
+        if (empty($items)) {
             return $this->fail(1301, '请至少添加一条明细');
         }
-        foreach ($data['items'] as $item) {
-            if ((float) $item['quantity'] <= 0) {
-                return $this->fail(1302, '数量必须大于 0');
+        foreach ($items as $item) {
+            // 从订单允许 0（已在过滤剔除），仅拦负数；手动新增 0 仍拒绝（bcmath 精确比较）
+            $cmp = bccomp((string) $item['quantity'], '0', 2);
+            if ($cmp < 0 || (! $fromOrder && $cmp === 0)) {
+                return $this->fail(1302, $fromOrder ? '数量不能小于 0' : '数量必须大于 0');
             }
-            if ((float) $item['price'] < 0) {
+            if (bccomp((string) $item['price'], '0', 2) < 0) {
                 return $this->fail(1311, '价格不能为负数');
             }
         }
-        if ($this->hasDuplicateItem($data['items'])) {
+        if ($this->hasDuplicateItem($items)) {
             return $this->fail(1312, '明细存在重复商品');
         }
         // 明细带订单行引用但未携带 order_id → 1308（防绕过订单状态联动）
-        if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
+        if (empty($data['order_id']) && $this->hasOrderItemRef($items)) {
             return $this->fail(1308, '入库明细与订单行不一致');
         }
         // 关联订单行校验：行归属/订单可入库/供应商一致/不超剩余量（草稿期即拦截，审核期再锁行复核）
         if ($orderId = $data['order_id'] ?? null) {
-            $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $data['items']);
+            $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $items);
             if ($check !== null) {
                 return $this->fail(1308, $check);
             }
         }
 
-        $inbound = DB::transaction(function () use ($data) {
+        $inbound = DB::transaction(function () use ($data, $items) {
             $inbound = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_PI,
                 fn (string $no) => PurchaseInbound::create([
@@ -168,7 +176,7 @@ class PurchaseInboundController extends Controller
                     'location_id' => $data['location_id'],
                     'order_id' => $data['order_id'] ?? null,
                     'status' => PurchaseInbound::STATUS_DRAFT,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
+                    'total_amount' => $this->orderService->calculateTotal($items),
                     'remark' => $data['remark'] ?? null,
                 ]),
                 fn (string $prefix, string $dateKey) => ($no = PurchaseInbound::where('no', 'like', $prefix.date('Ymd').'%')
@@ -180,7 +188,7 @@ class PurchaseInboundController extends Controller
                 'price' => $i['price'],
                 'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
                 'order_item_id' => $i['order_item_id'] ?? null,
-            ], $data['items']));
+            ], $items));
 
             return $inbound;
         });
@@ -232,32 +240,40 @@ class PurchaseInboundController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(1307, '仓库与库位不能为空');
             }
-            if (empty($data['items'])) {
+            // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）；
+            // items 键可整体缺失（validatePayload 未 required），?? 兜底防 undefined key
+            $fromOrder = ! empty($data['order_id']);
+            $items = $fromOrder
+                ? array_values(array_filter($data['items'] ?? [], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
+                : ($data['items'] ?? []);
+            if (empty($items)) {
                 return $this->fail(1301, '请至少添加一条明细');
             }
-            foreach ($data['items'] as $item) {
-                if ((float) $item['quantity'] <= 0) {
-                    return $this->fail(1302, '数量必须大于 0');
+            foreach ($items as $item) {
+                // 从订单允许 0（已在过滤剔除），仅拦负数；手动新增 0 仍拒绝（bcmath 精确比较）
+                $cmp = bccomp((string) $item['quantity'], '0', 2);
+                if ($cmp < 0 || (! $fromOrder && $cmp === 0)) {
+                    return $this->fail(1302, $fromOrder ? '数量不能小于 0' : '数量必须大于 0');
                 }
-                if ((float) $item['price'] < 0) {
+                if (bccomp((string) $item['price'], '0', 2) < 0) {
                     return $this->fail(1311, '价格不能为负数');
                 }
             }
-            if ($this->hasDuplicateItem($data['items'])) {
+            if ($this->hasDuplicateItem($items)) {
                 return $this->fail(1312, '明细存在重复商品');
             }
             // 明细带订单行引用但未携带 order_id → 1308（防绕过订单状态联动）
-            if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
+            if (empty($data['order_id']) && $this->hasOrderItemRef($items)) {
                 return $this->fail(1308, '入库明细与订单行不一致');
             }
             if ($orderId = $data['order_id'] ?? null) {
-                $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $data['items']);
+                $check = $this->validateOrderItems($orderId, (int) $data['supplier_id'], $items);
                 if ($check !== null) {
                     return $this->fail(1308, $check);
                 }
             }
 
-            DB::transaction(function () use ($inbound, $data) {
+            DB::transaction(function () use ($inbound, $data, $items) {
                 // 锁入库单行复查状态：与审核并发时防止改到正在审核的单（幂等 1309）
                 $locked = PurchaseInbound::whereKey($inbound->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== PurchaseInbound::STATUS_DRAFT) {
@@ -268,7 +284,7 @@ class PurchaseInboundController extends Controller
                     'warehouse_id' => $data['warehouse_id'],
                     'location_id' => $data['location_id'],
                     'order_id' => $data['order_id'] ?? null,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
+                    'total_amount' => $this->orderService->calculateTotal($items),
                     'remark' => $data['remark'] ?? $locked->remark,
                 ]);
                 // 明细全量替换（草稿单无流水引用，直接重建）
@@ -279,7 +295,7 @@ class PurchaseInboundController extends Controller
                     'price' => $i['price'],
                     'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
                     'order_item_id' => $i['order_item_id'] ?? null,
-                ], $data['items']));
+                ], $items));
             });
         } catch (PurchaseException $e) {
             // 1309 已审核（锁行复查与并发审核幂等拦截）

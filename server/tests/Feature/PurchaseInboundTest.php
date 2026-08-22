@@ -409,4 +409,126 @@ class PurchaseInboundTest extends TestCase
         $token = $u->createToken('api')->plainTextToken;
         $this->withToken($token)->getJson('/api/v1/purchase/inbounds')->assertStatus(403);
     }
+
+    // === 以下为 Spec 3（采购入库 0 数量行）新增用例 ===
+
+    public function test_from_order_allows_zero_qty_skip_row(): void
+    {
+        // 正常路径（Spec 3）：从订单生成时 0 数量行 = 本次不收货，保存后草稿仅保留 >0 行
+        $no = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500, 'order_item_id' => $this->matItemId],
+            ['product_id' => $this->semi->id, 'quantity' => 30, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]));
+        $inbound = PurchaseInbound::where('no', $no)->first();
+        // 0 行被剔除：仅 SEMI 一行，金额按过滤后行计算 = 30 件 × 1000 分单价
+        $this->assertSame(1, $inbound->items()->count());
+        $this->assertSame($this->semi->id, $inbound->items()->first()->product_id);
+        $this->assertSame('30000.00', $inbound->total_amount);
+    }
+
+    public function test_store_all_rows_zero_rejected(): void
+    {
+        // 异常路径：从订单生成全部行填 0 → 1301（过滤后无明细，不落库）
+        $body = $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500, 'order_item_id' => $this->matItemId],
+        ]]);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1301);
+        $this->assertDatabaseCount('purchase_inbounds', 0);
+    }
+
+    public function test_store_rejects_negative_qty(): void
+    {
+        // 异常路径：负数量 → 1302「数量不能小于 0」（放宽只到 0，负数仍拦截）
+        $body = $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => -1, 'price' => 500, 'order_item_id' => $this->matItemId],
+        ]]);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1302)
+            ->assertJsonPath('message', '数量不能小于 0');
+        $this->assertDatabaseCount('purchase_inbounds', 0);
+    }
+
+    public function test_manual_create_still_requires_positive(): void
+    {
+        // 异常路径：手动新增（无订单来源）0 数量 → 1302（>0 约束保留，防空数量单据）
+        $body = $this->payload(['order_id' => null, 'items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500],
+        ]]);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1302)
+            ->assertJsonPath('message', '数量必须大于 0');
+        $this->assertDatabaseCount('purchase_inbounds', 0);
+    }
+
+    public function test_store_missing_items_key_rejected_with_1301(): void
+    {
+        // 异常路径：请求完全缺失 items 键（validatePayload 未 required）→ 1301 而非 500；
+        // 两种入口（从订单生成/手动新增）均防 undefined key 兜底
+        $body = $this->payload();
+        unset($body['items']);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body)
+            ->assertJsonPath('code', 1301);
+        $body2 = $this->payload(['order_id' => null]);
+        unset($body2['items']);
+        $this->withToken($this->token)->postJson('/api/v1/purchase/inbounds', $body2)
+            ->assertJsonPath('code', 1301);
+    }
+
+    public function test_update_zero_removes_row(): void
+    {
+        // 正常路径：编辑草稿把已有行改 0 → 该行被剔除（更新语义与新建一致）
+        $no = $this->createInbound($this->payload());
+        $id = PurchaseInbound::where('no', $no)->first()->id;
+        $this->withToken($this->token)->putJson("/api/v1/purchase/inbounds/{$id}", $this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500, 'order_item_id' => $this->matItemId],
+            ['product_id' => $this->semi->id, 'quantity' => 20, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]))
+            ->assertJsonPath('code', 0);
+        $inbound = PurchaseInbound::find($id);
+        $this->assertSame(1, $inbound->items()->count());
+        $this->assertSame($this->semi->id, $inbound->items()->first()->product_id);
+        $this->assertSame('20000.00', $inbound->total_amount);
+    }
+
+    public function test_approve_still_checks_remaining(): void
+    {
+        // 核心不变式：含 0 行的草稿审核正常（0 行不参与回写），随后超量审核仍 1308 且库存不变；
+        // 两张草稿在草稿期各自不超剩余（30 ≤ 50），审核第一张后剩余收缩，审核第二张才触发复核拦截
+        $no = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500, 'order_item_id' => $this->matItemId],
+            ['product_id' => $this->semi->id, 'quantity' => 30, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]));
+        $no2 = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->semi->id, 'quantity' => 30, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]));
+        $this->approveInbound($no);
+        $this->assertSame('60.00', InventoryBalance::where('product_id', $this->semi->id)->first()->quantity);
+        // 剩余 20（50-30），第二张 30 → 审核期锁行复核 1308 整体回滚
+        $res = $this->approveInbound($no2, false);
+        $this->assertSame(1308, $res['code']);
+        // 回滚验证：余额不再变动、第二张仍草稿
+        $this->assertSame('60.00', InventoryBalance::where('product_id', $this->semi->id)->first()->quantity);
+        $this->assertSame(PurchaseInbound::STATUS_DRAFT, PurchaseInbound::where('no', $no2)->first()->status);
+    }
+
+    public function test_received_qty_only_updates_non_zero_rows(): void
+    {
+        // 核心不变式：0 行商品不收即不回写（received_qty 保持 0），订单该行还可再次收货
+        $no = $this->createInbound($this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'quantity' => 0, 'price' => 500, 'order_item_id' => $this->matItemId],
+            ['product_id' => $this->semi->id, 'quantity' => 30, 'price' => 1000, 'order_item_id' => $this->semiItemId],
+        ]]));
+        $this->approveInbound($no);
+        // 仅 SEMI 回写 30；MAT 行 received_qty 不变，订单状态为部分入库
+        $this->assertSame('0.00', PurchaseOrderItem::find($this->matItemId)->received_qty);
+        $this->assertSame('30.00', PurchaseOrderItem::find($this->semiItemId)->received_qty);
+        $this->assertSame(PurchaseOrder::STATUS_PARTIAL, PurchaseOrder::find($this->orderId)->status);
+        // 再次从订单生成：MAT 行在预填列表第一位且剩余 100（0 行商品未丢失、可再收；
+        // SEMI 剩 20 也在列表中，故断言取 items.0 并锁定总行数）
+        $this->withToken($this->token)->getJson("/api/v1/purchase/inbounds/from-order/{$this->orderId}")
+            ->assertJsonCount(2, 'data.items')
+            ->assertJsonPath('data.items.0.product_code', 'MAT-001')
+            ->assertJsonPath('data.items.0.remaining_qty', '100.00');
+    }
 }

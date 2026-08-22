@@ -208,7 +208,20 @@ async function save() {
     ElMessage.warning('请选择商品')
     return
   }
-  if (form.items.some((i) => Number(i.quantity) <= 0)) {
+  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤），负数量直接拦截（与后端 1302 同口径）；
+  // 手动新增：仍要求 > 0（防空数量单据）
+  let keepRows = form.items
+  if (mode.value === 'from-order') {
+    if (form.items.some((i) => Number(i.quantity) < 0)) {
+      ElMessage.warning('数量不能小于 0')
+      return
+    }
+    keepRows = form.items.filter((i) => Number(i.quantity) > 0)
+    if (!keepRows.length) {
+      ElMessage.warning('请至少录入一个收货数量大于 0 的商品')
+      return
+    }
+  } else if (form.items.some((i) => Number(i.quantity) <= 0)) {
     ElMessage.warning('数量必须大于 0')
     return
   }
@@ -218,7 +231,7 @@ async function save() {
     location_id: form.location_id!,
     order_id: mode.value === 'from-order' ? fromOrderId.value : undefined,
     remark: form.remark,
-    items: form.items.map((i) => ({
+    items: keepRows.map((i) => ({
       product_id: i.product_id!,
       quantity: i.quantity,
       price: Math.round(Number(i.price) * 100),
@@ -494,15 +507,18 @@ onMounted(async () => {
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="数量" width="130">
+          <el-table-column label="数量" width="140">
             <template #default="{ row }">
               <el-input-number
                 v-model="row.quantity"
-                :min="1"
+                :min="mode === 'from-order' ? 0 : 1"
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
               />
+              <div v-if="mode === 'from-order' && Number(row.quantity) === 0" class="skip-hint">
+                本次不收货
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="含税单价（元）" width="150">
@@ -629,6 +645,11 @@ onMounted(async () => {
   font-weight: 600;
 }
 .muted {
+  color: var(--color-muted-text, #94a3b8);
+}
+.skip-hint {
+  margin-top: 2px;
+  font-size: 12px;
   color: var(--color-muted-text, #94a3b8);
 }
 .form-grid {
