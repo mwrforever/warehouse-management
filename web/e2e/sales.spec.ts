@@ -156,7 +156,7 @@ test.describe('销售管理模块', () => {
     await expect(row).toContainText('草稿')
     await expect(row).toContainText('¥1,100.00')
     soNo = (await row.locator('td').first().textContent())?.trim() ?? ''
-    expect(soNo).toMatch(/^SO\d{8}-\d{3}$/)
+    expect(soNo).toMatch(/^SO\d{12}\d{3}$/)
     // 审核：confirm → 状态绿「已审核」（.last()：上一条「保存成功」可能未消失，取最后一条避免 strict 冲突）
     await row.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('确认审核订单')
@@ -194,10 +194,10 @@ test.describe('销售管理模块', () => {
     await pickOption(page, 'B-01')
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    const soutRow = page.locator('.el-table__row', { hasText: 'SOUT' })
+    const soutRow = page.locator('.el-table__row', { hasText: /^ST\d/ })
     await expect(soutRow).toContainText('草稿')
     const soutNo = (await soutRow.locator('td').first().textContent())?.trim() ?? ''
-    expect(soutNo).toMatch(/^SOUT\d{8}-\d{3}$/)
+    expect(soutNo).toMatch(/^ST\d{12}\d{3}$/)
     // 审核：confirm「审核后库存将减少且不可修改」→ 成功消息「出库成功，库存已更新」（.last()：同上，防上一条成功消息未消失）
     await soutRow.getByRole('button', { name: /审\s*核/ }).click()
     await expect(page.locator('.el-message-box')).toContainText('确认审核出库单')
@@ -255,7 +255,7 @@ test.describe('销售管理模块', () => {
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
     // 等待列表刷新出草稿行（旧列表仍含 SOUT-001，避免单号取到旧行），再取单号
-    const row2 = page.locator('.el-table__row', { hasText: 'SOUT' }).first()
+    const row2 = page.locator('.el-table__row', { hasText: /^ST\d/ }).first()
     await expect(row2).toContainText('草稿')
     const oversellNo = (await row2.locator('td').first().textContent())?.trim() ?? ''
     await row2.getByRole('button', { name: /审\s*核/ }).click()
@@ -343,7 +343,7 @@ test.describe('销售管理模块', () => {
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
     // 等待列表刷新出草稿行（旧列表仍含 SOUT-001，避免审核点错行），再审核
-    const row2 = page.locator('.el-table__row', { hasText: 'SOUT' }).first()
+    const row2 = page.locator('.el-table__row', { hasText: /^ST\d/ }).first()
     await expect(row2).toContainText('草稿')
     await row2.getByRole('button', { name: /审\s*核/ }).click()
     await page
@@ -464,7 +464,7 @@ test.describe('销售管理模块', () => {
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
     // 等待列表刷新出草稿行（旧列表仍含 SOUT-001，避免审核点错行），再审核
-    const row2 = page.locator('.el-table__row', { hasText: 'SOUT' }).first()
+    const row2 = page.locator('.el-table__row', { hasText: /^ST\d/ }).first()
     await expect(row2).toContainText('草稿')
     await row2.getByRole('button', { name: /审\s*核/ }).click()
     await page

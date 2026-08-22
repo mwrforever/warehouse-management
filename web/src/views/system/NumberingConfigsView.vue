@@ -47,7 +47,7 @@
           />
         </el-form-item>
         <el-form-item label="日期格式">
-          <el-select v-model="form.date_format" style="width: 160px" @change="refreshPreview">
+          <el-select v-model="form.date_format" style="width: 160px">
             <el-option label="无（全局自增）" value="" />
             <el-option label="年月日 Ymd" value="Ymd" />
             <el-option label="年月日时 YmdHi" value="YmdHi" />
@@ -55,7 +55,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="序列长度" required>
-          <el-input-number v-model="form.seq_length" :min="1" :max="10" @change="refreshPreview" />
+          <el-input-number v-model="form.seq_length" :min="1" :max="10" />
         </el-form-item>
         <el-form-item label="状态"
           ><el-switch v-model="form.enabled" :active-value="true" :inactive-value="false"
@@ -79,7 +79,7 @@
 
 <script setup lang="ts">
 // 编号规则管理：列表 + 编辑弹窗 + 实时预览；seq_length/date_format 变更前确认位宽一致性
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
 import { systemSettingApi, type NumberConfigItem } from '../../api/systemSetting'
@@ -154,6 +154,9 @@ async function refreshPreview() {
     previewNo.value = ''
   }
 }
+
+// 弹窗打开/字段变化均刷新预览（watch 触发对 el-input fill/el-input-number 步进等交互最稳，如 E2E fill）
+watch([() => form.prefix, () => form.date_format, () => form.seq_length], () => refreshPreview())
 
 async function save() {
   // 位宽相关变更（seq_length/date_format）影响长度一致性：确认仅作用于新生成单号（spec §5/§7）
