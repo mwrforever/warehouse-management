@@ -49,6 +49,7 @@ test.describe('采购管理模块', () => {
   let semiBase = 0
   let poNo = ''
   let poId = 0
+  let poNo3 = '' // TC-PUR-11 自建的 0 行测试订单（TC-PUR-12 复用）
 
   test('TC-PUR-01 采购订单创建（金额计算）', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
@@ -439,6 +440,129 @@ test.describe('采购管理模块', () => {
       items: [],
     })
     expect(empty.code).toBe(1301)
+  })
+
+  test('TC-PUR-11 从订单生成 0 数量行（本次不收货跳过）', async ({ page }) => {
+    await loginByAPI(page, 'admin', 'admin123')
+    // 数据准备：自建 2 行订单 PO3（MAT-001×20、SEMI-001×10）并审核；商品 id 经列表接口反查
+    const mat = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001' })
+    const semi = await apiGet(page, '/api/v1/products', { keyword: 'SEMI-001' })
+    const matId = mat.items[0].id as number
+    const semiId = semi.items[0].id as number
+    const created = await apiPost(page, '/api/v1/purchase/orders', {
+      supplier_id: supplierId,
+      order_date: '2026-08-22',
+      items: [
+        { product_id: matId, quantity: 20, price: 500 },
+        { product_id: semiId, quantity: 10, price: 1000 },
+      ],
+    })
+    expect(created.code).toBe(0)
+    poNo3 = (created.data as { no: string }).no
+    const po3List = await apiGet(page, '/api/v1/purchase/orders', { keyword: poNo3 })
+    const po3Id = po3List.items[0].id as number
+    const approved = await apiPost(page, `/api/v1/purchase/orders/${po3Id}/approve`)
+    expect(approved.code).toBe(0)
+    const semiBefore = Number(
+      (await apiGet(page, '/api/v1/inventory/balances', { keyword: 'SEMI-001' })).items[0].quantity,
+    )
+
+    // UI：从订单生成 → MAT 行数量改 0（灰字「本次不收货」）→ 保存 → 草稿仅含 SEMI 行
+    await page.goto('/purchase/inbounds')
+    await page.getByRole('button', { name: /从订单生成/ }).click()
+    const dialog = page.locator('.el-dialog')
+    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await pickOption(page, poNo3)
+    await expect(dialog.locator('.el-table__row')).toHaveCount(2)
+    const matRow = dialog.locator('.el-table__row', { hasText: 'MAT-001' })
+    await matRow.locator('.el-input-number input').first().fill('0')
+    await matRow.locator('.el-input-number input').first().blur()
+    await expect(matRow).toContainText('本次不收货')
+    await dialog.locator('.el-select', { hasText: '选择仓库' }).click()
+    await pickOption(page, '主仓')
+    await dialog.locator('.el-select', { hasText: '选择库位' }).click()
+    await pickOption(page, 'A-01')
+    await dialog.getByRole('button', { name: /保\s*存/ }).click()
+    await expect(page.locator('.el-message--success')).toContainText('保存成功')
+    const piRow = page.locator('.el-table__row', { hasText: 'PI' }).first()
+    await expect(piRow).toContainText('草稿')
+    // 编辑弹窗复核：明细细仅 SEMI 一行（MAT 0 行被剔除，未落库）
+    await piRow.getByRole('button', { name: /编\s*辑/ }).click()
+    const ed = page.locator('.el-dialog')
+    await expect(ed.locator('.el-table__row')).toHaveCount(1)
+    await expect(ed.locator('.el-table__row')).toContainText('SEMI-001')
+    await ed.getByRole('button', { name: /取\s*消/ }).click()
+
+    // 审核 → SEMI-001 余额 +10；订单变为部分入库
+    await piRow.getByRole('button', { name: /审\s*核/ }).click()
+    await page
+      .locator('.el-message-box')
+      .getByRole('button', { name: /确\s*定/ })
+      .click()
+    await expect(page.locator('.el-message--success').last()).toContainText('入库成功')
+    const semiAfter = Number(
+      (await apiGet(page, '/api/v1/inventory/balances', { keyword: 'SEMI-001' })).items[0].quantity,
+    )
+    expect(semiAfter).toBe(semiBefore + 10)
+    // 再次从订单生成 PO3：仅剩 MAT 行、剩余 20（0 行商品留在订单上可再收）
+    await page.getByRole('button', { name: /从订单生成/ }).click()
+    const dialog2 = page.locator('.el-dialog')
+    await dialog2.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await pickOption(page, poNo3)
+    await expect(dialog2.locator('.el-table__row')).toHaveCount(1)
+    await expect(dialog2.locator('.el-table__row')).toContainText('MAT-001')
+    await expect(
+      dialog2.locator('.el-table__row').locator('.el-input-number input').first(),
+    ).toHaveValue('20.00')
+    await page.keyboard.press('Escape')
+  })
+
+  test('TC-PUR-12 全部行填 0 保存被拦截', async ({ page }) => {
+    await loginByAPI(page, 'admin', 'admin123')
+    // 延续 TC-PUR-11 的 PO3（此时仅剩 MAT-001×20 未收）：唯一行填 0 → 保存被前端拦截
+    await page.goto('/purchase/inbounds')
+    await page.getByRole('button', { name: /从订单生成/ }).click()
+    const dialog = page.locator('.el-dialog')
+    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await pickOption(page, poNo3)
+    await expect(dialog.locator('.el-table__row')).toHaveCount(1)
+    const matRow = dialog.locator('.el-table__row', { hasText: 'MAT-001' })
+    await matRow.locator('.el-input-number input').first().fill('0')
+    await matRow.locator('.el-input-number input').first().blur()
+    await expect(matRow).toContainText('本次不收货')
+    await dialog.locator('.el-select', { hasText: '选择仓库' }).click()
+    await pickOption(page, '主仓')
+    await dialog.locator('.el-select', { hasText: '选择库位' }).click()
+    await pickOption(page, 'A-01')
+    await dialog.getByRole('button', { name: /保\s*存/ }).click()
+    await expect(page.locator('.el-message--warning')).toContainText(
+      '请至少录入一个收货数量大于 0 的商品',
+    )
+    await page.keyboard.press('Escape')
+  })
+
+  test('TC-PUR-13 手动新增数量 0 仍被拦截', async ({ page }) => {
+    await loginByAPI(page, 'admin', 'admin123')
+    // UI：独立录入输入 0 → blur 被 el-input-number min=1 钳制（无法提交 0 数量）
+    await page.goto('/purchase/inbounds')
+    await page.getByRole('button', { name: /新\s*建/ }).click()
+    const dialog = page.locator('.el-dialog')
+    const row = dialog.locator('.el-table__row').nth(0)
+    const qtyInput = row.locator('.el-input-number input').first()
+    await qtyInput.fill('0')
+    await qtyInput.blur()
+    expect(Number(await qtyInput.inputValue())).toBeGreaterThanOrEqual(1)
+    await dialog.getByRole('button', { name: /取\s*消/ }).click()
+    // 后端兜底：手动新增（无订单）0 数量 → 1302「数量必须大于 0」
+    const mat = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001' })
+    const manual = await apiPost(page, '/api/v1/purchase/inbounds', {
+      supplier_id: supplierId,
+      warehouse_id: 1,
+      location_id: 1,
+      items: [{ product_id: mat.items[0].id as number, quantity: 0, price: 500 }],
+    })
+    expect(manual.code).toBe(1302)
+    expect(manual.message).toBe('数量必须大于 0')
   })
 
   test('TC-MST-04 补测：供应商被采购单据引用不可删（1109）', async ({ page }) => {
