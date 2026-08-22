@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -41,6 +42,8 @@ class ProductionOrderTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -92,7 +95,7 @@ class ProductionOrderTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 MO{date}-001；BOM 展开物料快照（10×2=20、10×1=10）+ 工序序列 3 行待开工
         $no = $this->createOrder($this->payload());
-        $this->assertMatchesRegularExpression('/^MO\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^MO\d{12}001$/', $no);
         $order = ProductionOrder::where('no', $no)->first();
         $this->assertSame(ProductionOrder::STATUS_DRAFT, $order->status);
         // 响应含 id：前端新建成功后直接以 id 拉详情，不依赖列表回查（bug #11 修复）

@@ -159,9 +159,8 @@ class PurchaseInboundController extends Controller
         }
 
         $inbound = DB::transaction(function () use ($data) {
-            $inbound = $this->sequenceService->nextNo(
+            $inbound = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_PI,
-                'PI',
                 fn (string $no) => PurchaseInbound::create([
                     'no' => $no,
                     'supplier_id' => $data['supplier_id'],
@@ -172,8 +171,8 @@ class PurchaseInboundController extends Controller
                     'total_amount' => $this->orderService->calculateTotal($data['items']),
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (PurchaseInbound::where('no', 'like', 'PI'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($i) => (int) substr((string) $i->no, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => (int) (PurchaseInbound::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->get('no')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->no, $prefix, $dateKey))->max() ?? 0),
             );
             $inbound->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

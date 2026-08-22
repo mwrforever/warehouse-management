@@ -105,9 +105,8 @@ class ProductionOrderController extends Controller
                 }
                 $expansion = $this->orderService->expandBom($product, (string) $data['quantity'], $bom);
 
-                $order = $this->sequenceService->nextNo(
+                $order = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_MO,
-                    'MO',
                     fn (string $no) => ProductionOrder::create([
                         'no' => $no,
                         'product_id' => $data['product_id'],
@@ -120,8 +119,8 @@ class ProductionOrderController extends Controller
                         'remark' => $data['remark'] ?? null,
                     ]),
                     // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                    fn () => ($no = ProductionOrder::where('no', 'like', 'MO'.date('Ymd').'-%')
-                        ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                    fn (string $prefix, string $dateKey) => ($no = ProductionOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                        ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
                 // BOM 展开结果快照：物料需求（order_id+material_id 唯一）+ 工序序列（order_id+seq 唯一）
                 $order->materials()->createMany(array_map(fn ($m) => [

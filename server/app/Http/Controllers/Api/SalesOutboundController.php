@@ -176,9 +176,8 @@ class SalesOutboundController extends Controller
         }
 
         $outbound = DB::transaction(function () use ($data) {
-            $outbound = $this->sequenceService->nextNo(
+            $outbound = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_SOUT,
-                'SOUT',
                 fn (string $no) => SalesOutbound::create([
                     'no' => $no,
                     'customer_id' => $data['customer_id'],
@@ -189,8 +188,8 @@ class SalesOutboundController extends Controller
                     'total_amount' => $this->orderService->calculateTotal($data['items']),
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn () => (int) (SalesOutbound::where('no', 'like', 'SOUT'.date('Ymd').'-%')
-                    ->get('no')->map(fn ($o) => (int) substr((string) $o->no, -3))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => (int) (SalesOutbound::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->get('no')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->no, $prefix, $dateKey))->max() ?? 0),
             );
             $outbound->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

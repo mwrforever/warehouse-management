@@ -1,9 +1,10 @@
 <?php
 
-// 单据号持久序列服务测试：原子取号/删除不回退/老库衔接/撞号换号重试（核心路径 100%）
+// 单据号持久序列服务测试（Spec 2 配置驱动）：格式拼装/位数配置/回退默认/并发不撞/老库衔接/位宽溢出（核心路径 100%）
 
 namespace Tests\Feature;
 
+use App\Models\DocumentNumberConfig;
 use App\Models\DocumentSequence;
 use App\Services\DocumentSequenceService;
 use Illuminate\Database\QueryException;
@@ -22,40 +23,47 @@ class DocumentSequenceServiceTest extends TestCase
         $this->svc = app(DocumentSequenceService::class);
     }
 
-    public function test_next_no_increments_within_day(): void
+    public function test_next_no_follows_config_format(): void
     {
-        // 正常路径：同日两次取号依次 +001/+002
-        $first = $this->svc->nextNo(DocumentSequence::TYPE_PO, 'PO', fn (string $no) => $no);
-        $second = $this->svc->nextNo(DocumentSequence::TYPE_PO, 'PO', fn (string $no) => $no);
-        $this->assertSame('PO'.date('Ymd').'-001', $first);
-        $this->assertSame('PO'.date('Ymd').'-002', $second);
+        // 正常路径：前缀+日期段（YmdHi）+补零正确拼装；date_format 为空时无日期段（商品编码场景）
+        DocumentNumberConfig::create(['type' => 'po', 'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
+        DocumentNumberConfig::create(['type' => 'prd', 'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'enabled' => true]);
+        $no = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PO, fn (string $no) => $no);
+        $this->assertSame('PO'.date('YmdHi').'001', $no);
+        $code = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PRD, fn (string $no) => $no);
+        $this->assertSame('PRD000001', $code);
     }
 
-    public function test_next_no_does_not_regress_after_delete(): void
+    public function test_seq_length_configurable(): void
     {
-        // 边界路径：占号后单据被删，序号不回退（count+1 方案会复用已删单号撞现存单号 500）
-        $this->svc->nextNo(DocumentSequence::TYPE_BOM, 'BOM', fn (string $no) => $no);
-        $this->svc->nextNo(DocumentSequence::TYPE_BOM, 'BOM', fn (string $no) => $no);
-        $no = $this->svc->nextNo(DocumentSequence::TYPE_BOM, 'BOM', fn (string $no) => $no);
-        $this->assertSame('BOM'.date('Ymd').'-003', $no);
+        // 边界路径：seq_length=4 分别补零正确（同类型单号长度固定）
+        DocumentNumberConfig::create(['type' => 'mo', 'prefix' => 'MO', 'date_format' => 'YmdHi', 'seq_length' => 4, 'enabled' => true]);
+        $first = $this->svc->nextNoByConfig(DocumentSequence::TYPE_MO, fn (string $no) => $no);
+        $this->assertSame('MO'.date('YmdHi').'0001', $first);
     }
 
-    public function test_next_no_initializes_from_legacy_max(): void
+    public function test_config_missing_falls_back_default(): void
     {
-        // 边界路径：老库无序列行但当日已有 2 张历史单号 → 衔接取 -003
-        $no = $this->svc->nextNo(DocumentSequence::TYPE_CHECK, 'CK', fn (string $no) => $no, fn () => 2);
-        $this->assertSame('CK'.date('Ymd').'-003', $no);
+        // 边界路径：无配置行/停用时回退默认（type 大写 + YmdHi + 3 位），不抛业务异常
+        $no = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PO, fn (string $no) => $no);
+        $this->assertSame('PO'.date('YmdHi').'001', $no);
+        DocumentNumberConfig::create(['type' => 'po', 'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => false]);
+        $no2 = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PO, fn (string $no) => $no);
+        $this->assertSame('PO'.date('YmdHi').'002', $no2);
     }
 
-    public function test_next_no_retries_on_unique_conflict(): void
+    public function test_concurrent_sequences_no_collision(): void
     {
-        // 异常路径：persist 撞唯一索引（先建 -001 行再模拟冲突）→ 换号重试成功
+        // 正常+异常路径：两次取号不重复；persist 撞唯一索引（模拟已存在同号单据）→ 换号重试成功
+        DocumentNumberConfig::create(['type' => 'pi', 'prefix' => 'PI', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
+        $a = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PI, fn (string $no) => $no);
+        $b = $this->svc->nextNoByConfig(DocumentSequence::TYPE_PI, fn (string $no) => $no);
+        $this->assertNotSame($a, $b);
+        // 撞号重试：首次 persist 模拟唯一冲突（SQLite 19 / MySQL 1062 双码）
         $attempts = 0;
-        $this->svc->nextNo(DocumentSequence::TYPE_PI, 'PI', function (string $no) use (&$attempts) {
+        $this->svc->nextNoByConfig(DocumentSequence::TYPE_PI, function (string $no) use (&$attempts) {
             $attempts++;
             if ($attempts === 1) {
-                // 模拟单据表唯一冲突：SQLite 19 / MySQL 1062 双码兼容
-                // （构造签名按当前 Laravel 版本：connectionName, sql, bindings, previous）
                 $e = new QueryException('sqlite', 'insert', [], new \PDOException('UNIQUE constraint failed'));
                 $e->errorInfo = ['23000', 19, 'UNIQUE constraint failed: purchase_inbounds.no'];
                 throw $e;
@@ -66,20 +74,39 @@ class DocumentSequenceServiceTest extends TestCase
         $this->assertSame(2, $attempts);
     }
 
+    public function test_legacy_sequence_continue(): void
+    {
+        // 边界路径（老库衔接）：当日已有新格式单号段（如 -003）但无序列行 → legacyMax 返回最大序号 → 续接 004
+        DocumentNumberConfig::create(['type' => 'check', 'prefix' => 'CK', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
+        $no = $this->svc->nextNoByConfig(
+            DocumentSequence::TYPE_CHECK,
+            fn (string $no) => $no,
+            fn (string $prefix, string $dateKey) => 3,
+        );
+        $this->assertSame('CK'.date('YmdHi').'004', $no);
+    }
+
     public function test_legacy_max_only_queried_when_seq_zero(): void
     {
         // 边界路径：序列行已存在（seq>0）时不再查老库（衔接只发生一次）
+        DocumentNumberConfig::create(['type' => 'po', 'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
         $calls = 0;
-        $this->svc->nextNo(DocumentSequence::TYPE_PO, 'PO', fn (string $no) => $no, function () use (&$calls) {
+        $legacy = function () use (&$calls) {
             $calls++;
 
             return 0;
-        });
-        $this->svc->nextNo(DocumentSequence::TYPE_PO, 'PO', fn (string $no) => $no, function () use (&$calls) {
-            $calls++;
-
-            return 0;
-        });
+        };
+        $this->svc->nextNoByConfig(DocumentSequence::TYPE_PO, fn (string $no) => $no, $legacy);
+        $this->svc->nextNoByConfig(DocumentSequence::TYPE_PO, fn (string $no) => $no, $legacy);
         $this->assertSame(1, $calls);
+    }
+
+    public function test_seq_overflow_warns_but_continues(): void
+    {
+        // 边界路径：seq 达到位数上限自然溢出（999→1000 输出 4 位不截断），不抛异常
+        DocumentNumberConfig::create(['type' => 'rl', 'prefix' => 'RL', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
+        DocumentSequence::create(['type' => 'rl', 'date' => date('YmdHi'), 'seq' => 999]);
+        $no = $this->svc->nextNoByConfig(DocumentSequence::TYPE_RL, fn (string $no) => $no);
+        $this->assertSame('RL'.date('YmdHi').'1000', $no);
     }
 }

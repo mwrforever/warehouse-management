@@ -18,6 +18,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -46,6 +47,8 @@ class ReturnListTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -114,7 +117,7 @@ class ReturnListTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 RL{date}-001
         $no = $this->createReturn($this->payload());
-        $this->assertMatchesRegularExpression('/^RL\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^RL\d{12}001$/', $no);
         $return = ReturnList::where('no', $no)->first();
         $this->assertSame(ReturnList::STATUS_DRAFT, $return->status);
         $this->assertSame('2.00', $return->items()->first()->quantity);
@@ -354,7 +357,7 @@ class ReturnListTest extends TestCase
         $this->withToken($this->token)->getJson('/api/v1/production/returns')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
-            ->assertJsonPath('data.items.0.order_no', 'MO'.date('Ymd').'-001')
+            ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.status_label', '已审核');
         // 异常路径：无 production.return.list 权限的角色被拒（403 JSON 信封）
         $role = Role::create(['name' => '普通', 'code' => 'plain']);

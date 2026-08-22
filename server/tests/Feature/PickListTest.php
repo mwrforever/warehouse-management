@@ -17,6 +17,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -43,6 +44,8 @@ class PickListTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -102,7 +105,7 @@ class PickListTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 PL{date}-001；明细需求快照 = BOM 展开值
         $no = $this->createPick($this->payload());
-        $this->assertMatchesRegularExpression('/^PL\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^PL\d{12}001$/', $no);
         $pick = PickList::where('no', $no)->first();
         $this->assertSame(PickList::STATUS_DRAFT, $pick->status);
         $this->assertSame(PickList::ISSUE_NONE, $pick->issue_status);
@@ -115,7 +118,7 @@ class PickListTest extends TestCase
         // 正常路径：from-order 预填剩余量（未领 → 剩余=需求）
         $this->withToken($this->token)->getJson("/api/v1/production/picks/from-order/{$this->order->id}")
             ->assertJsonPath('code', 0)
-            ->assertJsonPath('data.order_no', 'MO'.date('Ymd').'-001')
+            ->assertJsonPath('data.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.product_code', 'MAT-001')
             ->assertJsonPath('data.items.0.required_qty', '20.00')
             ->assertJsonPath('data.items.0.remaining_qty', '20.00');
@@ -375,7 +378,7 @@ class PickListTest extends TestCase
         $this->withToken($this->token)->getJson('/api/v1/production/picks')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
-            ->assertJsonPath('data.items.0.order_no', 'MO'.date('Ymd').'-001')
+            ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.warehouse_name', '主仓')
             ->assertJsonPath('data.items.0.status_label', '已审核')
             ->assertJsonPath('data.items.0.issue_status_label', '未发料');

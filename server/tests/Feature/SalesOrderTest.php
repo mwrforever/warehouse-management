@@ -11,6 +11,7 @@ use App\Models\Role;
 use App\Models\SalesOrder;
 use App\Models\Unit;
 use App\Models\User;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -33,6 +34,8 @@ class SalesOrderTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -84,7 +87,7 @@ class SalesOrderTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 SO{date}-001，金额=Σ数量×单价（分）
         $no = $this->createOrder($this->payload());
-        $this->assertMatchesRegularExpression('/^SO\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^SO\d{12}001$/', $no);
         $order = SalesOrder::where('no', $no)->first();
         $this->assertSame(SalesOrder::STATUS_DRAFT, $order->status);
         // 10×10000 + 5×2000 = 110000 分

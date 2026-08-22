@@ -101,9 +101,8 @@ class ReturnListController extends Controller
         }
 
         $return = DB::transaction(function () use ($data) {
-            $return = $this->sequenceService->nextNo(
+            $return = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_RL,
-                'RL',
                 fn (string $no) => ReturnList::create([
                     'no' => $no,
                     'order_id' => $data['order_id'],
@@ -114,8 +113,8 @@ class ReturnListController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn () => ($no = ReturnList::where('no', 'like', 'RL'.date('Ymd').'-%')
-                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                fn (string $prefix, string $dateKey) => ($no = ReturnList::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $return->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

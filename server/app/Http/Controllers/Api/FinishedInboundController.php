@@ -112,9 +112,8 @@ class FinishedInboundController extends Controller
         }
 
         $fi = DB::transaction(function () use ($data) {
-            $fi = $this->sequenceService->nextNo(
+            $fi = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_FI,
-                'FI',
                 fn (string $no) => FinishedInbound::create([
                     'no' => $no,
                     'order_id' => $data['order_id'],
@@ -124,8 +123,8 @@ class FinishedInboundController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn () => ($no = FinishedInbound::where('no', 'like', 'FI'.date('Ymd').'-%')
-                    ->orderByDesc('no')->value('no')) ? (int) substr($no, -3) : 0,
+                fn (string $prefix, string $dateKey) => ($no = FinishedInbound::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $fi->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

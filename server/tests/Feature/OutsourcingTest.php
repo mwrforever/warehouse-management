@@ -20,6 +20,7 @@ use App\Models\User;
 use App\Models\Warehouse;
 use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -48,6 +49,8 @@ class OutsourcingTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $this->admin->roles()->sync([$role->id]);
@@ -113,7 +116,7 @@ class OutsourcingTest extends TestCase
     {
         // 正常路径：草稿创建成功，单号 OS{date}-001
         $no = $this->createOutsourcing($this->payload());
-        $this->assertMatchesRegularExpression('/^OS\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^OS\d{12}001$/', $no);
         $os = OutsourcingOrder::where('no', $no)->first();
         $this->assertSame(OutsourcingOrder::STATUS_DRAFT, $os->status);
         $this->assertSame('5.00', $os->quantity);
@@ -226,11 +229,11 @@ class OutsourcingTest extends TestCase
             'quantity' => 5, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id, 'remark' => '回收',
         ]);
         $res->assertJsonPath('code', 0)
-            ->assertJsonPath('data.no', 'OSR'.date('Ymd').'-001');
+            ->assertJsonPath('data.no', 'OSR'.date('YmdHi').'001');
         $this->assertSame('50.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
         $this->assertDatabaseHas('inventory_movements', [
             'product_id' => $this->fin->id, 'direction' => 1, 'quantity' => '5.00',
-            'balance_after' => '50.00', 'source_type' => 'outsourcing_in', 'source_no' => 'OSR'.date('Ymd').'-001',
+            'balance_after' => '50.00', 'source_type' => 'outsourcing_in', 'source_no' => 'OSR'.date('YmdHi').'001',
         ]);
         $os->refresh();
         $this->assertSame(OutsourcingOrder::STATUS_RECEIVED, $os->status);
@@ -316,7 +319,7 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.items.0.quantity', '5.00')
-            ->assertJsonPath('data.items.0.no', 'OSR'.date('Ymd').'-001');
+            ->assertJsonPath('data.items.0.no', 'OSR'.date('YmdHi').'001');
     }
 
     public function test_update_destroy_draft_ok_approved_rejected_with_1521(): void
@@ -348,7 +351,7 @@ class OutsourcingTest extends TestCase
         $this->withToken($this->token)->getJson('/api/v1/production/outsourcings')
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
-            ->assertJsonPath('data.items.0.order_no', 'MO'.date('Ymd').'-001')
+            ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.supplier_name', '测试供应商')
             ->assertJsonPath('data.items.0.process_name', '组装')
             ->assertJsonPath('data.items.0.status_label', '已审核');

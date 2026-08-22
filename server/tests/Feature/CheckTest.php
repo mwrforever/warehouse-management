@@ -14,6 +14,7 @@ use App\Models\Role;
 use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -40,6 +41,8 @@ class CheckTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         // admin 角色（check.* 全量放行）
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $this->admin = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
@@ -125,9 +128,9 @@ class CheckTest extends TestCase
 
     public function test_store_creates_draft_with_no_and_auto_book(): void
     {
-        // 正常路径：草稿创建成功，单号 CK{date}-001，账面数自动带出
+        // 正常路径：草稿创建成功，单号 CK{日期段}001（Spec 2 配置格式），账面数自动带出
         $no = $this->createCheck($this->payload());
-        $this->assertMatchesRegularExpression('/^CK\d{8}-001$/', $no);
+        $this->assertMatchesRegularExpression('/^CK\d{12}001$/', $no);
         $check = InventoryCheck::where('no', $no)->first();
         $this->assertSame(InventoryCheck::STATUS_DRAFT, $check->status);
         $this->assertDatabaseHas('inventory_check_items', [
@@ -140,34 +143,34 @@ class CheckTest extends TestCase
 
     public function test_store_uses_next_sequence_when_no_collides(): void
     {
-        // 边界路径：CK{date}-001 已被占用（历史遗留行）时，新单自动换号 -002
+        // 边界路径：CK 当日 001 已被占用（历史遗留行）时，新单自动换号 002
         // 注：撞号重试分支现已兼容 MySQL 1062 与 SQLite 19，本用例在 sqlite 下即覆盖「占号冲突 → 换号重试」路径
         InventoryCheck::create([
-            'no' => 'CK'.date('Ymd').'-001',
+            'no' => 'CK'.date('YmdHi').'001',
             'warehouse_id' => $this->wh->id,
             'status' => InventoryCheck::STATUS_DRAFT,
         ]);
         $no = $this->createCheck($this->payload());
-        $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no);
+        $this->assertMatchesRegularExpression('/^CK\d{12}002$/', $no);
     }
 
     public function test_store_sequence_initializes_from_legacy_numbers(): void
     {
-        // 回归（审查修复）：老库无序列记录但已有当日历史 CK 单号段时，新单不得从 -001 起步撞历史单
-        // 缺陷背景：序列行首次初始化 seq=0，若历史已有 -001/-002/-003，新单逐号碰撞、
-        // 3 次重试耗尽直接 500；初始化须衔接既有号段最大值 → 新单取 -004 且不复用缺失号段
-        foreach (['-001', '-002', '-003'] as $suffix) {
+        // 回归（审查修复）：老库无序列记录但已有当日历史 CK 单号段时，新单不得从 001 起步撞历史单
+        // 缺陷背景：序列行首次初始化 seq=0，若历史已有 001/002/003，新单逐号碰撞、
+        // 3 次重试耗尽直接 500；初始化须衔接既有号段最大值 → 新单取 004 且不复用缺失号段
+        foreach (['001', '002', '003'] as $suffix) {
             InventoryCheck::create([
-                'no' => 'CK'.date('Ymd').$suffix,
+                'no' => 'CK'.date('YmdHi').$suffix,
                 'warehouse_id' => $this->wh->id,
                 'status' => InventoryCheck::STATUS_DRAFT,
             ]);
         }
         $no = $this->createCheck($this->payload());
-        $this->assertSame(sprintf('CK%s-004', date('Ymd')), $no);
-        // 序列行已初始化：再建一单继续 -005（持久序列单调不回退）
+        $this->assertSame('CK'.date('YmdHi').'004', $no);
+        // 序列行已初始化：再建一单继续 005（持久序列单调不回退）
         $no2 = $this->createCheck($this->payload());
-        $this->assertSame(sprintf('CK%s-005', date('Ymd')), $no2);
+        $this->assertSame('CK'.date('YmdHi').'005', $no2);
     }
 
     public function test_store_sequence_does_not_regress_after_delete(): void
@@ -177,17 +180,17 @@ class CheckTest extends TestCase
         // 新单复用仍存在的 CK-002 → 唯一索引冲突 500（E2E TC-INV-08 实测暴露）
         // 修复后序号来自持久序列 document_sequences，与存量行数解耦，删除不回退
         $no1 = $this->createCheck($this->payload());
-        $this->assertMatchesRegularExpression('/^CK\d{8}-001$/', $no1);
+        $this->assertMatchesRegularExpression('/^CK\d{12}001$/', $no1);
         $no2 = $this->createCheck($this->payload());
-        $this->assertMatchesRegularExpression('/^CK\d{8}-002$/', $no2);
-        // 删除 -001 草稿后，新单必须为 -003（不得复用仍存在的 -002）
+        $this->assertMatchesRegularExpression('/^CK\d{12}002$/', $no2);
+        // 删除 001 草稿后，新单必须为 003（不得复用仍存在的 002）
         $check1 = InventoryCheck::where('no', $no1)->firstOrFail();
         $this->withToken($this->token)->deleteJson("/api/v1/checks/{$check1->id}")->assertJsonPath('code', 0);
         $no3 = $this->createCheck($this->payload());
-        $this->assertSame(sprintf('CK%s-003', date('Ymd')), $no3);
-        // 持久序列按日单调：同日继续取号 -004
+        $this->assertSame('CK'.date('YmdHi').'003', $no3);
+        // 持久序列按日单调：同日继续取号 004
         $no4 = $this->createCheck($this->payload());
-        $this->assertSame(sprintf('CK%s-004', date('Ymd')), $no4);
+        $this->assertSame('CK'.date('YmdHi').'004', $no4);
     }
 
     public function test_store_rejects_negative_actual_with_1201(): void

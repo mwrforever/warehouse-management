@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\Role;
 use App\Models\Unit;
 use App\Models\User;
+use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -33,6 +34,8 @@ class BomTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // 编号规则配置种子（Spec 2）：单据号按配置生成 CK/PO/MO 等业务前缀
+        $this->seed(DocumentNumberConfigSeeder::class);
         $role = Role::create(['name' => '管理员', 'code' => 'admin']);
         $u = User::create(['name' => '管理员', 'username' => 'admin', 'password' => 'admin123', 'status' => 1]);
         $u->roles()->sync([$role->id]);
@@ -67,7 +70,7 @@ class BomTest extends TestCase
         ]);
         $res->assertJsonPath('code', 0);
         $code = $res->json('data.code');
-        $this->assertMatchesRegularExpression('/^BOM\d{8}-\d{3}$/', $code);
+        $this->assertMatchesRegularExpression('/^BOM\d{12}\d{3}$/', $code);
         $this->assertDatabaseCount('bom_items', 1);
         $this->assertDatabaseHas('bom_headers', ['code' => $code, 'status' => 1]);
     }
@@ -105,7 +108,7 @@ class BomTest extends TestCase
 
     public function test_store_generates_next_sequence_after_existing_today_code(): void
     {
-        // 边界路径：当日已有单号时流水顺延（count+1 单号生成路径不崩，不撞唯一索引）
+        // 边界路径：当日已有单号历史遗留行时新单顺延（不撞唯一索引；legacyMax 按尾部数字段衔接）
         $today = now()->format('Ymd');
         BomHeader::create([
             'code' => "BOM{$today}-001",
@@ -119,7 +122,7 @@ class BomTest extends TestCase
             'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
         ]);
         $res->assertJsonPath('code', 0);
-        $this->assertSame("BOM{$today}-002", $res->json('data.code'));
+        $this->assertSame('BOM'.now()->format('YmdHi').'002', $res->json('data.code'));
     }
 
     public function test_store_disabled_version_succeeds_even_when_enabled_exists(): void
@@ -263,7 +266,7 @@ class BomTest extends TestCase
             'product_id' => $this->finished->id, 'version' => 'v3', 'quantity' => 1, 'status' => 0,
             'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
         ])->assertJsonPath('code', 0)->json('data.code');
-        $this->assertMatchesRegularExpression('/BOM\d{8}-003$/', $third);
+        $this->assertMatchesRegularExpression('/BOM\d{12}003$/', $third);
     }
 
     public function test_destroy_referenced_by_production_order_fails_with_1121(): void
