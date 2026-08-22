@@ -127,8 +127,8 @@ class SalesOrderController extends Controller
                     'remark' => $data['remark'] ?? null,
                     'created_by' => auth()->id(),
                 ]),
-                fn (string $prefix, string $dateKey) => (int) (SalesOrder::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->get('no')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->no, $prefix, $dateKey))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = SalesOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $order->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

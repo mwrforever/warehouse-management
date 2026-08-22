@@ -65,8 +65,8 @@ class BomController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // 老库衔接：序列行首次初始化时以当日既有 BOM 单号段最大值为起点
-                fn (string $prefix, string $dateKey) => (int) (BomHeader::where('code', 'like', $prefix.date('Ymd').'%')
-                    ->get('code')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->code, $prefix, $dateKey))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = BomHeader::where('code', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $bom->items()->createMany($data['items']);
 

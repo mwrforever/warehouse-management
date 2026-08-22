@@ -105,8 +105,8 @@ class ProductController extends Controller
                 : $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_PRD,
                     fn (string $no) => $no,
-                    fn (string $prefix, string $dateKey) => (int) (Product::where('code', 'like', $prefix.'%')
-                        ->get('code')->map(fn ($p) => DocumentSequenceService::seqFromNo((string) $p->code, $prefix, $dateKey))->max() ?? 0),
+                    fn (string $prefix, string $dateKey) => ($no = Product::where('code', 'like', $prefix.'%')
+                        ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
             $barcode = $data['barcode'] ?? $code;
 

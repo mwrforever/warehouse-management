@@ -171,8 +171,8 @@ class PurchaseInboundController extends Controller
                     'total_amount' => $this->orderService->calculateTotal($data['items']),
                     'remark' => $data['remark'] ?? null,
                 ]),
-                fn (string $prefix, string $dateKey) => (int) (PurchaseInbound::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->get('no')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->no, $prefix, $dateKey))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = PurchaseInbound::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             $inbound->items()->createMany(array_map(fn ($i) => [
                 'product_id' => $i['product_id'],

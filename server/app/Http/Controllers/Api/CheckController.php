@@ -134,8 +134,8 @@ class CheckController extends Controller
                     'remark' => $data['remark'] ?? null,
                 ]),
                 // 老库衔接：序列行首次初始化时以当日既有 CK 单号段最大值为起点
-                fn (string $prefix, string $dateKey) => (int) (InventoryCheck::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->get('no')->map(fn ($o) => DocumentSequenceService::seqFromNo((string) $o->no, $prefix, $dateKey))->max() ?? 0),
+                fn (string $prefix, string $dateKey) => ($no = InventoryCheck::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
             );
             foreach ($items as $i) {
                 InventoryCheckItem::create(['check_id' => $check->id] + $i);
