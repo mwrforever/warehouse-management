@@ -40,6 +40,12 @@ const router = createRouter({
           meta: { permission: 'dictionary.list' },
         },
         {
+          path: 'system/numbering',
+          name: 'system-numbering',
+          component: () => import('../views/system/NumberingConfigsView.vue'),
+          meta: { permission: 'system.setting.list' },
+        },
+        {
           path: 'master/categories',
           name: 'master-categories',
           component: () => import('../views/master/CategoriesView.vue'),
