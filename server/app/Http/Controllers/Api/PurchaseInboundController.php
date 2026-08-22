@@ -132,11 +132,12 @@ class PurchaseInboundController extends Controller
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(1307, '仓库与库位不能为空');
         }
-        // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）
+        // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）；
+        // items 键可整体缺失（validatePayload 未 required），?? 兜底防 undefined key
         $fromOrder = ! empty($data['order_id']);
         $items = $fromOrder
-            ? array_values(array_filter($data['items'], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
-            : $data['items'];
+            ? array_values(array_filter($data['items'] ?? [], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
+            : ($data['items'] ?? []);
         if (empty($items)) {
             return $this->fail(1301, '请至少添加一条明细');
         }
@@ -146,7 +147,7 @@ class PurchaseInboundController extends Controller
             if ($cmp < 0 || (! $fromOrder && $cmp === 0)) {
                 return $this->fail(1302, $fromOrder ? '数量不能小于 0' : '数量必须大于 0');
             }
-            if ((float) $item['price'] < 0) {
+            if (bccomp((string) $item['price'], '0', 2) < 0) {
                 return $this->fail(1311, '价格不能为负数');
             }
         }
@@ -239,11 +240,12 @@ class PurchaseInboundController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(1307, '仓库与库位不能为空');
             }
-            // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）
+            // 从订单生成：数量 0 = 本次不收货（剔除不落库）；手动新增：仍要求 > 0（防空数量单据）；
+            // items 键可整体缺失（validatePayload 未 required），?? 兜底防 undefined key
             $fromOrder = ! empty($data['order_id']);
             $items = $fromOrder
-                ? array_values(array_filter($data['items'], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
-                : $data['items'];
+                ? array_values(array_filter($data['items'] ?? [], fn ($i) => bccomp((string) $i['quantity'], '0', 2) !== 0))
+                : ($data['items'] ?? []);
             if (empty($items)) {
                 return $this->fail(1301, '请至少添加一条明细');
             }
@@ -253,7 +255,7 @@ class PurchaseInboundController extends Controller
                 if ($cmp < 0 || (! $fromOrder && $cmp === 0)) {
                     return $this->fail(1302, $fromOrder ? '数量不能小于 0' : '数量必须大于 0');
                 }
-                if ((float) $item['price'] < 0) {
+                if (bccomp((string) $item['price'], '0', 2) < 0) {
                     return $this->fail(1311, '价格不能为负数');
                 }
             }

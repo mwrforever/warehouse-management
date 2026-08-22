@@ -208,9 +208,14 @@ async function save() {
     ElMessage.warning('请选择商品')
     return
   }
-  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤）；手动新增：仍要求 > 0（防空数量单据）
+  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤），负数量直接拦截（与后端 1302 同口径）；
+  // 手动新增：仍要求 > 0（防空数量单据）
   let keepRows = form.items
   if (mode.value === 'from-order') {
+    if (form.items.some((i) => Number(i.quantity) < 0)) {
+      ElMessage.warning('数量不能小于 0')
+      return
+    }
     keepRows = form.items.filter((i) => Number(i.quantity) > 0)
     if (!keepRows.length) {
       ElMessage.warning('请至少录入一个收货数量大于 0 的商品')

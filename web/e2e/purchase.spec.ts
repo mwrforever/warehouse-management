@@ -486,7 +486,7 @@ test.describe('采购管理模块', () => {
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
     const piRow = page.locator('.el-table__row', { hasText: 'PI' }).first()
     await expect(piRow).toContainText('草稿')
-    // 编辑弹窗复核：明细细仅 SEMI 一行（MAT 0 行被剔除，未落库）
+    // 编辑弹窗复核：明细仅 SEMI 一行（MAT 0 行被剔除，未落库）
     await piRow.getByRole('button', { name: /编\s*辑/ }).click()
     const ed = page.locator('.el-dialog')
     await expect(ed.locator('.el-table__row')).toHaveCount(1)
@@ -543,7 +543,7 @@ test.describe('采购管理模块', () => {
 
   test('TC-PUR-13 手动新增数量 0 仍被拦截', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // UI：独立录入输入 0 → blur 被 el-input-number min=1 钳制（无法提交 0 数量）
+    // UI：手动新增录入 0 → blur 被 el-input-number min=1 钳制（无法提交 0 数量）
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /新\s*建/ }).click()
     const dialog = page.locator('.el-dialog')
