@@ -18,6 +18,16 @@ async function apiPost(page: Page, url: string, body?: unknown) {
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
+// 认证 PUT 辅助：配置恢复等更新类接口（如 document-number-configs/{id}）只接受 PUT，
+// 复用 apiPost 会因方法不符收到 405（响应体无 code 字段），恢复动作静默失效
+async function apiPut(page: Page, url: string, body?: unknown) {
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  const res = await page.request.put(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: body,
+  })
+  return (await res.json()) as { code: number; message?: string; data?: unknown }
+}
 
 // 下拉项选择：等待唯一可见 option 后点击（用法见 purchase.spec.ts 注释）
 async function pickOption(page: Page, name: string) {
@@ -40,7 +50,7 @@ test.describe('编号自动生成', () => {
     const cfgs = await apiGet(page, '/api/v1/document-number-configs', { per_page: 50 })
     const po = cfgs.items.find((c: { type: string }) => c.type === 'po')
     expect(po, '采购订单编号配置应存在').toBeTruthy()
-    const res = await apiPost(page, `/api/v1/document-number-configs/${po.id}`, {
+    const res = await apiPut(page, `/api/v1/document-number-configs/${po.id}`, {
       prefix: po.prefix,
       date_format: po.date_format,
       seq_length: 3,
