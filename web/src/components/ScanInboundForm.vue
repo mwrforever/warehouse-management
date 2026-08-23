@@ -58,7 +58,7 @@ watch(
       await nextTick()
       scan.inputRef.value?.focus()
     } else {
-      // 关闭时取消进行中的防抖/请求并重置，防止卸载后 setState（spec §7）
+      // 关闭时重置并递增会话序号，作废在途条码请求的迟到回写，防止幽灵行残留（spec §7）
       scan.reset()
     }
   },

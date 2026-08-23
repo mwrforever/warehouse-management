@@ -71,12 +71,19 @@ export function useScanInbound(opts: UseScanInboundOptions) {
   // 逐件关时的待填数量态
   const pending = ref<ScanItem | null>(null)
   const pendingQty = ref(1)
+  // 会话序号（BUG-02）：reset（关窗）时递增作废会话，在途条码请求返回后据此丢弃回写，
+  // 防止迟到响应写入"幽灵行"在下次开窗时经 add-items 并入单据（spec §7 要求关窗取消在途请求）
+  let sessionId = 0
 
   async function handleScan() {
     const code = barcode.value.trim()
     if (!code) return
+    // 捕获发起时的会话序号，await 归来后据此判断会话是否已被 reset 作废
+    const seq = sessionId
     try {
       const p = await productApi.byBarcode(code)
+      // 迟到守卫：关窗 reset 已递增序号，丢弃本次回写（含 blockedType/解析分支，一律不落地）
+      if (seq !== sessionId) return
       if (opts.blockedType && p.type === opts.blockedType) {
         opts.onError('原料商品不可销售')
         return
@@ -136,6 +143,8 @@ export function useScanInbound(opts: UseScanInboundOptions) {
   }
 
   function reset() {
+    // 递增会话序号作废在途扫码的回写（BUG-02：仅清状态取消不了已发出的请求）
+    sessionId++
     rows.value = []
     pending.value = null
     barcode.value = ''

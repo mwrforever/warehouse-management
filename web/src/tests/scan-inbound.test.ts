@@ -145,6 +145,63 @@ describe('useScanInbound 组合式函数', () => {
     expect(rows.value).toHaveLength(0)
   })
 
+  it('关窗作废在途扫码：reset 后逐件开的迟到响应不写入 rows（BUG-02 幽灵行）', async () => {
+    // 手动控制 byBarcode 的 resolve 时序：扫码发起 → 关窗 reset → 响应才迟到返回
+    let resolveByBarcode!: (value: ReturnType<typeof product>) => void
+    byBarcodeMock.mockReturnValue(
+      new Promise<ReturnType<typeof product>>((resolve) => {
+        resolveByBarcode = resolve
+      }),
+    )
+    const onError = vi.fn()
+    const { barcode, handleScan, rows, perItem, reset } = useScanInbound({
+      excludedIds: () => [],
+      onError,
+    })
+    perItem.value = true // 逐件开：迟到响应路径是 addItem 直接写 rows
+    barcode.value = '888888'
+    const scanning = handleScan()
+    reset() // 关窗：作废会话，迟到响应必须被丢弃
+    resolveByBarcode(product(1))
+    await scanning
+    expect(rows.value).toHaveLength(0)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('关窗作废在途扫码：reset 后逐件关的迟到响应不弹出 pending 待填行（BUG-02）', async () => {
+    let resolveByBarcode!: (value: ReturnType<typeof product>) => void
+    byBarcodeMock.mockReturnValue(
+      new Promise<ReturnType<typeof product>>((resolve) => {
+        resolveByBarcode = resolve
+      }),
+    )
+    const { barcode, handleScan, pending, reset } = useScanInbound({
+      excludedIds: () => [],
+      onError: vi.fn(),
+    })
+    barcode.value = '888888'
+    const scanning = handleScan()
+    reset() // 关窗：作废会话，迟到响应必须被丢弃
+    resolveByBarcode(product(1))
+    await scanning
+    expect(pending.value).toBeNull()
+  })
+
+  it('reset 作废仅影响在途请求：作废后再扫码（新会话）正常回写', async () => {
+    byBarcodeMock.mockResolvedValue(product(1))
+    const { barcode, handleScan, rows, perItem, reset } = useScanInbound({
+      excludedIds: () => [],
+      onError: vi.fn(),
+    })
+    perItem.value = true
+    barcode.value = '888888'
+    await handleScan()
+    reset()
+    barcode.value = '888888'
+    await handleScan() // reset 之后的扫码属于新会话，正常写入
+    expect(rows.value).toHaveLength(1)
+  })
+
   it('resolveProduct 自定义解析：返回 null 表示拒绝该商品（盘点账面校验）', async () => {
     byBarcodeMock.mockResolvedValue(product(1))
     const onError = vi.fn()
