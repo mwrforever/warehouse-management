@@ -52,7 +52,8 @@ describe('mergeScannedItem（四态合并核心）', () => {
       autoAccumulate: true,
       maxQuantity: 10,
     })
-    expect(r.error).toContain('订单剩余量')
+    // 文案中性化：max 是宿主换算后的本次还可扫入量，不得标注为"订单剩余量"（评审 Important-1）
+    expect(r.error).toContain('累计数量不能超过 10')
     expect(rows).toHaveLength(1)
     expect(rows[0]!.quantity).toBe(8)
   })
@@ -74,7 +75,7 @@ describe('mergeScannedItem（四态合并核心）', () => {
       autoAccumulate: true,
       maxQuantity: 10,
     })
-    expect(r.error).toContain('订单剩余量')
+    expect(r.error).toContain('数量不能超过 10')
     expect(r.rows).toHaveLength(0)
   })
 })
@@ -138,7 +139,7 @@ describe('useScanInbound 组合式函数', () => {
     const onError = vi.fn()
     const { barcode, handleScan, pendingQty, submitPending, rows } = useScanInbound({
       excludedIds: () => [],
-      maxQuantity: () => 10, // 订单行剩余量（宿主页传入）
+      maxQuantity: () => 10, // 数量上限（宿主传入；订单场景为剩余量−表单已填量的还可扫入量）
       onError,
     })
     barcode.value = '888888'
@@ -151,7 +152,8 @@ describe('useScanInbound 组合式函数', () => {
     await handleScan()
     pendingQty.value = 5
     submitPending()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('订单剩余量'))
+    // 文案中性化：提示的是本次还可扫入量上限，不得标注为"订单剩余量"（评审 Important-1）
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('累计数量不能超过 10'))
     expect(rows.value).toHaveLength(1)
     expect(rows.value[0]!.quantity).toBe(8)
   })
