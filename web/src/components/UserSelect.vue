@@ -46,6 +46,9 @@ const dialogLoading = ref(false)
 // 弹窗搜索：300ms 防抖实时搜索 + 查询按钮
 const searchKw = useDebouncedRef('', 300)
 const searchPage = ref(1)
+// 请求序号守卫（useListQuery 同款模式）：防抖搜索与「查 询」/翻页并发时，
+// 先发后至的响应直接丢弃，避免旧结果覆盖新数据导致点选到非预期用户（BUG-05）
+let requestSeq = 0
 
 // 选中值：即用户姓名
 function pick(name: string) {
@@ -80,21 +83,25 @@ async function loadOptions() {
 
 // 弹窗内搜索：防抖自动查 + 手动查询按钮
 async function searchDialog() {
+  const seq = ++requestSeq
   dialogLoading.value = true
   searchPage.value = 1
   try {
     const res = await userApi.list({ per_page: 10, keyword: searchKw.debounced.value || undefined })
+    if (seq !== requestSeq) return // 已有更新的请求，丢弃本次过期响应
     users.value = res.items
     total.value = res.total
   } catch (e) {
+    if (seq !== requestSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    dialogLoading.value = false
+    if (seq === requestSeq) dialogLoading.value = false
   }
 }
 watch(searchKw.debounced, () => searchDialog())
 
 async function changeDialogPage(p: number) {
+  const seq = ++requestSeq
   dialogLoading.value = true
   try {
     const res = await userApi.list({
@@ -102,12 +109,14 @@ async function changeDialogPage(p: number) {
       per_page: 10,
       keyword: searchKw.debounced.value || undefined,
     })
+    if (seq !== requestSeq) return // 翻页与搜索并发时同理，只认最后一次请求
     users.value = res.items
     total.value = res.total
   } catch (e) {
+    if (seq !== requestSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    dialogLoading.value = false
+    if (seq === requestSeq) dialogLoading.value = false
   }
 }
 

@@ -1,4 +1,5 @@
-// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、搜索防抖、选中回填、数据缓存
+// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、选中回填、数据缓存，
+// 弹窗防抖搜索（命中收缩不翻转形态、慢响应乱序丢弃守卫）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
@@ -102,6 +103,34 @@ describe('UserSelect', () => {
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false)
     // 防抖搜索已带关键字发出请求
     expect(listMock).toHaveBeenLastCalledWith({ per_page: 10, keyword: '用户1' })
+  })
+
+  it('慢响应乱序回写被丢弃：后发搜索结果不被先发慢请求覆盖（BUG-05）', async () => {
+    // 首笔搜索（关键字"旧"）响应悬挂，第二笔（关键字"新"）立即返回，随后旧响应才到
+    let resolveStale!: (v: { items: ReturnType<typeof users>; total: number }) => void
+    listMock.mockImplementation((params: { keyword?: string }) => {
+      if (params.keyword === undefined) return Promise.resolve({ items: users(60), total: 60 })
+      if (params.keyword === '旧') return new Promise((r) => (resolveStale = r))
+      return Promise.resolve({ items: users(3), total: 3 })
+    })
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click') // 打开弹窗
+    const search = async (kw: string) => {
+      await wrapper.find('.search-row input').setValue(kw)
+      vi.advanceTimersByTime(300) // 防抖到期自动搜索
+      await flushPromises()
+    }
+    await search('旧') // 先发：悬挂未回
+    await search('新') // 后发：立即回，3 条命中
+    resolveStale({ items: users(80), total: 80 }) // 先发的旧响应迟到
+    await flushPromises()
+    // 乱序守卫丢弃过期响应：表格与分页器保持后发搜索的结果
+    expect(wrapper.findAll('.user-dialog .el-table__row')).toHaveLength(3)
+    expect(wrapper.findComponent({ name: 'ElPagination' }).props('total')).toBe(3)
   })
 
   it('缓存已拉取选项：二次挂载不再请求（组件卸载前缓存复用）', async () => {
