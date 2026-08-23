@@ -100,6 +100,8 @@ class ReturnListController extends Controller
             return $this->fail(1517, $msg);
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $return = DB::transaction(function () use ($data) {
             $return = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_RL,
@@ -122,7 +124,7 @@ class ReturnListController extends Controller
             ], $data['items']));
 
             return $return;
-        });
+        }, 2);
 
         return $this->ok(['no' => $return->no]);
     }

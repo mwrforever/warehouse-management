@@ -113,6 +113,8 @@ class SalesOrderController extends Controller
             return $fail;
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $order = DB::transaction(function () use ($data) {
             // 单号走持久序列（撞号自动换号；删除不回退；老库 max 衔接）
             $order = $this->sequenceService->nextNoByConfig(
@@ -139,7 +141,7 @@ class SalesOrderController extends Controller
             ], $data['items']));
 
             return $order;
-        });
+        }, 2);
 
         return $this->ok(['no' => $order->no]);
     }

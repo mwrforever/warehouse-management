@@ -130,6 +130,8 @@ class PickListController extends Controller
             return $this->fail(1513, $msg);
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $pick = DB::transaction(function () use ($data, $materialMap) {
             $pick = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_PL,
@@ -155,7 +157,7 @@ class PickListController extends Controller
             ], $data['items']));
 
             return $pick;
-        });
+        }, 2);
 
         return $this->ok(['no' => $pick->no]);
     }

@@ -47,6 +47,10 @@ class BomController extends Controller
     {
         $data = $this->validateBom($request);
 
+        // 事务第 2 参数为死锁(1213)重试次数：编号序列行首建时（MySQL RR 隔离级别下取号走
+        // lockForUpdate+INSERT，间隙锁使并发双方各自 INSERT 同键序列行互等死锁）败方整单回滚 500；
+        // attempts=2 让框架检测到死锁后整体回滚并重跑整个闭包（重新取号+重建单据），
+        // 闭包无半途续跑副作用，重跑幂等安全（机理：docs/pref/2026-08-23-数据库查询性能审查.md P1-1）
         return DB::transaction(function () use ($data) {
             // 先锁成品行串行化同成品并发创建，再查启用版本，守住「同成品启用版本唯一」核心不变式
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
@@ -71,7 +75,7 @@ class BomController extends Controller
             $bom->items()->createMany($data['items']);
 
             return $this->ok(['id' => $bom->id, 'code' => $bom->code]);
-        });
+        }, 2);
     }
 
     /** 更新 BOM：明细全量替换（事务）；启用版本唯一（排除自身） */

@@ -101,6 +101,8 @@ class OutsourcingController extends Controller
             return $this->fail(422, '工序不属于该工单');
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $os = DB::transaction(function () use ($data) {
             $os = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_OS,
@@ -121,7 +123,7 @@ class OutsourcingController extends Controller
             );
 
             return $os;
-        });
+        }, 2);
 
         return $this->ok(['no' => $os->no]);
     }
@@ -304,6 +306,8 @@ class OutsourcingController extends Controller
 
         try {
             $result = null;
+            // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：OSR 序列行首建
+            // 间隙锁死锁败方整体回滚后重跑闭包重新取号+重发库存流水，幂等安全）
             DB::transaction(function () use ($outsourcing, $data, &$result) {
                 // 锁委外单行：回收并发串行化（累计回收判定一致）；仅草稿不可回收（422）——
                 // 已回收单放行到超收校验：再回收必然超收 → 1524（E2E TC-PRD-06 锁定）
@@ -374,7 +378,7 @@ class OutsourcingController extends Controller
                     }
                 }
                 $result = ['no' => $receipt->no];
-            });
+            }, 2);
         } catch (ProductionException $e) {
             // 1524 超收 / 422 状态不符（事务整体回滚）
             return $this->fail($e->getCode() ?: 422, $e->getMessage());

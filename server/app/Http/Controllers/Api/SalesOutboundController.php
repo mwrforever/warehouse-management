@@ -175,6 +175,8 @@ class SalesOutboundController extends Controller
             }
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $outbound = DB::transaction(function () use ($data) {
             $outbound = $this->sequenceService->nextNoByConfig(
                 DocumentSequence::TYPE_SOUT,
@@ -200,7 +202,7 @@ class SalesOutboundController extends Controller
             ], $data['items']));
 
             return $outbound;
-        });
+        }, 2);
 
         return $this->ok(['no' => $outbound->no]);
     }

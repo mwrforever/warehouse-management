@@ -98,6 +98,8 @@ class ProductController extends Controller
             return $this->fail(1122, '安全库存下限不能大于上限');
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：商品编码序列行首建
+        // 间隙锁死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $product = DB::transaction(function () use ($data, $min, $max) {
             // 除编码/条码外的商品属性（手填/自动两条创建路径共用，避免字段清单两份漂移）
             $attributes = [
@@ -129,7 +131,7 @@ class ProductController extends Controller
                 'code' => $data['code'],
                 'barcode' => $data['barcode'] ?? $data['code'],
             ]);
-        });
+        }, 2);
 
         // 响应回填自动生成的编码/条码（前端弹窗保存后可展示，spec §5）
         return $this->ok(['id' => $product->id, 'code' => $product->code, 'barcode' => $product->barcode]);

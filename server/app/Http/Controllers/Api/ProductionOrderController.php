@@ -95,6 +95,8 @@ class ProductionOrderController extends Controller
         }
 
         try {
+            // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+            // 死锁败方整体回滚后重跑闭包重新取号+重新展开 BOM，幂等安全）
             $order = DB::transaction(function () use ($data) {
                 // 锁成品行：与 BOM 启用切换并发时串行化（1501 判定读一致）
                 $product = Product::whereKey($data['product_id'])->lockForUpdate()->firstOrFail();
@@ -138,7 +140,7 @@ class ProductionOrderController extends Controller
                 ], $expansion['operations']));
 
                 return $order;
-            });
+            }, 2);
         } catch (ProductionException $e) {
             // 1501 无启用 BOM（事务内抛出，捕获后转业务码信封返回）
             return $this->fail($e->getCode() ?: 1501, $e->getMessage());
