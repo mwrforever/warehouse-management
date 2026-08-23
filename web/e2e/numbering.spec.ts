@@ -88,11 +88,20 @@ test.describe('编号自动生成', () => {
     page,
   }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // 前置：保证 SUP-001 存在（复用既有采购 spec 的供应商）
-    const supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
+    // 前置：保证 SUP-001 存在（复用既有采购 spec 的供应商）。全量跑时本文件先于 purchase.spec、
+    // 种子库无 SUP-001，guard 必然走创建分支——创建后必须重取列表再取 id，否则对空快照解引用 items[0] 崩溃
+    let supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
     if (supList.total === 0) {
-      await apiPost(page, '/api/v1/suppliers', { name: '测试供应商', code: 'SUP-001', status: 1 })
+      const createdSup = await apiPost(page, '/api/v1/suppliers', {
+        name: '测试供应商',
+        code: 'SUP-001',
+        status: 1,
+      })
+      // 创建失败若不拦截，后续 items[0] 解引用会以更难排查的 TypeError 暴露
+      expect(createdSup.code, '前置创建供应商 SUP-001 应成功').toBe(0)
+      supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
     }
+    expect(supList.total, 'SUP-001 供应商应就绪').toBeGreaterThan(0)
     const prods = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001', per_page: 100 })
     expect(prods.total).toBeGreaterThan(0)
 
@@ -149,6 +158,8 @@ test.describe('编号自动生成', () => {
 
     // 新建采购订单验证 4 位序号（API 建单更快；列表再断言）
     const supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
+    // serial 下前置 TC-NUM-02 已保证 SUP-001 存在；显式断言防 items[0] 空解引用静默崩溃（如单独跑本用例则明确报前置缺失）
+    expect(supList.total, 'SUP-001 供应商应存在（由 TC-NUM-02 前置创建）').toBeGreaterThan(0)
     const prods = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001', per_page: 100 })
     const created = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supList.items[0].id,
