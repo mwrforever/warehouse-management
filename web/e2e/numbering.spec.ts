@@ -112,9 +112,20 @@ test.describe('编号自动生成', () => {
     // 列表首行单号匹配新格式：PO + YmdHi(12 位日期) + 3 位序号，无连字符（旧格式 -001 已废弃）
     const firstRow = page.locator('.el-table__row').first()
     await expect(firstRow.locator('.font-code').first()).toHaveText(/^PO\d{12}\d{3}$/)
-    // 同类型长度一致：再建一单（或检查今日最大序号长度一致）——列表内任一 PO 单号均满足同正则
-    const allNos = await firstRow.locator('.font-code').first().textContent()
-    expect(allNos).toMatch(/^PO\d{12}\d{3}$/)
+    const no1 = ((await firstRow.locator('.font-code').first().textContent()) ?? '').trim()
+
+    // 同类型长度一致（Spec 2）：真正再建一单（API 建单返回单号），断言两个不同单号长度相等
+    // （修复前对同一元素重复断言同一值，该验证点实际零覆盖）
+    const second = await apiPost(page, '/api/v1/purchase/orders', {
+      supplier_id: supList.items[0].id,
+      order_date: new Date().toISOString().slice(0, 10),
+      items: [{ product_id: prods.items[0].id, quantity: 1, price: 5 }],
+    })
+    expect(second.code).toBe(0)
+    const no2 = (second.data as { no: string }).no
+    expect(no2).toMatch(/^PO\d{12}\d{3}$/)
+    expect(no2).not.toBe(no1)
+    expect(no2.length).toBe(no1.length)
   })
 
   test('TC-NUM-03 编号规则页改 seq_length → 预览变化 → 保存后新单号按新位宽', async ({ page }) => {
