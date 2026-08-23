@@ -135,6 +135,7 @@ describe('useListQuery', () => {
 
 // ListFilterBar 组件单测：关键字防抖、按钮事件、重置清空关键字
 import { mount, flushPromises } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import ElementPlus from 'element-plus'
 import ListFilterBar from '../components/ListFilterBar.vue'
 
@@ -200,5 +201,71 @@ describe('ListFilterBar', () => {
     const refreshBtn = btns.find((b) => b.text().includes('刷'))
     await refreshBtn!.trigger('click')
     expect(wrapper.emitted('refresh')).toHaveLength(1)
+  })
+
+  it('300ms 内双击重置后重输同一关键字仍触发 keyword-change（BUG-06 防抖滞留）', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '' },
+      global: { plugins: [ElementPlus] },
+    })
+    const input = wrapper.find('input')
+    await input.setValue('abc')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const btns = wrapper.findAll('button')
+    const resetBtn = btns.find((b) => b.text().includes('重'))
+    // 第一次重置排定 300ms 同步计时器，第二次重置取消该计时器——
+    // 若未同步 debounced，其将永久滞留 'abc'，重输同词时同值赋值不触发 watch（静默失效）
+    await resetBtn!.trigger('click')
+    await resetBtn!.trigger('click')
+    await flushPromises()
+    const countBefore = wrapper.emitted('keyword-change')?.length ?? 0
+    await input.setValue('abc')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const emitted = wrapper.emitted('keyword-change')
+    // 重输与滞留值相同的关键字必须重新触发查询通知
+    expect(emitted!.length).toBeGreaterThan(countBefore)
+    expect(emitted!.at(-1)).toEqual(['abc'])
+  })
+
+  it('输入后 300ms 内回车：立即用新关键字查询且 600ms 内不重复请求（BUG-07）', async () => {
+    // 按真实页面接线组装宿主：v-model:keyword + keyword-change 触发防抖 load + search 立即查询
+    const fetchStub = vi.fn(async (q: { keyword: string; page: number; per_page: number }) => ({
+      items: [{ page: q.page }],
+      total: 0,
+    }))
+    const wrapper = mount(
+      defineComponent({
+        setup() {
+          const { query, load, search } = useListQuery({
+            defaultQuery: { keyword: '' },
+            fetch: fetchStub,
+            debounceMs: 300,
+          })
+          return () =>
+            h(ListFilterBar, {
+              keyword: query.keyword,
+              'onUpdate:keyword': (v: string) => {
+                query.keyword = v
+              },
+              onKeywordChange: () => load(),
+              onSearch: () => search(),
+            })
+        },
+      }),
+      { global: { plugins: [ElementPlus] } },
+    )
+    const input = wrapper.find('input')
+    await input.setValue('新词')
+    // 防抖窗口内立即回车：查询必须立即用最新关键字（修复前先按旧空关键字请求）
+    await input.trigger('keyup', { key: 'Enter' })
+    await flushPromises()
+    expect(fetchStub).toHaveBeenCalledTimes(1)
+    expect(fetchStub).toHaveBeenCalledWith(expect.objectContaining({ keyword: '新词' }))
+    // 组件内 300ms 防抖到期 + 父级 300ms 防抖串联的 600ms 内不得再发重复请求
+    vi.advanceTimersByTime(600)
+    await flushPromises()
+    expect(fetchStub).toHaveBeenCalledTimes(1)
   })
 })

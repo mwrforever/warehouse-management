@@ -92,5 +92,13 @@ export function useDebouncedRef<T>(initial: T, ms = 300) {
     if (timer !== null) clearTimeout(timer)
     timer = null
   }
-  return { source, debounced, cancel }
+  // 立即冲刷：取消挂起的防抖计时器并把 debounced 同步为 source 当前值。
+  // 供「查询/重置」等需立即以最新输入执行的动作调用，消除等待窗口内的旧值滞留
+  // （双击重置吞掉计时器导致 debounced 永久滞留、回车先用旧关键字查询两类缺陷的同根修复）。
+  // 同值赋值不触发下游 watch，天然幂等。
+  const flush = () => {
+    cancel()
+    debounced.value = source.value
+  }
+  return { source, debounced, cancel, flush }
 }

@@ -25,7 +25,9 @@ const emit = defineEmits<{
   refresh: []
 }>()
 
-// 关键字内部防抖：输入即时回写父级（v-model），300ms 后同步 debounced 并通知父级查询
+// 关键字内部防抖：输入即时回写父级（v-model），300ms 后同步 debounced 并通知父级查询。
+// 实时搜索实际延迟为两层防抖串联：本组件内层 300ms + useListQuery.load 外层 300ms = 600ms（N-01 口径）；
+// 外层防抖同时服务下拉等其它筛选变更的合并，两层职责不同不做压缩。回车/查询经 flush 立即生效，不受串联影响
 const kw = useDebouncedRef(props.keyword ?? '', 300)
 // 父级外部改动关键字（如重置恢复默认）时同步进内部 source，避免 v-model 双向失步
 watch(
@@ -34,10 +36,17 @@ watch(
     if (kw.source.value !== (v ?? '')) kw.source.value = v ?? ''
   },
 )
-watch(kw.debounced, (v) => {
-  emit('update:keyword', v)
-  emit('keyword-change', v)
-})
+// sync 冲刷：flush() 同步改写 debounced 后，本 watch 同步 emit，确保「查询/重置」动作里
+// 最新关键字先于 search/reset 事件到达父级——父级 search()/reset() 内的 load.cancel()
+// 才能取消 keyword-change 刚排定的防抖查询，避免旧关键字请求与随后的重复请求
+watch(
+  kw.debounced,
+  (v) => {
+    emit('update:keyword', v)
+    emit('keyword-change', v)
+  },
+  { flush: 'sync' },
+)
 
 // 查询按钮：1s 节流防连点（spec §4.1 查询按钮口径）
 let lastSearch = 0
@@ -45,14 +54,19 @@ function onSearch() {
   const now = Date.now()
   if (now - lastSearch < 1000) return
   lastSearch = now
+  // 先冲刷内部防抖再通知查询：防抖窗口内输入后立即回车时，父级 query.keyword 尚未收到新值，
+  // 若不冲刷会先按旧关键字请求、约 600ms 后防抖到期再重复请求一次（BUG-07）
+  kw.flush()
   emit('search')
 }
 
 // 重置：清空内部关键字并通知父级（父级恢复默认筛选后统一查询）。
+// 先冲刷再清空：300ms 内双击重置时，第二次 reset 会取消第一次排定的同步计时器且 source 已是 ''，
+// 若不同步 debounced 其将永久滞留旧关键字，重输同词时同值赋值不触发 watch、筛选静默失效（BUG-06）。
 // 同步 emit update:keyword('')：父级 v-model 立即收到清空（pre-flight Finding C 裁决：改实现，
 // 与测试"点重置后立即断言 update:keyword=['']"一致），防抖 watch 300ms 后重复 emit 同值无害
 function onReset() {
-  kw.cancel()
+  kw.flush()
   kw.source.value = ''
   emit('update:keyword', '')
   emit('reset')
