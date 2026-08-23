@@ -1,6 +1,6 @@
 // 列表查询状态组合式函数：统一 query/list/total/loading + 防抖加载 + 查询/重置/刷新。
 // 消除 6+ 列表页手写 loadList/search/load 样板；请求序号守卫（bug #4 模式）保证并发响应以最后一次为准。
-import { reactive, ref } from 'vue'
+import { getCurrentScope, onScopeDispose, reactive, ref } from 'vue'
 import { debounce } from '../utils/async'
 
 export interface ListPage<T> {
@@ -80,6 +80,12 @@ export function useListQuery<T extends Record<string, unknown>>(opts: UseListQue
     load.cancel()
     requestSeq++
   }
+
+  // 组件作用域销毁（卸载）时自动作废挂起防抖与在途响应：筛选输入后 300ms 防抖窗口内切走路由，
+  // 挂起回调不得再发请求回写已卸载组件的 refs，在途失败也不得触发页面 onError 弹错（BUG-04：
+  // 此前 cancel 无任何调用方、20+ 接入页零接线，声明的能力未生效）。组件 setup 必有活跃 scope，
+  // getCurrentScope 守卫仅让纯单测等无作用域上下文跳过注册而不产生 Vue 警告（VueUse tryOnScopeDispose 惯例）
+  if (getCurrentScope()) onScopeDispose(cancel)
 
   return { query, list, total, loading, load, search, reset, refresh, cancel }
 }

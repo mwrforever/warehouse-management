@@ -112,6 +112,64 @@ describe('useListQuery', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('作用域销毁后挂起防抖不再发请求（卸载自动作废，BUG-04）', () => {
+    const fetchStub = vi.fn(async () => ({ items: [] as unknown[], total: 0 }))
+    // 组件卸载本质即停止其 effect scope，用 effectScope.stop() 等价模拟 unmount
+    const scope = effectScope()
+    const api = scope.run(() =>
+      useListQuery({ defaultQuery: { keyword: '' }, fetch: fetchStub, debounceMs: 300 }),
+    )!
+    api.load()
+    scope.stop()
+    vi.advanceTimersByTime(500)
+    expect(fetchStub).not.toHaveBeenCalled()
+  })
+
+  it('作用域销毁后在途成功响应不回写列表（卸载自动作废，BUG-04）', async () => {
+    let resolve!: (v: { items: unknown[]; total: number }) => void
+    const fetchStub = vi.fn(
+      () =>
+        new Promise<{ items: unknown[]; total: number }>((r) => {
+          resolve = r
+        }),
+    )
+    const scope = effectScope()
+    const api = scope.run(() =>
+      useListQuery({ defaultQuery: { keyword: '' }, fetch: fetchStub, debounceMs: 300 }),
+    )!
+    api.search()
+    scope.stop()
+    resolve({ items: [{ n: '迟到响应' }], total: 99 })
+    await flushPromises()
+    expect(api.list.value).toEqual([])
+  })
+
+  it('作用域销毁后在途失败响应不触发 onError（卸载自动作废，BUG-04）', async () => {
+    let reject!: (e: Error) => void
+    const fetchStub = vi.fn(
+      () =>
+        new Promise<{ items: unknown[]; total: number }>((_, rej) => {
+          reject = rej
+        }),
+    )
+    const onError = vi.fn()
+    const scope = effectScope()
+    const api = scope.run(() =>
+      useListQuery({
+        defaultQuery: { keyword: '' },
+        fetch: fetchStub,
+        debounceMs: 300,
+        onError,
+      }),
+    )!
+    api.search()
+    scope.stop()
+    reject(new Error('网络错误'))
+    await flushPromises()
+    // 用户已离开页面，迟到失败不得再触发页面 onError 弹错
+    expect(onError).not.toHaveBeenCalled()
+  })
+
   it('并发响应以最后一次为准：过期响应不覆盖新结果（bug #4 守卫）', async () => {
     let resolveOld!: (v: { items: unknown[]; total: number }) => void
     const old = new Promise((resolve) => {
@@ -135,7 +193,7 @@ describe('useListQuery', () => {
 
 // ListFilterBar 组件单测：关键字防抖、按钮事件、重置清空关键字
 import { mount, flushPromises } from '@vue/test-utils'
-import { defineComponent, h } from 'vue'
+import { defineComponent, effectScope, h } from 'vue'
 import ElementPlus from 'element-plus'
 import ListFilterBar from '../components/ListFilterBar.vue'
 
