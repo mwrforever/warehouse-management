@@ -116,6 +116,9 @@ export function useScanInbound(opts: UseScanInboundOptions) {
         pendingQty.value = 1
       }
     } catch (e) {
+      // 迟到守卫：关窗 reset 已递增会话序号，迟到的失败（如"条码未匹配"）同样丢弃，
+      // 避免弹窗关闭后才弹出过期错误提示（BUG-02：成功回写有守卫，失败提示此前漏了）
+      if (seq !== sessionId) return
       // 条码未命中：提示并保留输入便于重扫（spec §7）
       opts.onError(e instanceof Error ? e.message : '条码未匹配到商品')
     }

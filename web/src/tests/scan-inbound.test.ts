@@ -245,6 +245,27 @@ describe('useScanInbound 组合式函数', () => {
     expect(pending.value).toBeNull()
   })
 
+  it('关窗作废在途扫码：reset 后迟到的条码未匹配不弹出错误提示（BUG-02 失败分支）', async () => {
+    // 手动控制 byBarcode 的 reject 时序：扫码发起 → 关窗 reset → 失败才迟到返回
+    let rejectByBarcode!: (reason: Error) => void
+    byBarcodeMock.mockReturnValue(
+      new Promise<ReturnType<typeof product>>((_resolve, reject) => {
+        rejectByBarcode = reject
+      }),
+    )
+    const onError = vi.fn()
+    const { barcode, handleScan, reset } = useScanInbound({
+      excludedIds: () => [],
+      onError,
+    })
+    barcode.value = '000000'
+    const scanning = handleScan()
+    reset() // 关窗：作废会话，迟到的"条码未匹配"错误提示必须被丢弃（此前 catch 分支漏了会话守卫）
+    rejectByBarcode(new Error('条码未匹配到商品'))
+    await scanning
+    expect(onError).not.toHaveBeenCalled()
+  })
+
   it('reset 作废仅影响在途请求：作废后再扫码（新会话）正常回写', async () => {
     byBarcodeMock.mockResolvedValue(product(1))
     const { barcode, handleScan, rows, perItem, reset } = useScanInbound({
