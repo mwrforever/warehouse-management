@@ -41,7 +41,9 @@ const emit = defineEmits<{
 
 const scan = useScanInbound({
   excludedIds: () => props.excludedIds ?? [],
-  maxQuantity: props.maxQuantity,
+  // 函数形式每次读取最新 props.maxQuantity：宿主以 inline/computed 传函数时引用会随渲染变化，
+  // setup 直传引用会过期导致上限校验失效
+  maxQuantity: (item) => props.maxQuantity?.(item) ?? Infinity,
   blockedType: props.blockedType,
   resolveProduct: props.resolveProduct,
   onError: (msg) => {

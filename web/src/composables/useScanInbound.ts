@@ -25,6 +25,8 @@ export interface MergeOptions {
   /** 宿主明细已存在的商品 id（累加关时视为已在列表） */
   excludedIds: number[]
   autoAccumulate: boolean
+  /** 数量上限（订单行剩余量，宿主页传入）；缺省 Infinity 表示不限（独立建单等场景） */
+  maxQuantity?: number
 }
 
 // 纯函数：按四态语义把扫码商品并入行列表。返回 error 表示拒绝（不修改 rows）。
@@ -33,6 +35,7 @@ export function mergeScannedItem(
   item: ScanItem,
   opts: MergeOptions,
 ): { rows: ScanItem[]; error: string | null } {
+  const max = opts.maxQuantity ?? Infinity
   const dup =
     opts.excludedIds.includes(item.product_id) || rows.some((r) => r.product_id === item.product_id)
   if (dup && !opts.autoAccumulate) {
@@ -41,9 +44,18 @@ export function mergeScannedItem(
   }
   const existing = rows.find((r) => r.product_id === item.product_id)
   if (existing) {
-    // 累加开：合并到同一行、数量相加（数量为 decimal(12,2)，保留 2 位）
-    existing.quantity = Number((existing.quantity + item.quantity).toFixed(2))
+    // 累加开：合并到同一行、数量相加（数量为 decimal(12,2)，保留 2 位）；
+    // 先算合并总量再落值：单次合规但累计超订单剩余量时拒绝，原行保持不变（BUG-03）
+    const merged = Number((existing.quantity + item.quantity).toFixed(2))
+    if (merged > max) {
+      return { rows, error: `累计数量不能超过订单剩余量 ${max}` }
+    }
+    existing.quantity = merged
     return { rows, error: null }
+  }
+  // 新行单次校验：本次数量即行总量，超订单剩余量直接拒绝
+  if (item.quantity > max) {
+    return { rows, error: `数量不能超过订单剩余量 ${max}` }
   }
   rows.push({ ...item })
   return { rows, error: null }
@@ -109,14 +121,12 @@ export function useScanInbound(opts: UseScanInboundOptions) {
   }
 
   function addItem(item: ScanItem) {
+    // 上限（订单行剩余量）由宿主页经 maxQuantity 传入；单次与合并累计校验收敛在纯函数内
     const max = opts.maxQuantity ? opts.maxQuantity(item) : Infinity
-    if (item.quantity > max) {
-      opts.onError(`数量不能超过${max}`)
-      return
-    }
     const r = mergeScannedItem(rows.value, item, {
       excludedIds: opts.excludedIds(),
       autoAccumulate: autoAccumulate.value,
+      maxQuantity: max,
     })
     if (r.error) opts.onError(r.error)
   }

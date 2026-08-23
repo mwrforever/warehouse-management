@@ -44,6 +44,39 @@ describe('mergeScannedItem（四态合并核心）', () => {
     expect(r.error).toBeNull()
     expect(rows).toHaveLength(2)
   })
+
+  it('累加开：剩余 10 已扫 8 再合并 5 超限拒绝，原行保持 8（BUG-03 合并后复核）', () => {
+    const rows = [item(1, 8)]
+    const r = mergeScannedItem(rows, item(1, 5), {
+      excludedIds: [],
+      autoAccumulate: true,
+      maxQuantity: 10,
+    })
+    expect(r.error).toContain('订单剩余量')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.quantity).toBe(8)
+  })
+
+  it('累加开：合并后恰好等于剩余量放行', () => {
+    const rows = [item(1, 8)]
+    const r = mergeScannedItem(rows, item(1, 2), {
+      excludedIds: [],
+      autoAccumulate: true,
+      maxQuantity: 10,
+    })
+    expect(r.error).toBeNull()
+    expect(rows[0]!.quantity).toBe(10)
+  })
+
+  it('新行单次超限拒绝且不加行', () => {
+    const r = mergeScannedItem([], item(1, 11), {
+      excludedIds: [],
+      autoAccumulate: true,
+      maxQuantity: 10,
+    })
+    expect(r.error).toContain('订单剩余量')
+    expect(r.rows).toHaveLength(0)
+  })
 })
 
 describe('useScanInbound 组合式函数', () => {
@@ -98,6 +131,29 @@ describe('useScanInbound 组合式函数', () => {
     submitPending()
     expect(onError).toHaveBeenCalledWith(expect.stringContaining('不能超过'))
     expect(rows.value).toHaveLength(0)
+  })
+
+  it('数量上限合并复核：剩余 10 已扫 8 再提交 5 被拒且原行不变（BUG-03）', async () => {
+    byBarcodeMock.mockResolvedValue(product(1))
+    const onError = vi.fn()
+    const { barcode, handleScan, pendingQty, submitPending, rows } = useScanInbound({
+      excludedIds: () => [],
+      maxQuantity: () => 10, // 订单行剩余量（宿主页传入）
+      onError,
+    })
+    barcode.value = '888888'
+    await handleScan()
+    pendingQty.value = 8
+    submitPending()
+    expect(rows.value[0]!.quantity).toBe(8)
+    // 同商品再次扫码提交 5：单次 5 ≤ 10，但累计 13 > 10，必须拦截
+    barcode.value = '888888'
+    await handleScan()
+    pendingQty.value = 5
+    submitPending()
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('订单剩余量'))
+    expect(rows.value).toHaveLength(1)
+    expect(rows.value[0]!.quantity).toBe(8)
   })
 
   it('累加关：同条码再次扫码报错「该商品已在列表中」', async () => {
