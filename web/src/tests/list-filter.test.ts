@@ -2,7 +2,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useListQuery } from '../composables/useListQuery'
 
-const fetchMock = vi.fn()
+// fetch mock 显式对齐 useListQuery 的 fetch 契约（参数含分页字段与任意筛选、返回统一分页结构）：
+// mock 签名漂移可被 vue-tsc 编译期捕获，替代原 as never 整体关闭检查（BUG-09）
+type ListFetch = (
+  q: { page: number; per_page: number } & Record<string, unknown>,
+) => Promise<{ items: unknown[]; total: number }>
+
+const fetchMock = vi.fn<ListFetch>()
 function makeFetch() {
   fetchMock.mockImplementation(async (q: { page: number }) => ({
     items: [{ page: q.page }],
@@ -23,7 +29,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { query, search } = useListQuery({
       defaultQuery: { keyword: '', status: undefined },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     expect(query.page).toBe(1)
@@ -36,7 +42,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { load, search } = useListQuery({
       defaultQuery: { keyword: '', status: undefined },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     search() // 立即一次
@@ -50,7 +56,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { query, load, search } = useListQuery({
       defaultQuery: { keyword: '', status: undefined },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     search()
@@ -66,7 +72,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { query, search, reset } = useListQuery({
       defaultQuery: { keyword: '', status: 1 },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     search()
@@ -88,7 +94,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { query, search, refresh } = useListQuery({
       defaultQuery: { keyword: '' },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     search()
@@ -103,7 +109,7 @@ describe('useListQuery', () => {
     const fetch = makeFetch()
     const { load, cancel } = useListQuery({
       defaultQuery: { keyword: '' },
-      fetch: fetch as never,
+      fetch: fetch,
       debounceMs: 300,
     })
     load()
@@ -172,15 +178,16 @@ describe('useListQuery', () => {
 
   it('并发响应以最后一次为准：过期响应不覆盖新结果（bug #4 守卫）', async () => {
     let resolveOld!: (v: { items: unknown[]; total: number }) => void
-    const old = new Promise((resolve) => {
-      resolveOld = resolve as (v: { items: unknown[]; total: number }) => void
+    // 显式标注 Promise 值类型与 ListFetch 返回结构一致：resolve 回调类型随之匹配，无需再断言收窄
+    const old = new Promise<{ items: unknown[]; total: number }>((resolve) => {
+      resolveOld = resolve
     })
     fetchMock
       .mockImplementationOnce(() => old)
       .mockImplementationOnce(async () => ({ items: [{ n: 'new' }], total: 1 }))
     const { search, list } = useListQuery({
       defaultQuery: { keyword: '' },
-      fetch: fetchMock as never,
+      fetch: fetchMock,
       debounceMs: 300,
     })
     search()

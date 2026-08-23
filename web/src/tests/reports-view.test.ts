@@ -147,7 +147,16 @@ describe('ReportsView', () => {
     // 共享 auth mock：给 user 赋值后组件 onMounted 预填操作人；切换工单/提交报工后均保留预填（不清空操作人）
     setActivePinia(createPinia())
     const auth = useAuthStore()
-    auth.user = { name: '测试管理员' } as never
+    // 预填用户按真实 AuthUser 结构补全必填字段（组件仅消费 name），替代原 as never 类型逃逸（BUG-09）
+    auth.user = {
+      id: 1,
+      name: '测试管理员',
+      username: 'admin',
+      email: null,
+      status: 1,
+      roles: [],
+      permissions: [],
+    }
     const wrapper = mount(ReportsView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     // 操作人 UserSelect 仅在进行中工序卡片内渲染：先选中工单再断言
