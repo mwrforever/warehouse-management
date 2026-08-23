@@ -6,10 +6,14 @@
 // 缓存置于普通 script 块而非 setup 块：可导出重置钩子供测试隔离（模块级变量跨用例共享会污染断言）。
 // UserItem 类型由下方 <script setup> 块导入（import 提升，两块共享同一模块作用域）
 let cachedUsers: UserItem[] | null = null
+// 缓存的真实用户总数：后端 per_page 钳制 100，items.length ≤100 而 total 可更大，
+// 若只缓存 items 会导致二次挂载分页总数漂移为 100（BUG-11）
+let cachedTotal: number | null = null
 
 // 测试隔离钩子：重置模块级缓存（pre-flight Finding B 裁决：用例 beforeEach 调用）
 export function __resetUserSelectCache() {
   cachedUsers = null
+  cachedTotal = null
 }
 </script>
 
@@ -60,14 +64,15 @@ function pick(name: string) {
 async function loadOptions() {
   loading.value = true
   try {
-    if (cachedUsers !== null) {
+    if (cachedUsers !== null && cachedTotal !== null) {
       users.value = cachedUsers
-      total.value = cachedUsers.length
-      mode.value = cachedUsers.length <= 50 ? 'select' : 'dialog'
+      total.value = cachedTotal // 恢复真实总数，而非 items.length（后端 per_page 钳制导致 ≤100）
+      mode.value = cachedTotal <= 50 ? 'select' : 'dialog'
       return
     }
     const res = await userApi.list({ per_page: 100 })
     cachedUsers = res.items
+    cachedTotal = res.total
     users.value = res.items
     total.value = res.total
     // 形态只在此处按用户总数判定一次；searchDialog/changeDialogPage 回写搜索 total 时不触碰
@@ -75,6 +80,7 @@ async function loadOptions() {
   } catch (e) {
     // 用户接口失败：清缓存以便下次重试，页面仅显示占位
     cachedUsers = null
+    cachedTotal = null
     ElMessage.error((e as Error).message)
   } finally {
     loading.value = false

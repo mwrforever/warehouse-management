@@ -145,4 +145,20 @@ describe('UserSelect', () => {
     await flushPromises()
     expect(listMock).toHaveBeenCalledTimes(1) // 命中缓存，不再请求
   })
+
+  it('缓存命中保留真实总数：用户 >100 时二次挂载分页 total 不漂移（BUG-11）', async () => {
+    // 后端 per_page 钳制 100（UserController min(100)）：items 至多 100 条而 total=120
+    listMock.mockResolvedValue({ items: users(100), total: 120 })
+    const mountOne = async () =>
+      mount(UserSelect, { props: { modelValue: null }, global: { plugins: [ElementPlus] } })
+    const w1 = await mountOne()
+    await flushPromises()
+    w1.unmount()
+    const w2 = await mountOne()
+    await flushPromises()
+    await w2.find('input').trigger('click') // 打开弹窗
+    // 缓存命中不重发请求，且分页器总数为真实 120 而非 items.length=100（第 11 页起可达）
+    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(w2.findComponent({ name: 'ElPagination' }).props('total')).toBe(120)
+  })
 })
