@@ -61,13 +61,15 @@ const onSearch = throttle(() => {
 onScopeDispose(onSearch.cancel)
 
 // 重置：清空内部关键字并通知父级（父级恢复默认筛选后统一查询）。
-// 先冲刷再清空：300ms 内双击重置时，第二次 reset 会取消第一次排定的同步计时器且 source 已是 ''，
-// 若不同步 debounced 其将永久滞留旧关键字，重输同词时同值赋值不触发 watch、筛选静默失效（BUG-06）。
+// 先清空再冲刷：source 置 '' 后 flush 立即把 debounced 同步为空串并取消挂起计时器——
+// 若 debounced 滞留旧关键字（双击重置吞掉计时器、或单击重置后 300ms 内重输同词时窗口到期赋回同值），
+// 同值赋值不触发 watch，重输同词将静默失效（BUG-06）。冲刷触发的 keyword-change('') 排定的
+// 防抖查询由父级 reset() 内的 load.cancel() 取消，不再于 600ms 后重复请求。
 // 同步 emit update:keyword('')：父级 v-model 立即收到清空（pre-flight Finding C 裁决：改实现，
-// 与测试"点重置后立即断言 update:keyword=['']"一致），防抖 watch 300ms 后重复 emit 同值无害
+// 与测试"点重置后立即断言 update:keyword=['']"一致）
 function onReset() {
-  kw.flush()
   kw.source.value = ''
+  kw.flush()
   emit('update:keyword', '')
   emit('reset')
 }

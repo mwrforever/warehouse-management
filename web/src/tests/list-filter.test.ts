@@ -307,6 +307,30 @@ describe('ListFilterBar', () => {
     expect(emitted!.at(-1)).toEqual(['abc'])
   })
 
+  it('单击重置后 300ms 内重输相同关键字仍触发 keyword-change（BUG-06 单击变体）', async () => {
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '' },
+      global: { plugins: [ElementPlus] },
+    })
+    const input = wrapper.find('input')
+    await input.setValue('abc')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const btns = wrapper.findAll('button')
+    const resetBtn = btns.find((b) => b.text().includes('重'))
+    // 单击重置后立即（300ms 防抖窗口内）重输同一词：若重置时未把 debounced
+    // 同步为空串，窗口到期赋回 'abc' 与滞留值相同，同值赋值不触发 watch（静默失效）
+    await resetBtn!.trigger('click')
+    await flushPromises()
+    const countBefore = wrapper.emitted('keyword-change')?.length ?? 0
+    await input.setValue('abc')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    const emitted = wrapper.emitted('keyword-change')
+    expect(emitted!.length).toBeGreaterThan(countBefore)
+    expect(emitted!.at(-1)).toEqual(['abc'])
+  })
+
   it('输入后 300ms 内回车：立即用新关键字查询且 600ms 内不重复请求（BUG-07）', async () => {
     // 按真实页面接线组装宿主：v-model:keyword + keyword-change 触发防抖 load + search 立即查询
     const fetchStub = vi.fn(async (q: { keyword: string; page: number; per_page: number }) => ({
