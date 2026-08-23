@@ -1,6 +1,6 @@
 // 扫码逻辑单测：四态行为、同条码报错、数量上限校验、合并相加（纯函数核心，不依赖 Vue 挂载）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mergeScannedItem, useScanInbound } from '../composables/useScanInbound'
+import { mergeScannedItem, useScanInbound, calcMaxQuantity } from '../composables/useScanInbound'
 
 const byBarcodeMock = vi.fn()
 vi.mock('../api/product', () => ({
@@ -16,6 +16,28 @@ function item(product_id: number, quantity = 1) {
 function product(id: number) {
   return { id, name: `p${id}`, code: `C${id}`, type: 'finished', spec: null, unit_name: null }
 }
+
+describe('calcMaxQuantity（订单剩余量换算本次可扫入量，钳制非负）', () => {
+  it('订单未映射商品（独立建单/订单外商品）返回 Infinity 维持无上限', () => {
+    expect(calcMaxQuantity(undefined, 0)).toBe(Infinity)
+  })
+
+  it('正常场景：剩余量减表单已填数量即为本次可扫入量', () => {
+    expect(calcMaxQuantity(10, 2)).toBe(8)
+  })
+
+  it('金额精度：结果保留 2 位小数（数量明文 decimal(12,2)）', () => {
+    expect(calcMaxQuantity(10.123, 2.001)).toBe(8.12)
+  })
+
+  it('表单已填超过剩余量：钳制为 0 而非负值（本次不可再扫入）', () => {
+    expect(calcMaxQuantity(10, 12)).toBe(0)
+  })
+
+  it('表单已填恰好等于剩余量：钳制为 0（边界，同超量不可再扫）', () => {
+    expect(calcMaxQuantity(10, 10)).toBe(0)
+  })
+})
 
 describe('mergeScannedItem（四态合并核心）', () => {
   it('累加开：同商品合并数量相加', () => {

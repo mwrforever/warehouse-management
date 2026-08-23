@@ -14,6 +14,7 @@ import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { productApi } from '../../api/product'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { calcMaxQuantity } from '../../composables/useScanInbound'
 import { useListQuery } from '../../composables/useListQuery'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
@@ -137,12 +138,12 @@ const scanExcludedIds = computed(() =>
 
 // 扫码数量上限（BUG-03，spec §4.4 由宿主页传入）：订单生成场景 = 订单行剩余量 − 表单该商品已填数量
 // （即本次还可扫入的量），弹窗内累计不超此值则关窗合并后必不超剩余量；
-// 无映射商品（独立建单/订单外商品）返回 Infinity 维持原无上限行为
+// 表单已超剩余量时钳制为 0（本次不可再扫入）而非负值；无映射商品（独立建单/订单外商品）返回 Infinity 维持原无上限行为
 function scanMaxQuantity(it: ScanItem): number {
-  const remaining = orderRemaining.value.get(it.product_id)
-  if (remaining === undefined) return Infinity
-  const inForm = form.items.find((i) => i.product_id === it.product_id)?.quantity ?? 0
-  return Number((remaining - inForm).toFixed(2))
+  return calcMaxQuantity(
+    orderRemaining.value.get(it.product_id),
+    form.items.find((i) => i.product_id === it.product_id)?.quantity ?? 0,
+  )
 }
 
 // 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；

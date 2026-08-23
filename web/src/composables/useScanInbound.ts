@@ -29,6 +29,14 @@ export interface MergeOptions {
   maxQuantity?: number
 }
 
+// 纯函数：订单场景换算本次可扫入量 = 订单行剩余量 − 表单该商品已填数量（spec §4.4 由宿主页传入）。
+// 表单已超剩余量时差值为负：钳制为 0 表示本次不可再扫入，避免提示"不能超过 -2"之类费解文案；
+// 无映射商品（独立建单/订单外商品）返回 Infinity 维持原无上限行为。结果按 2 位小数（数量 decimal(12,2)）钳制。
+export function calcMaxQuantity(remaining: number | undefined, inForm: number): number {
+  if (remaining === undefined) return Infinity
+  return Math.max(0, Number((remaining - inForm).toFixed(2)))
+}
+
 // 纯函数：按四态语义把扫码商品并入行列表。返回 error 表示拒绝（不修改 rows）。
 export function mergeScannedItem(
   rows: ScanItem[],
