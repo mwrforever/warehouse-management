@@ -19,7 +19,6 @@ export function __resetUserSelectCache() {
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { userApi, type UserItem } from '../api/user'
 import { useDebouncedRef } from '../utils/async'
 
@@ -77,11 +76,12 @@ async function loadOptions() {
     total.value = res.total
     // 形态只在此处按用户总数判定一次；searchDialog/changeDialogPage 回写搜索 total 时不触碰
     mode.value = res.total <= 50 ? 'select' : 'dialog'
-  } catch (e) {
-    // 用户接口失败：清缓存以便下次重试，页面仅显示占位
+  } catch {
+    // 初始加载失败静默降级（BUG-12）：无 user.list 权限的自定义角色打开报工页属预期角色配置
+    // 而非异常，弹错只会持续打扰；下拉为空 + 保留预填值（报工默认当前登录人）已满足主流程。
+    // 清缓存以便下次挂载重试；形态保持默认下拉，不阻塞宿主页
     cachedUsers = null
     cachedTotal = null
-    ElMessage.error((e as Error).message)
   } finally {
     loading.value = false
   }
@@ -97,9 +97,9 @@ async function searchDialog() {
     if (seq !== requestSeq) return // 已有更新的请求，丢弃本次过期响应
     users.value = res.items
     total.value = res.total
-  } catch (e) {
-    if (seq !== requestSeq) return
-    ElMessage.error((e as Error).message)
+  } catch {
+    // 搜索失败与初始加载同语义：静默降级不弹错（含 403 无权限），保留表格已有结果，
+    // 用户再次输入/翻页即天然重试——辅助选择器的失败不应打断报工主流程
   } finally {
     if (seq === requestSeq) dialogLoading.value = false
   }
@@ -118,9 +118,8 @@ async function changeDialogPage(p: number) {
     if (seq !== requestSeq) return // 翻页与搜索并发时同理，只认最后一次请求
     users.value = res.items
     total.value = res.total
-  } catch (e) {
-    if (seq !== requestSeq) return
-    ElMessage.error((e as Error).message)
+  } catch {
+    // 翻页失败同搜索失败：静默降级（BUG-12 取舍见 searchDialog）
   } finally {
     if (seq === requestSeq) dialogLoading.value = false
   }

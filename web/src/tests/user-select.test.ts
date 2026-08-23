@@ -1,5 +1,5 @@
-// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、选中回填、数据缓存，
-// 弹窗防抖搜索（命中收缩不翻转形态、慢响应乱序丢弃守卫）
+// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、选中回填、数据缓存（真实 total），
+// 弹窗防抖搜索（命中收缩不翻转形态、慢响应乱序丢弃守卫）、无权限加载/搜索失败静默降级
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
@@ -160,5 +160,38 @@ describe('UserSelect', () => {
     // 缓存命中不重发请求，且分页器总数为真实 120 而非 items.length=100（第 11 页起可达）
     expect(listMock).toHaveBeenCalledTimes(1)
     expect(w2.findComponent({ name: 'ElPagination' }).props('total')).toBe(120)
+  })
+
+  it('初始加载失败（无 user.list 权限）时静默降级：不弹错、保留预填值（BUG-12）', async () => {
+    // 自定义角色未授 user.list：打开报工页即 403（http.ts 解包后 reject Error('无权限操作')）
+    listMock.mockRejectedValue(new Error('无权限操作'))
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: '张三' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    // 静默降级：不弹 ElMessage.error（无权限属预期角色配置而非异常）
+    expect(document.querySelector('.el-message')).toBe(null)
+    // 下拉为空但保留预填值（el-select 直接显示 modelValue 原文），不阻塞报工表单
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
+    expect(wrapper.find('.el-select__placeholder').text()).toBe('张三')
+  })
+
+  it('弹窗搜索失败同样静默降级：不弹错、表格保留已有结果（BUG-12）', async () => {
+    // 初始 60 用户正常；弹窗内搜索被 403 拒绝
+    listMock.mockResolvedValueOnce({ items: users(60), total: 60 })
+    listMock.mockRejectedValue(new Error('无权限操作'))
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click')
+    await wrapper.find('.search-row input').setValue('用户1')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    // 与初始降级语义一致：搜索失败同样静默，不打断报工主流程
+    expect(document.querySelector('.el-message')).toBe(null)
+    expect(wrapper.findAll('.user-dialog .el-table__row')).toHaveLength(60)
   })
 })
