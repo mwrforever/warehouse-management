@@ -29,6 +29,27 @@ async function pickOption(page: Page, name: string) {
 test.describe('编号自动生成', () => {
   test.describe.configure({ mode: 'serial' })
 
+  // TC-NUM-03 兜底恢复标记：改过编号配置的用例无论成败，afterEach 都恢复 po 规则位宽为种子默认 3。
+  // 恢复内联在用例尾部时中途失败即跳过，seq_length=4 残留会让 purchase.spec 的 ^PO\d{12}\d{3}$
+  // 断言级联全挂（BUG-02）；恢复走 API 而非 UI 步骤，规避恢复动作自身的弹窗/确认框脆弱性。
+  let numberingDirty = false
+
+  test.afterEach(async ({ page }) => {
+    if (!numberingDirty) return
+    numberingDirty = false
+    const cfgs = await apiGet(page, '/api/v1/document-number-configs', { per_page: 50 })
+    const po = cfgs.items.find((c: { type: string }) => c.type === 'po')
+    expect(po, '采购订单编号配置应存在').toBeTruthy()
+    const res = await apiPost(page, `/api/v1/document-number-configs/${po.id}`, {
+      prefix: po.prefix,
+      date_format: po.date_format,
+      seq_length: 3,
+      enabled: po.enabled,
+      remark: po.remark,
+    })
+    expect(res.code).toBe(0)
+  })
+
   test('TC-NUM-01 新建商品留空编码/条码 → 自动生成且条码=编码、长度一致', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
     await page.goto('/master/products')
@@ -98,6 +119,8 @@ test.describe('编号自动生成', () => {
 
   test('TC-NUM-03 编号规则页改 seq_length → 预览变化 → 保存后新单号按新位宽', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
+    // 进入即标记脏配置：此后任一步失败，afterEach 仍会恢复 po 位宽（防配置残留级联其它 spec）
+    numberingDirty = true
     await page.goto('/system/numbering')
     // 找到采购订单行 → 编辑
     const poRow = page.locator('.el-table__row', { hasText: '采购订单' })
@@ -129,17 +152,6 @@ test.describe('编号自动生成', () => {
     ).toBeVisible()
     const firstRow = page.locator('.el-table__row').first()
     await expect(firstRow.locator('.font-code').first()).toHaveText(/^PO\d{12}\d{4}$/)
-
-    // 末尾清理：恢复 seq_length=3（数据自清），避免影响其余用例
-    await page.goto('/system/numbering')
-    const poRow2 = page.locator('.el-table__row', { hasText: '采购订单' })
-    await poRow2.getByRole('button', { name: /编\s*辑/ }).click()
-    const dialog2 = page.locator('.el-dialog').last()
-    await dialog2.locator('.el-form-item', { hasText: '序列长度' }).locator('input').fill('3')
-    await dialog2.getByRole('button', { name: /保\s*存/ }).click()
-    const confirmBox2 = page.locator('.el-message-box')
-    await expect(confirmBox2).toBeVisible()
-    await confirmBox2.getByRole('button', { name: /确\s*定/ }).click()
-    await expect(page.locator('.el-message--success')).toContainText('已保存')
+    // 配置恢复由 describe 级 afterEach 兜底执行（seq_length=3），不再内联在用例尾部
   })
 })
