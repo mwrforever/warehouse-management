@@ -1,4 +1,5 @@
 <!-- 用户选择器：用户数 ≤50 渲染 el-select 下拉直选；>50 切换为点击输入框弹出分页搜索弹窗（300ms 防抖实时搜索 + 分页表格）
+     形态由首次加载的用户总数一次性判定（mode），搜索/翻页只更新列表与分页 total，不翻转形态（BUG-01）
      modelValue 绑定用户姓名（与报工 operator 字段口径一致）；数据模块级缓存，卸载后再次挂载不重复请求 -->
 <script lang="ts">
 // 用户选项模块级缓存：跨组件挂载复用（同一 SPA 会话内用户列表稳定，避免每次进页重复请求）。
@@ -35,7 +36,10 @@ const emit = defineEmits<{
 }>()
 
 const users = ref<UserItem[]>([])
+// total 仅作弹窗分页器总数（搜索命中数）；组件形态由 mode 决定，不依赖此值（BUG-01）
 const total = ref(0)
+// 组件形态：首次加载按用户总数一次性判定，后续搜索/翻页不翻转（防止弹窗交互中被卸载且无法恢复）
+const mode = ref<'select' | 'dialog'>('select')
 const loading = ref(false)
 const dialogLoading = ref(false)
 
@@ -56,12 +60,15 @@ async function loadOptions() {
     if (cachedUsers !== null) {
       users.value = cachedUsers
       total.value = cachedUsers.length
+      mode.value = cachedUsers.length <= 50 ? 'select' : 'dialog'
       return
     }
     const res = await userApi.list({ per_page: 100 })
     cachedUsers = res.items
     users.value = res.items
     total.value = res.total
+    // 形态只在此处按用户总数判定一次；searchDialog/changeDialogPage 回写搜索 total 时不触碰
+    mode.value = res.total <= 50 ? 'select' : 'dialog'
   } catch (e) {
     // 用户接口失败：清缓存以便下次重试，页面仅显示占位
     cachedUsers = null
@@ -108,9 +115,9 @@ onMounted(loadOptions)
 </script>
 
 <template>
-  <!-- 下拉模式：用户 ≤50，el-select 直接选择 -->
+  <!-- 下拉模式：用户 ≤50，el-select 直接选择（形态由 mode 决定，与搜索回写的分页 total 解耦） -->
   <el-select
-    v-if="total <= 50"
+    v-if="mode === 'select'"
     :model-value="modelValue"
     filterable
     :clearable="clearable"

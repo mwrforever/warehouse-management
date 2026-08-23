@@ -83,6 +83,27 @@ describe('UserSelect', () => {
     expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['用户1'])
   })
 
+  it('弹窗内防抖搜索命中 ≤50 时形态不翻转（BUG-01/15）', async () => {
+    // 初始 60 用户走弹窗模式；输入关键字后命中仅 3 条
+    listMock.mockResolvedValueOnce({ items: users(60), total: 60 })
+    listMock.mockResolvedValue({ items: users(3), total: 3 })
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click') // 点击输入框弹出搜索弹窗
+    // 300ms 防抖到期自动搜索（BUG-15：补齐弹窗防抖搜索路径的用例覆盖）
+    await wrapper.find('.search-row input').setValue('用户1')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    // 命中数 3 ≤50，但形态由用户总数决定：弹窗不被卸载成 el-select
+    expect(wrapper.find('.user-dialog').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false)
+    // 防抖搜索已带关键字发出请求
+    expect(listMock).toHaveBeenLastCalledWith({ per_page: 10, keyword: '用户1' })
+  })
+
   it('缓存已拉取选项：二次挂载不再请求（组件卸载前缓存复用）', async () => {
     listMock.mockResolvedValue({ items: users(5), total: 5 })
     const mountOne = async () =>
