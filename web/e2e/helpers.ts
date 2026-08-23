@@ -46,11 +46,15 @@ export async function loginByAPI(page: Page, username: string, password: string)
       return
     }
   }
+  // 回退路径对齐 loginByUI：chromium project 已注入 admin storageState，路由守卫会把已登录的
+  // /login 访问重定向回仪表盘（"先进公开登录页建立同源"并不成立），MainLayout 会以 admin 身份
+  // 闪现一次；先建立同源并清除注入的旧 token，后续导航才以新身份落地
+  await page.goto('/')
+  await page.evaluate(() => localStorage.removeItem('token'))
   const res = await page.request.post('/api/v1/auth/login', { data: { username, password } })
   expect(res.ok()).toBeTruthy()
   const body = (await res.json()) as { data: { token: string } }
-  // 先进公开登录页建立同源，写入 token 后导航；路由守卫读取 localStorage 自动拉取用户
-  await page.goto('/login')
+  // 同源已建立：直接写入新 token 再导航（相同 URL 强制 reload），路由守卫读取 localStorage 自动拉取用户
   await page.evaluate((token) => localStorage.setItem('token', token), body.data.token)
   await page.goto('/dashboard')
   await expect(page).toHaveURL(/\/dashboard/)
