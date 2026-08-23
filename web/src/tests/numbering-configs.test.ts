@@ -105,11 +105,13 @@ describe('编号规则页保存反馈与表单校验', () => {
     await clickSave(wrapper)
 
     expect(systemSettingApi.update).not.toHaveBeenCalled()
-    // 字段级错误提示经 100ms 防抖后渲染（element-plus validateStateDebounced），等待真实定时器
-    await new Promise((r) => setTimeout(r, 150))
-    const err = wrapper.find('.el-form-item__error')
-    expect(err.exists(), '应显示字段级校验错误').toBe(true)
-    expect(err.text()).toContain('大写字母')
+    // 字段级错误提示经 100ms 防抖后渲染（element-plus validateStateDebounced），
+    // 轮询等待断言，消除对防抖内部时序的实现耦合（评审 Minor-2）
+    await vi.waitFor(() => {
+      const err = wrapper.find('.el-form-item__error')
+      expect(err.exists(), '应显示字段级校验错误').toBe(true)
+      expect(err.text()).toContain('大写字母')
+    })
     wrapper.unmount()
   })
 
@@ -123,9 +125,10 @@ describe('编号规则页保存反馈与表单校验', () => {
     await clickSave(wrapper)
 
     expect(systemSettingApi.update).not.toHaveBeenCalled()
-    // 字段级错误提示经 100ms 防抖后渲染（同上一用例）
-    await new Promise((r) => setTimeout(r, 150))
-    expect(wrapper.find('.el-form-item__error').text()).toContain('255')
+    // 字段级错误提示经 100ms 防抖后渲染（同上一用例，轮询等待）
+    await vi.waitFor(() => {
+      expect(wrapper.find('.el-form-item__error').text()).toContain('255')
+    })
     wrapper.unmount()
   })
 
