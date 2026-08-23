@@ -18,6 +18,16 @@ async function apiPost(page: Page, url: string, body?: unknown) {
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
+// 认证 PUT 辅助：配置恢复等更新类接口（如 document-number-configs/{id}）只接受 PUT，
+// 复用 apiPost 会因方法不符收到 405（响应体无 code 字段），恢复动作静默失效
+async function apiPut(page: Page, url: string, body?: unknown) {
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  const res = await page.request.put(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: body,
+  })
+  return (await res.json()) as { code: number; message?: string; data?: unknown }
+}
 
 // 下拉项选择：等待唯一可见 option 后点击（用法见 purchase.spec.ts 注释）
 async function pickOption(page: Page, name: string) {
@@ -28,6 +38,27 @@ async function pickOption(page: Page, name: string) {
 
 test.describe('编号自动生成', () => {
   test.describe.configure({ mode: 'serial' })
+
+  // TC-NUM-03 兜底恢复标记：改过编号配置的用例无论成败，afterEach 都恢复 po 规则位宽为种子默认 3。
+  // 恢复内联在用例尾部时中途失败即跳过，seq_length=4 残留会让 purchase.spec 的 ^PO\d{12}\d{3}$
+  // 断言级联全挂（BUG-02）；恢复走 API 而非 UI 步骤，规避恢复动作自身的弹窗/确认框脆弱性。
+  let numberingDirty = false
+
+  test.afterEach(async ({ page }) => {
+    if (!numberingDirty) return
+    numberingDirty = false
+    const cfgs = await apiGet(page, '/api/v1/document-number-configs', { per_page: 50 })
+    const po = cfgs.items.find((c: { type: string }) => c.type === 'po')
+    expect(po, '采购订单编号配置应存在').toBeTruthy()
+    const res = await apiPut(page, `/api/v1/document-number-configs/${po.id}`, {
+      prefix: po.prefix,
+      date_format: po.date_format,
+      seq_length: 3,
+      enabled: po.enabled,
+      remark: po.remark,
+    })
+    expect(res.code).toBe(0)
+  })
 
   test('TC-NUM-01 新建商品留空编码/条码 → 自动生成且条码=编码、长度一致', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
@@ -67,11 +98,20 @@ test.describe('编号自动生成', () => {
     page,
   }) => {
     await loginByAPI(page, 'admin', 'admin123')
-    // 前置：保证 SUP-001 存在（复用既有采购 spec 的供应商）
-    const supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
+    // 前置：保证 SUP-001 存在（复用既有采购 spec 的供应商）。全量跑时本文件先于 purchase.spec、
+    // 种子库无 SUP-001，guard 必然走创建分支——创建后必须重取列表再取 id，否则对空快照解引用 items[0] 崩溃
+    let supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
     if (supList.total === 0) {
-      await apiPost(page, '/api/v1/suppliers', { name: '测试供应商', code: 'SUP-001', status: 1 })
+      const createdSup = await apiPost(page, '/api/v1/suppliers', {
+        name: '测试供应商',
+        code: 'SUP-001',
+        status: 1,
+      })
+      // 创建失败若不拦截，后续 items[0] 解引用会以更难排查的 TypeError 暴露
+      expect(createdSup.code, '前置创建供应商 SUP-001 应成功').toBe(0)
+      supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
     }
+    expect(supList.total, 'SUP-001 供应商应就绪').toBeGreaterThan(0)
     const prods = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001', per_page: 100 })
     expect(prods.total).toBeGreaterThan(0)
 
@@ -91,13 +131,26 @@ test.describe('编号自动生成', () => {
     // 列表首行单号匹配新格式：PO + YmdHi(12 位日期) + 3 位序号，无连字符（旧格式 -001 已废弃）
     const firstRow = page.locator('.el-table__row').first()
     await expect(firstRow.locator('.font-code').first()).toHaveText(/^PO\d{12}\d{3}$/)
-    // 同类型长度一致：再建一单（或检查今日最大序号长度一致）——列表内任一 PO 单号均满足同正则
-    const allNos = await firstRow.locator('.font-code').first().textContent()
-    expect(allNos).toMatch(/^PO\d{12}\d{3}$/)
+    const no1 = ((await firstRow.locator('.font-code').first().textContent()) ?? '').trim()
+
+    // 同类型长度一致（Spec 2）：真正再建一单（API 建单返回单号），断言两个不同单号长度相等
+    // （修复前对同一元素重复断言同一值，该验证点实际零覆盖）
+    const second = await apiPost(page, '/api/v1/purchase/orders', {
+      supplier_id: supList.items[0].id,
+      order_date: new Date().toISOString().slice(0, 10),
+      items: [{ product_id: prods.items[0].id, quantity: 1, price: 5 }],
+    })
+    expect(second.code).toBe(0)
+    const no2 = (second.data as { no: string }).no
+    expect(no2).toMatch(/^PO\d{12}\d{3}$/)
+    expect(no2).not.toBe(no1)
+    expect(no2.length).toBe(no1.length)
   })
 
   test('TC-NUM-03 编号规则页改 seq_length → 预览变化 → 保存后新单号按新位宽', async ({ page }) => {
     await loginByAPI(page, 'admin', 'admin123')
+    // 进入即标记脏配置：此后任一步失败，afterEach 仍会恢复 po 位宽（防配置残留级联其它 spec）
+    numberingDirty = true
     await page.goto('/system/numbering')
     // 找到采购订单行 → 编辑
     const poRow = page.locator('.el-table__row', { hasText: '采购订单' })
@@ -115,6 +168,8 @@ test.describe('编号自动生成', () => {
 
     // 新建采购订单验证 4 位序号（API 建单更快；列表再断言）
     const supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
+    // serial 下前置 TC-NUM-02 已保证 SUP-001 存在；显式断言防 items[0] 空解引用静默崩溃（如单独跑本用例则明确报前置缺失）
+    expect(supList.total, 'SUP-001 供应商应存在（由 TC-NUM-02 前置创建）').toBeGreaterThan(0)
     const prods = await apiGet(page, '/api/v1/products', { keyword: 'MAT-001', per_page: 100 })
     const created = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supList.items[0].id,
@@ -129,17 +184,6 @@ test.describe('编号自动生成', () => {
     ).toBeVisible()
     const firstRow = page.locator('.el-table__row').first()
     await expect(firstRow.locator('.font-code').first()).toHaveText(/^PO\d{12}\d{4}$/)
-
-    // 末尾清理：恢复 seq_length=3（数据自清），避免影响其余用例
-    await page.goto('/system/numbering')
-    const poRow2 = page.locator('.el-table__row', { hasText: '采购订单' })
-    await poRow2.getByRole('button', { name: /编\s*辑/ }).click()
-    const dialog2 = page.locator('.el-dialog').last()
-    await dialog2.locator('.el-form-item', { hasText: '序列长度' }).locator('input').fill('3')
-    await dialog2.getByRole('button', { name: /保\s*存/ }).click()
-    const confirmBox2 = page.locator('.el-message-box')
-    await expect(confirmBox2).toBeVisible()
-    await confirmBox2.getByRole('button', { name: /确\s*定/ }).click()
-    await expect(page.locator('.el-message--success')).toContainText('已保存')
+    // 配置恢复由 describe 级 afterEach 兜底执行（seq_length=3），不再内联在用例尾部
   })
 })

@@ -27,3 +27,5 @@ dist-ssr
 test-results/
 playwright-report/
 blob-report/
+# storageState 登录态（setup project 每次运行重新生成，含 admin token 禁止入库）
+.auth/

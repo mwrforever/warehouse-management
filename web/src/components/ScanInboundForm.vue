@@ -41,7 +41,9 @@ const emit = defineEmits<{
 
 const scan = useScanInbound({
   excludedIds: () => props.excludedIds ?? [],
-  maxQuantity: props.maxQuantity,
+  // 函数形式每次读取最新 props.maxQuantity：宿主以 inline/computed 传函数时引用会随渲染变化，
+  // setup 直传引用会过期导致上限校验失效
+  maxQuantity: (item) => props.maxQuantity?.(item) ?? Infinity,
   blockedType: props.blockedType,
   resolveProduct: props.resolveProduct,
   onError: (msg) => {
@@ -58,7 +60,7 @@ watch(
       await nextTick()
       scan.inputRef.value?.focus()
     } else {
-      // 关闭时取消进行中的防抖/请求并重置，防止卸载后 setState（spec §7）
+      // 关闭时重置并递增会话序号，作废在途条码请求的迟到回写，防止幽灵行残留（spec §7）
       scan.reset()
     }
   },

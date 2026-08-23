@@ -1,4 +1,5 @@
-// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、搜索防抖、选中回填、数据缓存
+// UserSelect 单测：≤50 走下拉 / >50 走分页弹窗、选中回填、数据缓存（真实 total），
+// 弹窗防抖搜索（命中收缩不翻转形态、慢响应乱序丢弃守卫）、无权限加载/搜索失败静默降级
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
@@ -83,6 +84,55 @@ describe('UserSelect', () => {
     expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['用户1'])
   })
 
+  it('弹窗内防抖搜索命中 ≤50 时形态不翻转（BUG-01/15）', async () => {
+    // 初始 60 用户走弹窗模式；输入关键字后命中仅 3 条
+    listMock.mockResolvedValueOnce({ items: users(60), total: 60 })
+    listMock.mockResolvedValue({ items: users(3), total: 3 })
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click') // 点击输入框弹出搜索弹窗
+    // 300ms 防抖到期自动搜索（BUG-15：补齐弹窗防抖搜索路径的用例覆盖）
+    await wrapper.find('.search-row input').setValue('用户1')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    // 命中数 3 ≤50，但形态由用户总数决定：弹窗不被卸载成 el-select
+    expect(wrapper.find('.user-dialog').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(false)
+    // 防抖搜索已带关键字发出请求
+    expect(listMock).toHaveBeenLastCalledWith({ per_page: 10, keyword: '用户1' })
+  })
+
+  it('慢响应乱序回写被丢弃：后发搜索结果不被先发慢请求覆盖（BUG-05）', async () => {
+    // 首笔搜索（关键字"旧"）响应悬挂，第二笔（关键字"新"）立即返回，随后旧响应才到
+    let resolveStale!: (v: { items: ReturnType<typeof users>; total: number }) => void
+    listMock.mockImplementation((params: { keyword?: string }) => {
+      if (params.keyword === undefined) return Promise.resolve({ items: users(60), total: 60 })
+      if (params.keyword === '旧') return new Promise((r) => (resolveStale = r))
+      return Promise.resolve({ items: users(3), total: 3 })
+    })
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click') // 打开弹窗
+    const search = async (kw: string) => {
+      await wrapper.find('.search-row input').setValue(kw)
+      vi.advanceTimersByTime(300) // 防抖到期自动搜索
+      await flushPromises()
+    }
+    await search('旧') // 先发：悬挂未回
+    await search('新') // 后发：立即回，3 条命中
+    resolveStale({ items: users(80), total: 80 }) // 先发的旧响应迟到
+    await flushPromises()
+    // 乱序守卫丢弃过期响应：表格与分页器保持后发搜索的结果
+    expect(wrapper.findAll('.user-dialog .el-table__row')).toHaveLength(3)
+    expect(wrapper.findComponent({ name: 'ElPagination' }).props('total')).toBe(3)
+  })
+
   it('缓存已拉取选项：二次挂载不再请求（组件卸载前缓存复用）', async () => {
     listMock.mockResolvedValue({ items: users(5), total: 5 })
     const mountOne = async () =>
@@ -94,5 +144,54 @@ describe('UserSelect', () => {
     await mountOne()
     await flushPromises()
     expect(listMock).toHaveBeenCalledTimes(1) // 命中缓存，不再请求
+  })
+
+  it('缓存命中保留真实总数：用户 >100 时二次挂载分页 total 不漂移（BUG-11）', async () => {
+    // 后端 per_page 钳制 100（UserController min(100)）：items 至多 100 条而 total=120
+    listMock.mockResolvedValue({ items: users(100), total: 120 })
+    const mountOne = async () =>
+      mount(UserSelect, { props: { modelValue: null }, global: { plugins: [ElementPlus] } })
+    const w1 = await mountOne()
+    await flushPromises()
+    w1.unmount()
+    const w2 = await mountOne()
+    await flushPromises()
+    await w2.find('input').trigger('click') // 打开弹窗
+    // 缓存命中不重发请求，且分页器总数为真实 120 而非 items.length=100（第 11 页起可达）
+    expect(listMock).toHaveBeenCalledTimes(1)
+    expect(w2.findComponent({ name: 'ElPagination' }).props('total')).toBe(120)
+  })
+
+  it('初始加载失败（无 user.list 权限）时静默降级：不弹错、保留预填值（BUG-12）', async () => {
+    // 自定义角色未授 user.list：打开报工页即 403（http.ts 解包后 reject Error('无权限操作')）
+    listMock.mockRejectedValue(new Error('无权限操作'))
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: '张三' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    // 静默降级：不弹 ElMessage.error（无权限属预期角色配置而非异常）
+    expect(document.querySelector('.el-message')).toBe(null)
+    // 下拉为空但保留预填值（el-select 直接显示 modelValue 原文），不阻塞报工表单
+    expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
+    expect(wrapper.find('.el-select__placeholder').text()).toBe('张三')
+  })
+
+  it('弹窗搜索失败同样静默降级：不弹错、表格保留已有结果（BUG-12）', async () => {
+    // 初始 60 用户正常；弹窗内搜索被 403 拒绝
+    listMock.mockResolvedValueOnce({ items: users(60), total: 60 })
+    listMock.mockRejectedValue(new Error('无权限操作'))
+    const wrapper = mount(UserSelect, {
+      props: { modelValue: null },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    await wrapper.find('input').trigger('click')
+    await wrapper.find('.search-row input').setValue('用户1')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    // 与初始降级语义一致：搜索失败同样静默，不打断报工主流程
+    expect(document.querySelector('.el-message')).toBe(null)
+    expect(wrapper.findAll('.user-dialog .el-table__row')).toHaveLength(60)
   })
 })

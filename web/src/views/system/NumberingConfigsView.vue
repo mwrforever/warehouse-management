@@ -36,9 +36,9 @@
 
     <!-- 编辑弹窗：字段变更即触发预览；位宽相关变更保存前确认 -->
     <el-dialog v-model="dialogVisible" title="编辑编号规则" width="520px">
-      <el-form :model="form" label-width="110px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
         <el-form-item label="类型">{{ form.type_label }}（{{ form.type }}）</el-form-item>
-        <el-form-item label="前缀" required>
+        <el-form-item label="前缀" prop="prefix">
           <el-input
             v-model="form.prefix"
             maxlength="4"
@@ -60,8 +60,8 @@
         <el-form-item label="状态"
           ><el-switch v-model="form.enabled" :active-value="true" :inactive-value="false"
         /></el-form-item>
-        <el-form-item label="备注"
-          ><el-input v-model="form.remark" type="textarea" :rows="2"
+        <el-form-item label="备注" prop="remark"
+          ><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="255"
         /></el-form-item>
         <el-form-item v-if="previewNo" label="规则预览">
           <span class="font-code">{{ previewNo }}</span>
@@ -79,10 +79,11 @@
 
 <script setup lang="ts">
 // 编号规则管理：列表 + 编辑弹窗 + 实时预览；seq_length/date_format 变更前确认位宽一致性
-import { onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
 import { systemSettingApi, type NumberConfigItem } from '../../api/systemSetting'
+import { debounce } from '../../utils/async'
 
 const auth = useAuthStore()
 const rows = ref<NumberConfigItem[]>([])
@@ -90,6 +91,8 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const saving = ref(false)
 const previewNo = ref('')
+// 弹窗表单引用：保存前统一触发 el-form 校验
+const formRef = ref<FormInstance>()
 // 编辑表单（enabled 布尔；原始值快照用于变更确认）
 const form = reactive({
   id: 0,
@@ -102,6 +105,13 @@ const form = reactive({
   remark: '',
 })
 const origin = reactive({ date_format: '', seq_length: 0 })
+
+// 表单校验（对齐后端 422 规则，把可预期的失败拦截在提交前）：prefix 允许编辑中暂空
+// （空值跳过正则，提交后由后端 required 兜底），非空时必须 2~4 位大写字母；备注上限 255 字
+const rules: FormRules = {
+  prefix: [{ pattern: /^[A-Z]{2,4}$/, message: '前缀须为 2~4 位大写字母', trigger: 'blur' }],
+  remark: [{ max: 255, message: '备注不能超过 255 个字符', trigger: 'blur' }],
+}
 
 const DATE_FORMAT_LABELS: Record<string, string> = {
   '': '无',
@@ -140,25 +150,43 @@ function openEdit(row: NumberConfigItem) {
   dialogVisible.value = true
 }
 
-// 编辑弹窗内实时预览：值变化即调预览接口
+// 编辑弹窗内实时预览：值变化即调预览接口；序号守卫保证并发乱序响应不覆盖新值（对齐 useListQuery 模式）
+let previewSeq = 0
 async function refreshPreview() {
   if (!form.prefix) return
+  const seq = ++previewSeq
   try {
     const res = await systemSettingApi.preview({
       prefix: form.prefix,
       date_format: form.date_format,
       seq_length: form.seq_length,
     })
+    if (seq !== previewSeq) return // 过期响应：已有更新的预览请求，丢弃防止回写旧示例号
     previewNo.value = res.no
   } catch {
+    if (seq !== previewSeq) return
     previewNo.value = ''
   }
 }
 
+// 300ms 防抖：弹窗内逐字符输入/连续调整只发最后一次请求（项目 debounce 工具，ListFilterBar 同款间隔）
+const refreshPreviewDebounced = debounce(refreshPreview, 300)
+
 // 弹窗打开/字段变化均刷新预览（watch 触发对 el-input fill/el-input-number 步进等交互最稳，如 E2E fill）
-watch([() => form.prefix, () => form.date_format, () => form.seq_length], () => refreshPreview())
+watch([() => form.prefix, () => form.date_format, () => form.seq_length], () =>
+  refreshPreviewDebounced(),
+)
+
+// 卸载清理：取消挂起的防抖并作废在途预览请求，防止卸载后回写（对齐 useListQuery.cancel 模式）
+onUnmounted(() => {
+  refreshPreviewDebounced.cancel()
+  previewSeq++
+})
 
 async function save() {
+  // 提交前校验：非法 prefix/超长 remark 拦在前端，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   // 位宽相关变更（seq_length/date_format）影响长度一致性：确认仅作用于新生成单号（spec §5/§7）
   const changed = form.seq_length !== origin.seq_length || form.date_format !== origin.date_format
   if (changed) {
@@ -184,8 +212,10 @@ async function save() {
     ElMessage.success('已保存')
     dialogVisible.value = false
     await load()
-  } catch {
-    /* 错误提示由 http.ts 统一弹出后端 message */
+  } catch (e) {
+    // 保存失败必须反馈：http.ts 只 reject 不弹错，由页面展示后端 message（对齐项目其它写页面）；
+    // 非 Error 值（mock/中间层 reject 字符串等）兜底统一文案，避免提示 undefined
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
   }

@@ -123,6 +123,8 @@ class CheckController extends Controller
                 'actual_qty' => $item['actual_qty'],
             ];
         }
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $check = DB::transaction(function () use ($data, $items) {
             // 建单：单号走持久序列（并发撞号 1062/19 由服务换号重试；删除不回退号段）
             $check = $this->sequenceService->nextNoByConfig(
@@ -142,7 +144,7 @@ class CheckController extends Controller
             }
 
             return $check;
-        });
+        }, 2);
 
         return $this->ok(['no' => $check->no]);
     }

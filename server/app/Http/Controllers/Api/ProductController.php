@@ -98,26 +98,40 @@ class ProductController extends Controller
             return $this->fail(1122, '安全库存下限不能大于上限');
         }
 
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：商品编码序列行首建
+        // 间隙锁死锁败方整体回滚后重跑闭包重新取号，幂等安全）
         $product = DB::transaction(function () use ($data, $min, $max) {
-            // 编码留空 → 走编号配置自动生成（商品编码 PRD 前缀全局自增，含老库衔接）；条码留空 → 默认 = 编码
-            $code = ! empty($data['code'])
-                ? $data['code']
-                : $this->sequenceService->nextNoByConfig(
+            // 除编码/条码外的商品属性（手填/自动两条创建路径共用，避免字段清单两份漂移）
+            $attributes = [
+                'name' => $data['name'], 'type' => $data['type'],
+                'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
+                'spec' => $data['spec'] ?? null,
+                'safety_min' => $min, 'safety_max' => $max,
+                'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
+            ];
+            // 编码留空 → 走编号配置自动生成（商品编码 PRD 前缀全局自增，含老库衔接）；条码留空 → 默认 = 编码。
+            // Product::create 必须封装在 persist 闭包内（与其余 12 个单据调用点对齐，B-1）：
+            // 手填 code/barcode 占用未来自动号时，create 撞 products 唯一索引的 1062/19 才能被
+            // 服务的换号重试消化；若 create 落在闭包外，异常直接 500 且序列自增随事务回滚，
+            // 自动编码路径将每次取同一号反复失败、永久不可用
+            if (empty($data['code'])) {
+                return $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_PRD,
-                    fn (string $no) => $no,
+                    fn (string $no) => Product::create($attributes + [
+                        'code' => $no,
+                        'barcode' => $data['barcode'] ?? $no,
+                    ]),
                     fn (string $prefix, string $dateKey) => ($no = Product::where('code', 'like', $prefix.'%')
                         ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
-            $barcode = $data['barcode'] ?? $code;
+            }
 
-            return Product::create([
-                'name' => $data['name'], 'code' => $code, 'type' => $data['type'],
-                'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
-                'spec' => $data['spec'] ?? null, 'barcode' => $barcode,
-                'safety_min' => $min, 'safety_max' => $max,
-                'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
+            // 手填编码：唯一性已由上方 1114/1115 预检把关，直接创建（条码留空默认 = 编码）
+            return Product::create($attributes + [
+                'code' => $data['code'],
+                'barcode' => $data['barcode'] ?? $data['code'],
             ]);
-        });
+        }, 2);
 
         // 响应回填自动生成的编码/条码（前端弹窗保存后可展示，spec §5）
         return $this->ok(['id' => $product->id, 'code' => $product->code, 'barcode' => $product->barcode]);

@@ -103,10 +103,26 @@ class DocumentSequenceServiceTest extends TestCase
 
     public function test_seq_overflow_warns_but_continues(): void
     {
-        // 边界路径：seq 达到位数上限自然溢出（999→1000 输出 4 位不截断），不抛异常
+        // 边界路径：seq 达到位数上限自然溢出（999→1000 输出 4 位不截断），不抛异常。
+        // 防分钟边界抖动（2026-08-23 实测期望 0338 实际 0337）：预置行/服务取号/断言三处各自读墙钟，
+        // 执行中跨分钟翻转时服务查不到预置行、从新分钟空行 001 起步，断言必然失败；
+        // 故统一捕获一次分钟值供预置行与断言共用，且仅在首尾分钟一致（窗口未翻转）时断言，
+        // 翻转则清空序列行换新分钟整窗重试，消除对断言时刻墙钟的依赖
         DocumentNumberConfig::create(['type' => 'rl', 'prefix' => 'RL', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true]);
-        DocumentSequence::create(['type' => 'rl', 'date' => date('YmdHi'), 'seq' => 999]);
-        $no = $this->svc->nextNoByConfig(DocumentSequence::TYPE_RL, fn (string $no) => $no);
-        $this->assertSame('RL'.date('YmdHi').'1000', $no);
+
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            // 清掉上一轮翻转残留的序列行，保证本轮预置的 999 行是服务取号的唯一候选
+            DocumentSequence::query()->delete();
+            $minute = date('YmdHi');
+            DocumentSequence::create(['type' => 'rl', 'date' => $minute, 'seq' => 999]);
+            $no = $this->svc->nextNoByConfig(DocumentSequence::TYPE_RL, fn (string $no) => $no);
+            // 窗口稳定（取号前后同分钟）时服务命中的必是本轮预置行：999 溢出输出 4 位不截断
+            if (date('YmdHi') === $minute) {
+                $this->assertSame('RL'.$minute.'1000', $no);
+
+                return;
+            }
+        }
+        $this->fail('连续 5 个窗口均跨分钟翻转，未能稳定验证位宽溢出行为');
     }
 }

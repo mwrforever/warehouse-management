@@ -14,6 +14,7 @@ import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { productApi } from '../../api/product'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { calcMaxQuantity } from '../../composables/useScanInbound'
 import { useListQuery } from '../../composables/useListQuery'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
@@ -56,6 +57,10 @@ const form = reactive({
   }[],
 })
 
+// 订单行剩余量映射（product_id → remaining_qty）：从订单生成时记录，供扫码数量上限计算（BUG-03）；
+// 独立建单与编辑草稿（详情接口无剩余量字段）保持空映射 = 不设上限，保存时后端 1308 兜底
+const orderRemaining = ref(new Map<number, number>())
+
 // 状态标签语义色（purchase.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
@@ -84,6 +89,8 @@ async function onOrderChange(orderId: number | undefined) {
   try {
     const data = await purchaseApi.fromOrder(orderId)
     form.supplier_id = data.supplier_id
+    // 记录订单行剩余量，扫码弹窗据此限制累计数量不超剩余量（BUG-03）
+    orderRemaining.value = new Map(data.items.map((i) => [i.product_id, Number(i.remaining_qty)]))
     form.items = data.items.map((i: FromOrderItem) => ({
       product_id: i.product_id,
       quantity: Number(i.remaining_qty),
@@ -129,8 +136,18 @@ const scanExcludedIds = computed(() =>
   form.items.map((i) => i.product_id).filter((x): x is number => x != null),
 )
 
+// 扫码数量上限（BUG-03，spec §4.4 由宿主页传入）：订单生成场景 = 订单行剩余量 − 表单该商品已填数量
+// （即本次还可扫入的量），弹窗内累计不超此值则关窗合并后必不超剩余量；
+// 表单已超剩余量时钳制为 0（本次不可再扫入）而非负值；无映射商品（独立建单/订单外商品）返回 Infinity 维持原无上限行为
+function scanMaxQuantity(it: ScanItem): number {
+  return calcMaxQuantity(
+    orderRemaining.value.get(it.product_id),
+    form.items.find((i) => i.product_id === it.product_id)?.quantity ?? 0,
+  )
+}
+
 // 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；
-// 扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+// 订单场景超量已在弹窗内按剩余量拦截；扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
 function onScanItems(items: ScanItem[]) {
   for (const it of items) {
     const existing = form.items.find((i) => i.product_id === it.product_id)
@@ -147,6 +164,7 @@ function openCreate(m: 'from-order' | 'standalone') {
   mode.value = m
   editingId.value = null
   fromOrderId.value = undefined
+  orderRemaining.value = new Map() // 清空上次订单的剩余量映射，选新订单时重新记录
   Object.assign(form, {
     supplier_id: undefined,
     warehouse_id: undefined,
@@ -167,6 +185,7 @@ async function openEdit(row: PurchaseInboundItem) {
     mode.value = d.order_id ? 'from-order' : 'standalone'
     editingId.value = row.id
     fromOrderId.value = d.order_id ?? undefined
+    orderRemaining.value = new Map() // 详情接口无剩余量字段：扫码不设上限，保存时后端 1308 兜底
     Object.assign(form, {
       supplier_id: d.supplier_id,
       warehouse_id: d.warehouse_id,
@@ -306,10 +325,17 @@ async function openDetail(row: PurchaseInboundItem) {
 onMounted(async () => {
   search()
   try {
-    suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
-    warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    availableOrders.value = (await purchaseApi.availableOrders()).items
-    products.value = (await productApi.list({ per_page: 100 })).items
+    // 四路下拉数据互不依赖，并行加载缩短首屏等待（对齐 BomsView 写法）
+    const [sup, wh, orders, prods] = await Promise.all([
+      supplierApi.list({ per_page: 100, status: 1 }),
+      warehouseApi.list({ per_page: 100, status: 1 }),
+      purchaseApi.availableOrders(),
+      productApi.list({ per_page: 100 }),
+    ])
+    suppliers.value = sup.items
+    warehouses.value = wh.items
+    availableOrders.value = orders.items
+    products.value = prods.items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -555,11 +581,12 @@ onMounted(async () => {
         <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
       </template>
     </el-dialog>
-    <!-- 扫码录入独立弹窗（spec §4.4：扫描行关闭时回带合并；独立/从订单模式均可用） -->
+    <!-- 扫码录入独立弹窗（spec §4.4：扫描行关闭时回带合并；订单场景上限=行剩余量−已填量） -->
     <ScanInboundForm
       v-model:open="scanVisible"
       title="扫码录入明细"
       :excluded-ids="scanExcludedIds"
+      :max-quantity="scanMaxQuantity"
       @add-items="onScanItems"
     />
     <!-- 详情弹窗 -->

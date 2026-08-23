@@ -20,5 +20,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    // element-plus 必须内联转换：默认 externalize 会让其内部 import 的 vue 与应用侧 vue 形成两个实例，
+    // provide/inject 跨实例失效——el-form 的 form-item 注册链断裂，formRef.validate() 恒通过、
+    // 校验状态停留在 is-validating（el-form rules 单测全部失真的根因）
+    server: { deps: { inline: ['element-plus'] } },
   },
 })
