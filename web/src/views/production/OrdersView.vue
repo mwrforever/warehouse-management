@@ -155,7 +155,8 @@ async function save() {
       await productionApi.updateOrder(editingId.value, payload)
       ElMessage.success('保存成功')
       dialogVisible.value = false
-      search()
+      // 编辑保存按当前页重载（与删除/下达等操作一致）：多页列表下不得把用户踢回第 1 页
+      refresh()
     } else {
       const res = await productionApi.createOrder(payload)
       ElMessage.success(`工单 ${res.no} 创建成功`)
