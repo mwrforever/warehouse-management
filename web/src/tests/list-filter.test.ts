@@ -225,7 +225,7 @@ describe('ListFilterBar', () => {
     expect(wrapper.find('input').exists()).toBe(false)
   })
 
-  it('查询按钮点击发 search；1s 内重复点击合并', async () => {
+  it('查询按钮 1s 节流：连点立即执行首次，窗口结束补一次尾调用（throttle 工具语义）', async () => {
     const wrapper = mount(ListFilterBar, {
       props: { title: '采购订单', keyword: '' },
       global: { plugins: [ElementPlus] },
@@ -234,8 +234,28 @@ describe('ListFilterBar', () => {
     const queryBtn = btns.find((b) => b.text().includes('查'))
     await queryBtn!.trigger('click')
     await queryBtn!.trigger('click')
+    // 窗口内连点只立即执行首次，防连点不发冗余请求
     expect(wrapper.emitted('search')).toHaveLength(1)
     vi.advanceTimersByTime(1000)
+    // 被吞的最后一次点击在窗口结束补一次尾调用（连点最终意图不丢失，原手写节流直接吞掉的语义差异在此固化）
+    expect(wrapper.emitted('search')).toHaveLength(2)
+  })
+
+  it('卸载后节流尾调用不再补发 search（卸载清理）', async () => {
+    // unmount 后 wrapper.emitted 不可读，用显式事件回调捕获
+    const onSearch = vi.fn()
+    const wrapper = mount(ListFilterBar, {
+      props: { title: '采购订单', keyword: '', onSearch },
+      global: { plugins: [ElementPlus] },
+    })
+    const btns = wrapper.findAll('button')
+    const queryBtn = btns.find((b) => b.text().includes('查'))
+    await queryBtn!.trigger('click') // 立即执行
+    await queryBtn!.trigger('click') // 窗口内被吞，排定尾调用
+    wrapper.unmount()
+    vi.advanceTimersByTime(1000)
+    // 离开页面后不得补发 search 触发已卸载页面的查询
+    expect(onSearch).toHaveBeenCalledTimes(1)
   })
 
   it('重置按钮清空关键字并发 reset', async () => {

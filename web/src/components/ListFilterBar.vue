@@ -1,8 +1,8 @@
 <!-- 统一列表筛选栏：标题 + 可选关键字框（300ms 防抖实时搜索）+ 默认插槽（筛选项）+ 查询/重置/刷新
      行为约定（spec §4.2）：关键字输入防抖自动查询（回首页）、查询按钮 1s 节流防连点、重置恢复默认、刷新保持当前页 -->
 <script setup lang="ts">
-import { watch } from 'vue'
-import { useDebouncedRef } from '../utils/async'
+import { onScopeDispose, watch } from 'vue'
+import { throttle, useDebouncedRef } from '../utils/async'
 
 interface Props {
   title?: string
@@ -48,17 +48,17 @@ watch(
   { flush: 'sync' },
 )
 
-// 查询按钮：1s 节流防连点（spec §4.1 查询按钮口径）
-let lastSearch = 0
-function onSearch() {
-  const now = Date.now()
-  if (now - lastSearch < 1000) return
-  lastSearch = now
+// 查询动作 1s 节流防连点（spec §4.1 查询按钮口径）：窗口内连点只立即执行首次，
+// 被吞的最后一次在窗口结束补一次尾调用，连点的最终意图不丢失。
+// 统一走 utils/async.ts throttle 工具，替代此前同语义的手写时间戳节流（手写版窗口内直接吞掉、无尾调用）
+const onSearch = throttle(() => {
   // 先冲刷内部防抖再通知查询：防抖窗口内输入后立即回车时，父级 query.keyword 尚未收到新值，
   // 若不冲刷会先按旧关键字请求、约 600ms 后防抖到期再重复请求一次（BUG-07）
   kw.flush()
   emit('search')
-}
+}, 1000)
+// 卸载时取消节流尾调用：1s 窗口内离开页面后不得再补发 search 触发已卸载页面的查询
+onScopeDispose(onSearch.cancel)
 
 // 重置：清空内部关键字并通知父级（父级恢复默认筛选后统一查询）。
 // 先冲刷再清空：300ms 内双击重置时，第二次 reset 会取消第一次排定的同步计时器且 source 已是 ''，
