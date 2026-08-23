@@ -316,17 +316,22 @@ async function openDetail(row: SalesOutboundItem) {
 onMounted(async () => {
   search()
   try {
-    customers.value = (await customerApi.list({ per_page: 100, status: 1 })).items
-    warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    availableOrders.value = (await salesApi.availableOrders()).items
-    // 可售商品 = 成品 + 半成品（原料禁售；两次调用合并）
-    const [fin, semi] = await Promise.all([
+    // 六路下拉/汇总数据互不依赖，并行加载缩短首屏等待（对齐 BomsView 写法）
+    const [cus, wh, orders, fin, semi, summary] = await Promise.all([
+      customerApi.list({ per_page: 100, status: 1 }),
+      warehouseApi.list({ per_page: 100, status: 1 }),
+      salesApi.availableOrders(),
+      // 可售商品 = 成品 + 半成品（原料禁售 SAL-10，两次调用合并）
       productApi.list({ per_page: 100, type: 'finished' }),
       productApi.list({ per_page: 100, type: 'semi_finished' }),
+      // 今日已出库汇总（当日无出库返回空数组，汇总行隐藏）
+      salesApi.todaySummary(),
     ])
+    customers.value = cus.items
+    warehouses.value = wh.items
+    availableOrders.value = orders.items
     products.value = [...fin.items, ...semi.items]
-    // 今日已出库汇总（当日无出库返回空数组，汇总行隐藏）
-    todaySummary.value = (await salesApi.todaySummary()).items
+    todaySummary.value = summary.items
   } catch {
     // 下拉加载失败不阻塞主流程
   }

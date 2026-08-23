@@ -324,10 +324,17 @@ async function openDetail(row: PurchaseInboundItem) {
 onMounted(async () => {
   search()
   try {
-    suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
-    warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    availableOrders.value = (await purchaseApi.availableOrders()).items
-    products.value = (await productApi.list({ per_page: 100 })).items
+    // 四路下拉数据互不依赖，并行加载缩短首屏等待（对齐 BomsView 写法）
+    const [sup, wh, orders, prods] = await Promise.all([
+      supplierApi.list({ per_page: 100, status: 1 }),
+      warehouseApi.list({ per_page: 100, status: 1 }),
+      purchaseApi.availableOrders(),
+      productApi.list({ per_page: 100 }),
+    ])
+    suppliers.value = sup.items
+    warehouses.value = wh.items
+    availableOrders.value = orders.items
+    products.value = prods.items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
