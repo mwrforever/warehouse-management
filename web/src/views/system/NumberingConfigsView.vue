@@ -79,10 +79,11 @@
 
 <script setup lang="ts">
 // 编号规则管理：列表 + 编辑弹窗 + 实时预览；seq_length/date_format 变更前确认位宽一致性
-import { onMounted, reactive, ref, watch } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
 import { systemSettingApi, type NumberConfigItem } from '../../api/systemSetting'
+import { debounce } from '../../utils/async'
 
 const auth = useAuthStore()
 const rows = ref<NumberConfigItem[]>([])
@@ -149,23 +150,38 @@ function openEdit(row: NumberConfigItem) {
   dialogVisible.value = true
 }
 
-// 编辑弹窗内实时预览：值变化即调预览接口
+// 编辑弹窗内实时预览：值变化即调预览接口；序号守卫保证并发乱序响应不覆盖新值（对齐 useListQuery 模式）
+let previewSeq = 0
 async function refreshPreview() {
   if (!form.prefix) return
+  const seq = ++previewSeq
   try {
     const res = await systemSettingApi.preview({
       prefix: form.prefix,
       date_format: form.date_format,
       seq_length: form.seq_length,
     })
+    if (seq !== previewSeq) return // 过期响应：已有更新的预览请求，丢弃防止回写旧示例号
     previewNo.value = res.no
   } catch {
+    if (seq !== previewSeq) return
     previewNo.value = ''
   }
 }
 
+// 300ms 防抖：弹窗内逐字符输入/连续调整只发最后一次请求（项目 debounce 工具，ListFilterBar 同款间隔）
+const refreshPreviewDebounced = debounce(refreshPreview, 300)
+
 // 弹窗打开/字段变化均刷新预览（watch 触发对 el-input fill/el-input-number 步进等交互最稳，如 E2E fill）
-watch([() => form.prefix, () => form.date_format, () => form.seq_length], () => refreshPreview())
+watch([() => form.prefix, () => form.date_format, () => form.seq_length], () =>
+  refreshPreviewDebounced(),
+)
+
+// 卸载清理：取消挂起的防抖并作废在途预览请求，防止卸载后回写（对齐 useListQuery.cancel 模式）
+onUnmounted(() => {
+  refreshPreviewDebounced.cancel()
+  previewSeq++
+})
 
 async function save() {
   // 提交前校验：非法 prefix/超长 remark 拦在前端，避免发出可预期的 422 请求

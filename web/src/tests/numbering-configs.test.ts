@@ -1,5 +1,6 @@
-// 编号规则页组件测试：保存失败必须弹错（BUG-01 空 catch 回归）+ 非法 prefix/超长 remark 前端拦截 + 合法保存正常路径
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+// 编号规则页组件测试：保存失败必须弹错（BUG-01 空 catch 回归）+ 非法 prefix/超长 remark 前端拦截 + 合法保存正常路径；
+// 预览请求防抖与乱序守卫（BUG-03：并发乱序回写使预览短暂显示与表单不符的示例号）
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
@@ -160,5 +161,116 @@ describe('编号规则页保存反馈与表单校验', () => {
     expect(msg, '保存成功应弹出提示').toBeTruthy()
     expect((msg as HTMLElement).textContent).toContain('已保存')
     wrapper.unmount()
+  })
+})
+
+describe('编号规则页预览防抖与乱序守卫', () => {
+  let pinia: ReturnType<typeof createPinia>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // 防抖/序号守卫用例使用 fake timers 精确推进 300ms 防抖窗口
+    vi.useFakeTimers()
+    pinia = createPinia()
+    setActivePinia(pinia)
+    useAuthStore().permissions = ['system.setting.update']
+  })
+  afterEach(() => vi.useRealTimers())
+
+  function mountView() {
+    return mount(NumberingConfigsView, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus, pinia] },
+    })
+  }
+
+  // 打开「采购订单」行的编辑弹窗
+  async function openEditDialog(wrapper: VueWrapper) {
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('编'))
+    expect(btn, '编辑按钮应存在').toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+  }
+
+  // 修改弹窗内前缀输入框
+  async function fillPrefix(wrapper: VueWrapper, val: string) {
+    const item = wrapper
+      .findAll('.el-dialog .el-form-item')
+      .find((fi) => fi.find('.el-form-item__label').text().trim() === '前缀')
+    expect(item, '前缀输入框应存在').toBeTruthy()
+    await item!.find('input').setValue(val)
+    await flushPromises()
+  }
+
+  // 预览示例号显示在弹窗「规则预览」行（v-if=previewNo 控制渲染）
+  function previewText(wrapper: VueWrapper) {
+    const item = wrapper
+      .findAll('.el-dialog .el-form-item')
+      .find((fi) => fi.text().includes('规则预览'))
+    return item?.find('.font-code').text() ?? ''
+  }
+
+  it('打开弹窗并连续修改前缀，300ms 防抖内只发一次预览请求且取最后输入值', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await openEditDialog(wrapper)
+    await fillPrefix(wrapper, 'POX')
+
+    // 防抖期内（打开弹窗 + 修改前缀的多次触发合并）不应发任何预览请求
+    expect(systemSettingApi.preview).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+
+    expect(systemSettingApi.preview).toHaveBeenCalledTimes(1)
+    expect(systemSettingApi.preview).toHaveBeenCalledWith({
+      prefix: 'POX',
+      date_format: 'YmdHi',
+      seq_length: 3,
+    })
+    wrapper.unmount()
+  })
+
+  it('预览响应乱序到达时旧响应被丢弃，不覆盖新示例号', async () => {
+    // 第一发请求挂起（慢响应），第二发立即返回：旧响应后到必须被序号守卫丢弃
+    let resolveOld!: (v: { no: string }) => void
+    const oldSlow = new Promise<{ no: string }>((r) => {
+      resolveOld = r
+    })
+    vi.mocked(systemSettingApi.preview)
+      .mockImplementationOnce(() => oldSlow)
+      .mockImplementationOnce(async () => ({ no: 'PO20260823001X' }))
+    const wrapper = mountView()
+    await flushPromises()
+    await openEditDialog(wrapper)
+    // 第一发：弹窗打开时的表单值（挂起在途）
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    expect(systemSettingApi.preview).toHaveBeenCalledTimes(1)
+
+    // 第二发：修改前缀后的新表单值（立即返回并回写）
+    await fillPrefix(wrapper, 'POX')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    expect(systemSettingApi.preview).toHaveBeenCalledTimes(2)
+    expect(previewText(wrapper)).toBe('PO20260823001X')
+
+    // 旧响应迟到回包：守卫丢弃，预览仍显示新值（修复前被旧值覆盖）
+    resolveOld({ no: 'PO20260823001' })
+    await flushPromises()
+    expect(previewText(wrapper)).toBe('PO20260823001X')
+    wrapper.unmount()
+  })
+
+  it('组件卸载时取消挂起的防抖，预览请求不再发出', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await openEditDialog(wrapper)
+    // 弹窗打开触发防抖（尚未到期）即卸载：挂起任务应被取消
+    wrapper.unmount()
+
+    vi.advanceTimersByTime(600)
+    await flushPromises()
+    expect(systemSettingApi.preview).not.toHaveBeenCalled()
   })
 })
