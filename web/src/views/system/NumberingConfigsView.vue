@@ -213,8 +213,9 @@ async function save() {
     dialogVisible.value = false
     await load()
   } catch (e) {
-    // 保存失败必须反馈：http.ts 只 reject 不弹错，由页面展示后端 message（对齐项目其它写页面）
-    ElMessage.error((e as Error).message)
+    // 保存失败必须反馈：http.ts 只 reject 不弹错，由页面展示后端 message（对齐项目其它写页面）；
+    // 非 Error 值（mock/中间层 reject 字符串等）兜底统一文案，避免提示 undefined
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
   }

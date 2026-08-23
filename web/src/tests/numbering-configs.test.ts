@@ -38,6 +38,9 @@ describe('编号规则页保存反馈与表单校验', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // 清理前一用例残留的 ElMessage（jsdom 中 3s 自动关闭定时器不会在用例间隙触发，
+    // 残留消息会让后续用例 querySelector 取到旧消息，影响断言）
+    document.querySelectorAll('.el-message').forEach((m) => m.remove())
     pinia = createPinia()
     setActivePinia(pinia)
     // 编辑按钮渲染依赖 system.setting.update 权限（路由/按钮双层权限的前端一侧）
@@ -92,6 +95,22 @@ describe('编号规则页保存反馈与表单校验', () => {
     expect((msg as HTMLElement).textContent).toContain('前缀格式：大写字母2~4位')
     // 保存失败不关弹窗：用户可直接修正输入后重试
     expect(wrapper.find('.el-dialog').isVisible()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('保存被非 Error 异常拒绝时兜底为「保存失败」而非 undefined（评审 Minor-3）', async () => {
+    // 异常场景：mock/中间层 reject 非 Error 值（如字符串）时不得展示 undefined，统一兜底文案
+    const wrapper = mountView()
+    await flushPromises()
+    await openEditDialog(wrapper)
+    vi.mocked(systemSettingApi.update).mockRejectedValueOnce('连接中断')
+
+    await clickSave(wrapper)
+
+    const msg = document.querySelector('.el-message--error')
+    expect(msg, '保存失败应弹出错误提示').toBeTruthy()
+    expect((msg as HTMLElement).textContent).toContain('保存失败')
+    expect((msg as HTMLElement).textContent).not.toContain('undefined')
     wrapper.unmount()
   })
 
