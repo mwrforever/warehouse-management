@@ -67,17 +67,18 @@ class OutsourcingService
 
     /**
      * 取工序对应的工艺路线节点（store/update 用，逻辑同 fromOperation 的取数段）
-     * 无路线/无 node_no 的旧线性工单返回 null——调用方回退「委外=工单成品」旧口径，兼容存量流程；
-     * 有路线但路由头/节点缺失属数据异常：显式 422，禁止静默降级旧口径（与 fromOperation 语义一致）
+     * 无路线/无 node_no → 422「该工单没有工艺路线，不可委外」：仅 is_outsourced=1 的路线节点可委外
+     * （spec §5 收敛 legacy 成品口径，与 fromOperation 语义一致）；有路线但路由头/节点缺失属数据异常：
+     * 显式 422，禁止静默降级
      *
-     * @throws ProductionException 422（有路线但路由头或节点缺失）/ 数据异常（工序/工单不存在）
+     * @throws ProductionException 422（无路线/无 node_no/路由头或节点缺失）/ 数据异常（工序/工单不存在）
      */
-    public function routingNodeForOperation(int $operationId): ?RoutingNode
+    public function routingNodeForOperation(int $operationId): RoutingNode
     {
         $op = WorkOrderOperation::findOrFail($operationId);
         $order = $op->order()->firstOrFail();
         if (! $order->routing_id || ! $op->node_no) {
-            return null;
+            throw new ProductionException('该工单没有工艺路线，不可委外', 422);
         }
         $routing = RoutingHeader::with('nodes.materials.material', 'nodes.materials.unit')->find($order->routing_id);
         if (! $routing) {
