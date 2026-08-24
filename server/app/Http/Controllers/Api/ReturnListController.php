@@ -345,7 +345,8 @@ class ReturnListController extends Controller
         }
         $seen = [];
         foreach ($items as $item) {
-            if ((float) $item['quantity'] <= 0) {
+            // 数量正负校验走 bccomp（D-3 铁律：禁浮点参与数量比较；正则已保证入参为两位小数十进制）
+            if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
                 return $this->fail(422, '退料数量必须大于 0');
             }
             if (isset($seen[$item['product_id']])) {

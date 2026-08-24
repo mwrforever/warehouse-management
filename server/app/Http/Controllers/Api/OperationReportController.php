@@ -39,11 +39,12 @@ class OperationReportController extends Controller
         // 缺省按 0 处理，避免 Undefined array key / bcadd 空串 ValueError（E2E TC-PRD-04 载荷即漏传 defective_qty）
         $defective = $data['defective_qty'] ?? 0;
         $hours = $data['hours'] ?? 0;
-        // 合格/不良负数走 422 值域（spec 码段满；工时负数有专属码 1512 走业务码）
-        if ((float) $data['qualified_qty'] < 0 || (float) $defective < 0) {
+        // 合格/不良负数走 422 值域（spec 码段满；工时负数有专属码 1512 走业务码）；
+        // 判负走 bccomp（D-3 铁律：禁浮点参与数量比较；正则已保证入参为两位小数十进制）
+        if (bccomp((string) $data['qualified_qty'], '0', 2) < 0 || bccomp((string) $defective, '0', 2) < 0) {
             return $this->fail(422, '合格数与不良数不能为负数');
         }
-        if ((float) $hours < 0) {
+        if (bccomp((string) $hours, '0', 2) < 0) {
             return $this->fail(1512, '工时不能为负数');
         }
 

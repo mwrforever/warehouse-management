@@ -102,8 +102,8 @@ class CheckController extends Controller
                 return $this->fail(422, '盘点明细存在重复商品与库位');
             }
             $seen[$key] = true;
-            // 实盘数不能为负
-            if ((float) $item['actual_qty'] < 0) {
+            // 实盘数不能为负（bccomp 判负，D-3 铁律禁浮点比较；正则已保证入参为两位小数十进制）
+            if (bccomp((string) $item['actual_qty'], '0', 2) < 0) {
                 return $this->fail(1201, '实盘数量不能为负数');
             }
             // 无余额商品不可录盘（1205）：账外资产盘盈（book_qty=0 建账）属功能需求，
@@ -190,7 +190,8 @@ class CheckController extends Controller
                     return $this->fail(422, '盘点明细存在重复商品与库位');
                 }
                 $seen[$key] = true;
-                if ((float) $item['actual_qty'] < 0) {
+                // 实盘数不能为负（bccomp 判负，与 store 同口径）
+                if (bccomp((string) $item['actual_qty'], '0', 2) < 0) {
                     return $this->fail(1201, '实盘数量不能为负数');
                 }
                 // 无余额商品不可录盘（1205）：与 store 同口径
@@ -264,19 +265,20 @@ class CheckController extends Controller
                     throw new InventoryException('该盘点单已审核', 1204);
                 }
                 $changed = 0;
-                $increased = 0;      // 盘盈数量合计
-                $decreased = 0;      // 盘亏数量合计
+                $increased = '0';  // 盘盈数量合计（bcadd 累加，D-3 铁律禁浮点累加）
+                $decreased = '0';  // 盘亏数量合计
                 $increasedItems = 0; // 盘盈项数（前端「盘盈 X 项 +N」文案用）
                 $decreasedItems = 0; // 盘亏项数
                 // 明细行显式标注模型类型（larastan 无法从关系泛型推断 foreach 元素）
                 /** @var InventoryCheckItem $item */
                 foreach ($locked->items as $item) {
-                    // 差异 = 实盘 - 账面（审核时计算并落库；转字符串满足 decimal cast 的 string 属性）
-                    $diff = round((float) $item->actual_qty - (float) $item->book_qty, 2);
-                    $item->diff_qty = (string) $diff;
+                    // 差异 = 实盘 − 账面（bcsub 构造性精确，两位小数字符串满足 decimal cast 的 string 属性）
+                    $diff = bcsub((string) $item->actual_qty, (string) $item->book_qty, 2);
+                    $item->diff_qty = $diff;
                     $item->save();
-                    if (abs($diff) < 0.005) {
-                        continue; // 零差异不生成流水
+                    // 零差异不生成流水（差值恒为两位小数，bccomp === 0 即零差异，无浮点容差窗口）
+                    if (bccomp($diff, '0', 2) === 0) {
+                        continue;
                     }
                     // 锁余额行：账面快照已被并发变动（其他盘点单先审）→ 整体回滚 1206
                     $balance = InventoryBalance::where('product_id', $item->product_id)
@@ -287,17 +289,23 @@ class CheckController extends Controller
                     // ! $balance 为防御性分支：余额行只增不删，账面快照存在时理论不可达（1205 已拦无账商品）；
                     // 若未来支持账外盘盈（暂不做，见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md），
                     // 此处须改为按「无余额行=账面 0」比对放行盘盈
-                    if (! $balance || abs((float) $balance->quantity - (float) $item->book_qty) > 0.005) {
+                    // 余额与账面快照均为两位小数，bcsub 差值非 0 即并发变动（替代浮点 0.005 容差比较）
+                    if (
+                        ! $balance
+                        || bccomp(bcsub((string) $balance->quantity, (string) $item->book_qty, 2), '0', 2) !== 0
+                    ) {
                         throw new InventoryException('库存已变动，请重新盘点', 1206);
                     }
-                    $direction = $diff > 0 ? 1 : -1;
+                    $direction = bccomp($diff, '0', 2) > 0 ? 1 : -1;
+                    // 流水数量 = 差值绝对值（负差值侧 bcsub 反转符号，保持恒正契约）
+                    $diffAbs = $direction > 0 ? $diff : bcsub('0', $diff, 2);
                     // 盘盈/盘亏走统一引擎（同事务，双写一致）
                     $this->inventoryService->apply([[
                         'product_id' => $item->product_id,
                         'warehouse_id' => $locked->warehouse_id,
                         'location_id' => $item->location_id,
                         'direction' => $direction,
-                        'quantity' => abs($diff),
+                        'quantity' => $diffAbs,
                         'source_type' => $direction > 0 ? 'check_in' : 'check_out',
                         'source_id' => $locked->id,
                         'source_no' => $locked->no,
@@ -305,10 +313,10 @@ class CheckController extends Controller
                     ]], auth()->id());
                     $changed++;
                     if ($direction > 0) {
-                        $increased += abs($diff);
+                        $increased = bcadd($increased, $diffAbs, 2);
                         $increasedItems++;
                     } else {
-                        $decreased += abs($diff);
+                        $decreased = bcadd($decreased, $diffAbs, 2);
                         $decreasedItems++;
                     }
                 }
@@ -318,8 +326,9 @@ class CheckController extends Controller
                 $locked->save();
                 $result = [
                     'changed_items' => $changed,
-                    'increased' => $increased,
-                    'decreased' => $decreased,
+                    // 合计出参转数值保持 JSON 数字类型不变（累加本身已 bcmath 精确，此转型仅序列化口径）
+                    'increased' => (float) $increased,
+                    'decreased' => (float) $decreased,
                     'increased_items' => $increasedItems,
                     'decreased_items' => $decreasedItems,
                 ];
@@ -341,7 +350,9 @@ class CheckController extends Controller
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.location_id' => 'required|integer|exists:locations,id',
-            'items.*.actual_qty' => 'required|numeric',
+            // 数量限两位小数（正则防科学计数法；负值形态放行到方法内业务码 1201）——
+            // bccomp 判负的字符串安全前提（D-3），与 PickList 等其余单据口径一致
+            'items.*.actual_qty' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
         ]);
     }
 }

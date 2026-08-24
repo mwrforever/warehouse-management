@@ -134,6 +134,53 @@ class InventoryServiceTest extends TestCase
         $this->assertSame(90.0, (float) $sum);
     }
 
+    public function test_decimal_accumulation_stays_exact_with_bcmath_not_float(): void
+    {
+        // D-3 等价性护栏：0.1 + 0.2 的 IEEE754 浮点和为 0.30000000000000004（MySQL decimal 列与
+        // 模型 set cast 双重收敛后落库值正确）；bcmath 字符串化后同一累加必须构造性精确等于 0.30，
+        // 且恰好充足（0.30 出 0.30）无浮点误差窗口——引擎口径切换前后该不变式不可破
+        $this->svc->apply([$this->movement(['quantity' => '0.1', 'source_no' => 'PO1'])]);
+        $this->svc->apply([$this->movement(['quantity' => '0.2', 'source_id' => 2, 'source_no' => 'PO2'])]);
+
+        $this->assertDatabaseHas('inventory_balances', [
+            'product_id' => $this->product->id,
+            'quantity' => '0.30',
+        ]);
+        $this->assertDatabaseHas('inventory_movements', [
+            'source_no' => 'PO2',
+            'balance_after' => '0.30',
+        ]);
+
+        // 边界：构造性 0.30 余额恰好出库 0.30——bccomp 判充足性应放行且余额精确归零
+        $this->svc->apply([$this->movement([
+            'direction' => -1,
+            'quantity' => '0.3',
+            'source_type' => 'sales_outbound',
+            'source_id' => 3,
+            'source_no' => 'SO1',
+        ])]);
+        $this->assertDatabaseHas('inventory_balances', ['quantity' => '0.00']);
+    }
+
+    public function test_insufficient_message_renders_quantity_in_two_decimal_scale(): void
+    {
+        // D-3 口径契约：不足消息中的出库量统一两位小数（与当前余额的 decimal cast 口径一致）；
+        // 浮点引擎渲染「出库 60」，bcmath 归一化后必须为「出库 60.00」
+        $this->svc->apply([$this->movement(['quantity' => 50])]);
+        try {
+            $this->svc->apply([$this->movement([
+                'direction' => -1,
+                'quantity' => 60,
+                'source_type' => 'sales_outbound',
+                'source_id' => 2,
+                'source_no' => 'SO20260812-001',
+            ])]);
+            $this->fail('出库超卖应抛出异常');
+        } catch (InventoryException $e) {
+            $this->assertStringContainsString('出库 60.00', $e->getMessage());
+        }
+    }
+
     public function test_outbound_without_balance_row_rejected(): void
     {
         // 异常路径：余额行不存在直接出库被拒

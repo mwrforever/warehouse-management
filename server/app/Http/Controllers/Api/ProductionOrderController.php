@@ -92,8 +92,8 @@ class ProductionOrderController extends Controller
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
-        // 数量 ≤ 0 走业务码 1502（生产 spec 明确，与采购/销售 422 不同）
-        if ((float) $data['quantity'] <= 0) {
+        // 数量 ≤ 0 走业务码 1502（生产 spec 明确，与采购/销售 422 不同）；bccomp 判正（D-3 铁律禁浮点比较）
+        if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
             return $this->fail(1502, '数量必须大于 0');
         }
 
@@ -297,7 +297,8 @@ class ProductionOrderController extends Controller
                 return $this->fail(1503, '已下达工单不可修改');
             }
             $data = $this->validatePayload($request);
-            if ((float) $data['quantity'] <= 0) {
+            // 数量 ≤ 0 走业务码 1502（与 store 同口径）；bccomp 判正（D-3 铁律禁浮点比较）
+            if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
                 return $this->fail(1502, '数量必须大于 0');
             }
 

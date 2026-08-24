@@ -229,13 +229,16 @@ class InventoryController extends Controller
     }
 
     // 预警级别：min>0 且 quantity<min → 1；max>0 且 quantity>max → 2；否则 0
+    // 比较走 bccomp（D-3 铁律：禁浮点参与数量比较；余额/上下限均 decimal cast 两位小数字符串）
     private function alertLevel($r): int
     {
-        $qty = (float) $r->quantity;
-        if ((float) $r->safety_min > 0 && $qty < (float) $r->safety_min) {
+        $qty = (string) $r->quantity;
+        $min = (string) $r->safety_min;
+        $max = (string) $r->safety_max;
+        if (bccomp($min, '0', 2) > 0 && bccomp($qty, $min, 2) < 0) {
             return 1;
         }
-        if ((float) $r->safety_max > 0 && $qty > (float) $r->safety_max) {
+        if (bccomp($max, '0', 2) > 0 && bccomp($qty, $max, 2) > 0) {
             return 2;
         }
 

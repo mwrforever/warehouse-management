@@ -351,10 +351,11 @@ class PurchaseOrderController extends Controller
             return $this->fail(1301, '请至少添加一条明细');
         }
         foreach ($items as $item) {
-            if ((float) $item['quantity'] <= 0) {
+            // 数量/价格正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）
+            if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
                 return $this->fail(1302, '数量必须大于 0');
             }
-            if ((float) $item['price'] < 0) {
+            if (bccomp((string) $item['price'], '0', 2) < 0) {
                 return $this->fail(1311, '价格不能为负数');
             }
         }

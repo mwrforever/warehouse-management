@@ -78,8 +78,9 @@ class ProductController extends Controller
             'spec' => 'nullable|string|max:100',
             // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
             'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
-            'safety_min' => 'nullable|numeric|min:0',
-            'safety_max' => 'nullable|numeric|min:0',
+            // 安全库存限两位小数（正则防科学计数法，bccomp 比较的字符串安全前提，D-3；负值由 min:0 拦截）
+            'safety_min' => 'nullable|numeric|min:0|regex:/^\d+(\.\d{1,2})?$/',
+            'safety_max' => 'nullable|numeric|min:0|regex:/^\d+(\.\d{1,2})?$/',
             'status' => 'nullable|in:0,1',
             'remark' => 'nullable|string',
         ]);
@@ -91,10 +92,10 @@ class ProductController extends Controller
         if (! empty($data['barcode']) && Product::where('barcode', $data['barcode'])->exists()) {
             return $this->fail(1115, '条码已存在');
         }
-        // 安全库存下限不能大于上限 1122
-        $min = (float) ($data['safety_min'] ?? 0);
-        $max = (float) ($data['safety_max'] ?? 0);
-        if ($max > 0 && $min > $max) {
+        // 安全库存下限不能大于上限 1122（bccomp 数量比较，D-3 铁律禁浮点参与；正则已保证入参为两位小数十进制）
+        $min = (string) ($data['safety_min'] ?? 0);
+        $max = (string) ($data['safety_max'] ?? 0);
+        if (bccomp($max, '0', 2) > 0 && bccomp($min, $max, 2) > 0) {
             return $this->fail(1122, '安全库存下限不能大于上限');
         }
 
@@ -149,8 +150,9 @@ class ProductController extends Controller
             'spec' => 'nullable|string|max:100',
             // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
             'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
-            'safety_min' => 'nullable|numeric|min:0',
-            'safety_max' => 'nullable|numeric|min:0',
+            // 安全库存限两位小数（正则防科学计数法，bccomp 比较的字符串安全前提，D-3；负值由 min:0 拦截）
+            'safety_min' => 'nullable|numeric|min:0|regex:/^\d+(\.\d{1,2})?$/',
+            'safety_max' => 'nullable|numeric|min:0|regex:/^\d+(\.\d{1,2})?$/',
             'status' => 'nullable|in:0,1',
             'remark' => 'nullable|string',
         ]);
@@ -164,9 +166,10 @@ class ProductController extends Controller
         ) {
             return $this->fail(1115, '条码已存在');
         }
-        $min = (float) ($data['safety_min'] ?? 0);
-        $max = (float) ($data['safety_max'] ?? 0);
-        if ($max > 0 && $min > $max) {
+        // 安全库存下限不能大于上限 1122（bccomp 数量比较，与 store 同口径；正则已保证入参为两位小数十进制）
+        $min = (string) ($data['safety_min'] ?? 0);
+        $max = (string) ($data['safety_max'] ?? 0);
+        if (bccomp($max, '0', 2) > 0 && bccomp($min, $max, 2) > 0) {
             return $this->fail(1122, '安全库存下限不能大于上限');
         }
 

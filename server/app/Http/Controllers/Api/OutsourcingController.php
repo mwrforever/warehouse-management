@@ -107,7 +107,8 @@ class OutsourcingController extends Controller
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
-        if ((float) $data['quantity'] <= 0) {
+        // 委外量判正走 bccomp（D-3 铁律：禁浮点参与数量比较；正则已保证入参为两位小数十进制）
+        if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
             return $this->fail(422, '委外数量必须大于 0');
         }
         if (! $request->filled('supplier_id')) {
@@ -248,7 +249,8 @@ class OutsourcingController extends Controller
                 return $this->fail(1521, '已审核单据不可修改');
             }
             $data = $this->validatePayload($request);
-            if ((float) $data['quantity'] <= 0) {
+            // 委外量判正走 bccomp（D-3 铁律：禁浮点参与数量比较；与 store 同口径）
+            if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
                 return $this->fail(422, '委外数量必须大于 0');
             }
             if (! $request->filled('supplier_id')) {
@@ -405,8 +407,8 @@ class OutsourcingController extends Controller
                         'warehouse_id' => $locked->warehouse_id,
                         'location_id' => $locked->location_id,
                         'direction' => -1,
-                        // 引擎签名 quantity 为 float（历史契约单值传输，余额预校验全走 bcmath 字符串，偏离记录⑤）
-                        'quantity' => (float) $item->required_qty,
+                        // 引擎 quantity 契约：两位小数十进制字符串（D-3 bcmath 化，原 float 契约/偏离记录⑤已消除）
+                        'quantity' => (string) $item->required_qty,
                         'source_type' => 'outsourcing_out',
                         'source_id' => $locked->id,
                         'source_no' => $locked->no,
@@ -454,7 +456,8 @@ class OutsourcingController extends Controller
     public function storeReceipt(Request $request, OutsourcingOrder $outsourcing)
     {
         $data = $this->validatePayloadReceipt($request);
-        if ((float) $data['quantity'] <= 0) {
+        // 回收量判正走 bccomp（D-3 铁律：禁浮点参与数量比较；正则已保证入参为两位小数十进制）
+        if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
             return $this->fail(422, '回收数量必须大于 0');
         }
 
@@ -653,8 +656,8 @@ class OutsourcingController extends Controller
                         'warehouse_id' => $data['warehouse_id'],
                         'location_id' => $data['location_id'],
                         'direction' => 1,
-                        // 引擎签名 quantity 为 float（历史契约单值传输，校验全走 bcmath 字符串，偏离记录⑤）
-                        'quantity' => (float) $l['quantity'],
+                        // 引擎 quantity 契约：两位小数十进制字符串（D-3 bcmath 化，原 float 契约/偏离记录⑤已消除）
+                        'quantity' => (string) $l['quantity'],
                         'source_type' => 'outsourcing_return',
                         'source_id' => $locked->id,
                         'source_no' => '',

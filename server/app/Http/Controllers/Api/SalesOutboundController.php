@@ -484,10 +484,11 @@ class SalesOutboundController extends Controller
             return $this->fail(1401, '请至少添加一条明细');
         }
         foreach ($items as $item) {
-            if ((float) $item['quantity'] <= 0) {
+            // 数量/价格正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）
+            if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
                 return $this->fail(422, '数量必须大于 0');
             }
-            if ((float) $item['price'] < 0) {
+            if (bccomp((string) $item['price'], '0', 2) < 0) {
                 return $this->fail(1411, '价格不能为负数');
             }
             // 原料禁售（SAL-10）：仅成品/半成品可销售（前端下拉已过滤，后端防御性兜底）

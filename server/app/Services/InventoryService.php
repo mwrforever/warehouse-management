@@ -19,7 +19,8 @@ class InventoryService
      * 余额行加锁前按 (product_id, warehouse_id, location_id) 升序规范化——调用方传入顺序无关
      *
      * @param  array  $movements  变动列表，每条含：product_id/warehouse_id/location_id(int)、
-     *                            direction(int 1=入库 -1=出库)、quantity(float 恒正)、
+     *                            direction(int 1=入库 -1=出库)、quantity(string|int|float 恒正，
+     *                            引擎内统一 bcadd 归一为两位小数十进制字符串——D-3 铁律禁浮点参与数量运算)、
      *                            source_type(InventoryMovement::SOURCE_TYPES 枚举)、source_id(int 来源单据ID)、
      *                            source_no(string 来源单号)、remark(?string 备注)
      * @param  int|null  $operatorId  操作人ID（写入流水 operator_id）
@@ -58,7 +59,9 @@ class InventoryService
     private function applyOne(array $m, ?int $operatorId, Collection $productMap): void
     {
         $direction = (int) $m['direction'];
-        $quantity = (float) $m['quantity'];
+        // 数量统一 bcadd 归一为两位小数十进制字符串（D-3 铁律：数量比较与累加禁止浮点参与；
+        // 调用方入参混杂 int/float/decimal 字符串，字符串化后全链路 bcmath 构造性精确）
+        $quantity = bcadd((string) $m['quantity'], '0', 2);
 
         // 行锁：同商品×仓库×库位的并发变动在此串行化
         $balance = InventoryBalance::where('product_id', $m['product_id'])
@@ -67,8 +70,8 @@ class InventoryService
             ->lockForUpdate()
             ->first();
 
-        // 出库：余额行必须存在且充足（余额允许 0 不允许负，超卖被业务层拒绝）
-        if ($direction === -1 && (! $balance || (float) $balance->quantity < $quantity)) {
+        // 出库：余额行必须存在且充足（余额允许 0 不允许负，超卖被业务层拒绝；bccomp 字符串比较无浮点误差窗口）
+        if ($direction === -1 && (! $balance || bccomp((string) $balance->quantity, $quantity, 2) < 0)) {
             $msg = '库存不足：商品 '.$m['product_id'].' 当前余额 '.($balance->quantity ?? 0).'，出库 '.$quantity;
             throw new InventoryException($msg);
         }
@@ -101,7 +104,9 @@ class InventoryService
         // 预取 map 命中即用；缺失（商品不存在）回退 findOrFail 保持既有异常语义
         $product = $productMap[$m['product_id']] ?? Product::findOrFail($m['product_id']);
         // 余额累加 + 上下限冗余同步（预警计算以商品实时值为准，此冗余仅作快照）
-        $balance->quantity = (float) $balance->quantity + $direction * $quantity;
+        // 累加走 bcadd + bcmul 符号乘（与原浮点 direction*quantity 语义严格一致，任意 direction 值行为等价），
+        // bcadd(...,2) 落库前即归一两位小数
+        $balance->quantity = bcadd((string) $balance->quantity, bcmul($quantity, (string) $direction, 2), 2);
         // 上下限冗余同步（decimal cast 为字符串，显式转 float 保证类型一致）
         $balance->safety_min = (float) $product->safety_min;
         $balance->safety_max = (float) $product->safety_max;

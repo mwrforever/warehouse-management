@@ -177,7 +177,7 @@ CI 由 `.github/workflows/ci.yml` 三 job（backend/frontend/e2e）执行，汇�
 2. **余料退回允许已回收状态**：spec §9「余料退回仅限已发出状态」收紧为「草稿/已关闭外均可（含已回收）」——否则满回收单（材料未全退）无法闭环关闭；状态机为 草稿→已发出→已回收→已关闭（全退自动）。
 3. **returns 多行提交仅头记首行**：`outsourcing_returns` 表无明细行（spec 如此），一次提交多组件行时退回单仅记录首个组件；行级账实以 `outsourcing_order_items.returned_qty` 与 `inventory_movements`（source_type=outsourcing_return）为准。
 4. **1529 以可选 product_id 冒烟校验落地**：回收请求体可选 `product_id`，提供时须等于委外单 output_product_id 否则 1529「回收商品与委外工序产出不一致」；output_product_id 为 null（数据异常）同样 1529。正常前端不传该字段。
-5. **approve 的 InventoryService::apply quantity float 为引擎既定签名**：余额预校验全部 bcmath 字符串，float 仅单值传输（历史契约，不改为铁律冲突）。
+5. **apply quantity 契约已字符串化（2026-08-25 D-3 修复消除本条偏离）**：原「InventoryService::apply quantity float 为引擎既定签名（历史契约）」不再成立——引擎全链路 bcmath 化后 quantity 统一两位小数十进制字符串（approve/returns 传参同步去掉 float 强转），与余额预校验口径一致，铁律合规。
 6. **事务边界（AGENTS §2.2.1 缓行）**：既有三个写方法（store/approve/storeReceipt）事务留在控制器既有骨架（历史模式），新逻辑（from-operation 组装/validateItems）经 `OutsourcingService`；returns 亦落控制器骨架。偏离记录备查。
 7. **委外仅限 is_outsourced=1 节点**：旧线性工单（无工艺路线）不可再委外（store/update/fromOperation 均 422「该工单没有工艺路线，不可委外」）；旧「委外=工单成品」口径全部移除（approve 组件口径、回收品=节点输出、1522 消息=组件名）；E2E TC-PRD-06 删除由 TC-OS 系列取代。
 8. **已关闭态禁回收/退回**：补充约束（spec 未明示）——状态机终态不可再操作（防「收 3→退全关闭→再收」路径）。
