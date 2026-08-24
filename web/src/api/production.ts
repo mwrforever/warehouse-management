@@ -594,12 +594,12 @@ export const productionApi = {
   async deleteOutsourcing(id: number) {
     await http.delete(`/production/outsourcings/${id}`)
   },
-  // 发出（审核，扣成品库存）
+  // 发出（审核，按发料组件逐行扣库存）
   async approveOutsourcing(id: number) {
     const { data } = await http.post(`/production/outsourcings/${id}/approve`)
     return data.data.no
   },
-  // 回收（创建即审核回收单，加成品库存）
+  // 回收（创建即审核回收单，回收品=节点输出入库）
   async receiptOutsourcing(
     id: number,
     payload: { quantity: number; warehouse_id: number; location_id: number; remark?: string },

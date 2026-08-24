@@ -7,9 +7,10 @@
 //   分支 OP20 冲压(B×3 耗 A×1) / OP40 组装(D×2 耗 A×1)；OP30 焊接(委外，C×2 耗 原料×2+B×1，
 //   is_outsourced=1，B 经 OP20 直连供料) → OP50 质检(产 OS2-FIN×1 耗 B×2+C×2+D×2)
 //   数量闭合 1704：A 产出 2=OP20 1+OP40 1；B 产出 3=OP30 1+OP50 2；C/D 产出 2=OP50 消耗 2（并行分支产物互异）
-// 委外对象=工艺路线节点（spec §5）：发料组件=节点输入材料（原料×2/半成品B×1 单位用量，应发=数量×单位用量自动带出），
+// 委外对象=工艺路线节点（spec 5 §4 规则定义）：发料组件=节点输入材料（原料×2/半成品B×1 单位用量，应发=数量×单位用量自动带出），
 //   回收品=节点输出 OS2-SEMI-C（发出扣组件、回收回补产出，旧成品口径已废弃）
-// 用例串行（后续用例复用 TC-OS-01 建的单据/库存基线；数据自建自清 OS2- 前缀，不动种子基线）
+// 用例串行（后续用例复用 TC-OS-01 建的单据/库存基线）：主数据幂等自建（OS2- 前缀）+ 串行复用；
+//   已审核单据不可删，跨 spec 残留由 production/purchase 用例的 .first() 口径规避（CI migrate:fresh 兜底）
 import { expect, test, type Page } from '@playwright/test'
 import { loginByAPI } from './helpers'
 
@@ -433,7 +434,10 @@ test.describe('委外加工模块 E2E（TC-OS-01~04）', () => {
       balance_after: number
     }[]) {
       expect(it.direction).toBe(-1)
-      expect(Number(it.balance_after)).toBe(0)
+      // 余额增量断言（变动后余额 = 基线 − 应发）：与文件内 rawBase/bBase 基线变量同口径，重跑幂等
+      expect(Number(it.balance_after)).toBe(
+        it.product_name === 'OS2原料' ? rawBase - 12 : bBase - 6,
+      )
     }
     const qtyByName = (name: string) =>
       Number(
@@ -576,7 +580,7 @@ test.describe('委外加工模块 E2E（TC-OS-01~04）', () => {
     }
     expect(await totalBalance(page, 'OS2原料')).toBe(rawBase)
     expect(await totalBalance(page, 'OS2半成品B')).toBe(bBase)
-    // outsourcing_return 流水：原料 +12 / 半成品B +6（source_no=退回单号 ORT；多行提交仅记首行——偏离记录⑨）
+    // outsourcing_return 流水：原料 +12 / 半成品B +6（source_no=退回单号 ORT；多行提交仅记首行——偏离记录③）
     const retList = await apiGet(page, `/api/v1/production/outsourcings/${osId}/returns`)
     expect(retList.total).toBe(1)
     const retNo = (retList.items as { no: string }[])[0].no

@@ -68,7 +68,7 @@ class OutsourcingService
     /**
      * 取工序对应的工艺路线节点（store/update 用，逻辑同 fromOperation 的取数段）
      * 无路线/无 node_no → 422「该工单没有工艺路线，不可委外」：仅 is_outsourced=1 的路线节点可委外
-     * （spec §5 成品口径收敛后与 fromOperation 语义一致）；有路线但路由头/节点缺失属数据异常：
+     * （spec 5 §4 规则定义：成品口径收敛后与 fromOperation 语义一致）；有路线但路由头/节点缺失属数据异常：
      * 显式 422，禁止静默降级
      *
      * @throws ProductionException 422（无路线/无 node_no/路由头或节点缺失）/ 数据异常（工序/工单不存在）

@@ -470,7 +470,7 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     // 注入组件库存 RTG-SEMI-A（委外发出扣减对象，采购 PO→PI 审核）：盘点 1205 拒无余额商品录盘；
     //   成品入库（FI）会把工单 completed_qty 置 >0，污染 stats-report TC-RPT-03 的
     //   「找一台已完成工单」前置定位（本 DAG 工单无领料，展开无 MAT-001 行）→ 弃用 FI 改走采购；
-    //   组件口径（spec §12.10）：委外发出扣节点输入材料（OP30 焊接 耗 RTG-SEMI-A×1/单位），
+    //   组件口径（spec 5 §4 规则定义）：委外发出扣节点输入材料（OP30 焊接 耗 RTG-SEMI-A×1/单位），
     //   回收回补节点产出（RTG-SEMI-C）——旧成品口径（扣 FIN-RTG）已随 Spec 5 废弃
     const semiAProds = await apiGet(page, '/api/v1/products', {
       keyword: 'RTG-SEMI-A',
