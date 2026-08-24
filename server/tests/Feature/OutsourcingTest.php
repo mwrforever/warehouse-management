@@ -4,15 +4,12 @@
 
 namespace Tests\Feature;
 
-use App\Models\BomHeader;
-use App\Models\Category;
 use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\Location;
 use App\Models\OutsourcingOrder;
 use App\Models\OutsourcingReceipt;
 use App\Models\Process;
-use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\Role;
 use App\Models\RoutingNode;
@@ -42,15 +39,13 @@ class OutsourcingTest extends TestCase
 
     private Unit $unit;
 
-    private Product $mat;
-
-    private Product $fin;
-
     private Supplier $supplier;
 
     private ProductionOrder $order;
 
-    private int $assemblyOpId; // 组装工序（委外对象）
+    private array $dag; // DagOrderFactory 钻石基线（OP30 委外节点 + 物料行）
+
+    private int $assemblyOpId; // 组装（委外）工序 id
 
     protected function setUp(): void
     {
@@ -65,39 +60,33 @@ class OutsourcingTest extends TestCase
         $this->wh = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
         $this->b01 = Location::create(['warehouse_id' => $this->wh->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
         $this->supplier = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
-        $rawCat = Category::create(['name' => '原材料', 'parent_id' => 0]);
-        $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
-        $this->unit = Unit::create(['name' => '个', 'code' => 'pc']);
-        $this->mat = Product::create(['name' => '测试铝材', 'code' => 'MAT-001', 'type' => 'raw_material', 'category_id' => $rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
-        $this->fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
-        $bom = BomHeader::create(['code' => 'BOM-001', 'product_id' => $this->fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
-        $bom->items()->create(['material_id' => $this->mat->id, 'quantity' => 2, 'unit_id' => $this->unit->id]);
-        foreach ([['下料', 'CUT', 1], ['组装', 'ASSY', 2], ['质检', 'QC', 3]] as [$name, $code, $sort]) {
-            Process::create(['name' => $name, 'code' => $code, 'sort' => $sort, 'status' => 1]);
-        }
-        // 基线库存：FIN-002 @B-01=50（委外发出 5 → 45；回收 5 → 50）
-        app(InventoryService::class)->apply([
-            ['product_id' => $this->fin->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id, 'direction' => 1, 'quantity' => 50, 'source_type' => 'purchase_inbound', 'source_id' => 0, 'source_no' => 'SEED', 'remark' => '测试基线'],
-        ]);
-
-        // 建单（FIN-002×5）→ 下达 → 开工
-        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
-            'product_id' => $this->fin->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
-        ]);
-        $res->assertJsonPath('code', 0);
-        $this->order = ProductionOrder::where('no', $res->json('data.no'))->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$this->order->id}/release")->assertJsonPath('code', 0);
-        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$this->order->id}/start")->assertJsonPath('code', 0);
-        // 首工序（下料）报工完成 → 组装（委外对象）自动置进行中（与 E2E TC-PRD-06 流程一致）
-        $cutOp = $this->order->operations()->where('seq', 1)->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/operations/{$cutOp->id}/reports", [
-            'qualified_qty' => 5,
-        ])->assertJsonPath('code', 0);
-        $this->assemblyOpId = $this->order->operations()->where('seq', 2)->first()->id;
+        // DagOrderFactory 依赖的基线字典（单位 pc / 工序 CUT）
+        Unit::create(['name' => '个', 'code' => 'pc']);
+        Process::create(['name' => '下料', 'code' => 'CUT', 'sort' => 1, 'status' => 1]);
     }
 
-    // 组装委外载荷（默认组装工序×5，发出仓 B-01——与基线库存同库位，审核扣减与回收入账落在同一余额行；
-    // items 为载荷必填（422 格式层），旧线性工单无路线节点直落一行默认组件，DAG 用例各自显式覆盖）
+    // 基准 DAG 工单（OP30 委外，计划 6）+ 组件基线（原料 12/半成品B 6 @B-01——默认载荷 5 的应发 10/5 余量）；
+    // 供 payload 族用例共享（各用例自建造数，避免在 setUp 预建导致二次 dagOrder 撞唯一键）
+    private function baseDag(): array
+    {
+        $this->dag = $this->dagOrder();
+        $this->order = $this->dag['order'];
+        $this->unit = $this->dag['unit'];
+        $this->assemblyOpId = $this->dag['ops']['OP30']->id;
+        app(InventoryService::class)->apply([
+            ['product_id' => $this->dag['raw']->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 12, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+            ['product_id' => $this->dag['semiB']->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 6, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+        ]);
+
+        return $this->dag;
+    }
+
+    // 组装委外载荷（默认 OP30 委外节点×5，发出仓 B-01——与组件基线同库位，审核扣减与回收入账落在同一余额行；
+    // items=节点输入材料折算应发：原料×2/半成品B×1 单位用量 → 10/5，载荷必填（422 格式层））
     private function payload(array $overrides = []): array
     {
         return array_merge([
@@ -108,7 +97,8 @@ class OutsourcingTest extends TestCase
             'location_id' => $this->b01->id,
             'quantity' => 5,
             'items' => [
-                ['material_id' => $this->mat->id, 'required_qty' => 10, 'unit_id' => $this->unit->id],
+                ['material_id' => $this->dag['raw']->id, 'required_qty' => 10, 'unit_id' => $this->unit->id],
+                ['material_id' => $this->dag['semiB']->id, 'required_qty' => 5, 'unit_id' => $this->unit->id],
             ],
         ], $overrides);
     }
@@ -156,6 +146,7 @@ class OutsourcingTest extends TestCase
     public function test_store_creates_draft_with_no(): void
     {
         // 正常路径：草稿创建成功，单号 OS{date}-001
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $this->assertMatchesRegularExpression('/^OS\d{12}001$/', $no);
         $os = OutsourcingOrder::where('no', $no)->first();
@@ -165,20 +156,22 @@ class OutsourcingTest extends TestCase
 
     public function test_store_rejects_over_plan_with_1520(): void
     {
-        // 异常路径：委外量超工单计划数（6 > 5）→ 1520
-        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['quantity' => 6]))
+        // 异常路径：委外量超节点剩余计划量（7 > 工单计划 6）→ 1520
+        $this->baseDag();
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['quantity' => 7]))
             ->assertJsonPath('code', 1520)
-            ->assertJsonPath('message', '委外数量超过工单计划数量');
+            ->assertJsonPath('message', '委外数量超过节点剩余计划量');
     }
 
     public function test_store_rejects_operation_not_in_order_with_422(): void
     {
         // 异常路径：工序不属于该工单 → 422（格式层；spec 码段满）
+        $this->baseDag();
         $other = ProductionOrder::where('no', '!=', $this->order->no)->first();
         if (! $other) {
-            // 建第二个工单的工序作反例
+            // 建第二个工单的工序作反例（同一成品，二次快照独立 DAG）
             $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
-                'product_id' => $this->fin->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
+                'product_id' => $this->dag['fin']->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
             ]);
             $res->assertJsonPath('code', 0);
             $other = ProductionOrder::where('no', $res->json('data.no'))->first();
@@ -191,6 +184,7 @@ class OutsourcingTest extends TestCase
     public function test_store_rejects_non_positive_qty_with_422(): void
     {
         // 异常路径：委外数量 ≤ 0 → 422（格式层；spec 码段满）
+        $this->baseDag();
         $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['quantity' => 0]))
             ->assertJsonPath('code', 422);
     }
@@ -198,6 +192,7 @@ class OutsourcingTest extends TestCase
     public function test_store_rejects_missing_supplier_with_422(): void
     {
         // 异常路径：供应商缺失 → 422（格式层）
+        $this->baseDag();
         $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['supplier_id' => null]))
             ->assertJsonPath('code', 422);
     }
@@ -205,24 +200,31 @@ class OutsourcingTest extends TestCase
     public function test_store_rejects_missing_warehouse_or_location_with_422(): void
     {
         // 异常路径：仓库/库位缺失 → 422（格式层）
+        $this->baseDag();
         $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['warehouse_id' => null]))
             ->assertJsonPath('code', 422);
         $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload(['location_id' => null]))
             ->assertJsonPath('code', 422);
     }
 
-    public function test_approve_deducts_finished_inventory_and_writes_movement(): void
+    // 核心不变式（发出，默认载荷 5）：组件余额 12→2、6→1，分量 outsourcing_out 流水（direction=-1、
+    // 商品=发料组件）+ 操作人/时间落库
+    public function test_approve_deducts_default_payload_components_and_writes_movement(): void
     {
-        // 核心不变式（发出）：余额 50→45、outsourcing_out 流水（direction=-1，商品=工单成品）
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $os = OutsourcingOrder::where('no', $no)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
             ->assertJsonPath('code', 0);
-        $balance = InventoryBalance::where('product_id', $this->fin->id)->first();
-        $this->assertSame('45.00', $balance->quantity);
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
+        $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
         $this->assertDatabaseHas('inventory_movements', [
-            'product_id' => $this->fin->id, 'direction' => -1, 'quantity' => '5.00',
-            'balance_after' => '45.00', 'source_type' => 'outsourcing_out', 'source_no' => $no,
+            'product_id' => $this->dag['raw']->id, 'direction' => -1, 'quantity' => '10.00',
+            'balance_after' => '2.00', 'source_type' => 'outsourcing_out', 'source_no' => $no,
+        ]);
+        $this->assertDatabaseHas('inventory_movements', [
+            'product_id' => $this->dag['semiB']->id, 'direction' => -1, 'quantity' => '5.00',
+            'balance_after' => '1.00', 'source_type' => 'outsourcing_out', 'source_no' => $no,
         ]);
         $os->refresh();
         $this->assertSame(OutsourcingOrder::STATUS_APPROVED, $os->status);
@@ -230,34 +232,17 @@ class OutsourcingTest extends TestCase
         $this->assertNotNull($os->approved_at);
     }
 
-    public function test_approve_rejects_insufficient_balance_with_1522_rollback(): void
-    {
-        // 核心不变式（超卖拦截）：库存不足 → 1522 整体回滚
-        // 先把成品余额压到 3（低于委外量 5）：草稿期 1520 校验（≤ 工单计划 5）仍通过，审核期才触发 1522
-        app(InventoryService::class)->apply([[
-            'product_id' => $this->fin->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
-            'direction' => -1, 'quantity' => 47, 'source_type' => 'check_out', 'source_id' => 0, 'source_no' => 'DRAIN', 'remark' => '测试压库存',
-        ]]);
-        $no = $this->createOutsourcing($this->payload());
-        $os = OutsourcingOrder::where('no', $no)->first();
-        $res = $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve");
-        $res->assertJsonPath('code', 1522)
-            ->assertJsonPath('message', '商品[FIN-002]库存不足');
-        $this->assertSame('3.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
-        $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no]);
-        $this->assertSame(OutsourcingOrder::STATUS_DRAFT, $os->refresh()->status);
-    }
-
     public function test_approve_idempotent_with_1523(): void
     {
-        // 核心不变式：重复审核 → 1523，库存不重复扣减
+        // 核心不变式：重复审核 → 1523，组件库存不重复扣减（发出后原料 12→2，二次拒绝后保持 2）
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $os = OutsourcingOrder::where('no', $no)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
             ->assertJsonPath('code', 1523)
             ->assertJsonPath('message', '该委外单已审核');
-        $this->assertSame('45.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
     }
 
     public function test_receipt_credits_inventory_and_marks_received(): void
@@ -324,6 +309,7 @@ class OutsourcingTest extends TestCase
     public function test_receipt_rejects_draft_outsourcing_with_422(): void
     {
         // 异常路径：未发出（草稿）不可回收 → 422
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $os = OutsourcingOrder::where('no', $no)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
@@ -370,6 +356,7 @@ class OutsourcingTest extends TestCase
     public function test_update_destroy_draft_ok_approved_rejected_with_1521(): void
     {
         // 正常+异常路径：草稿可改可删；已审核不可改删 → 1521
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $id = OutsourcingOrder::where('no', $no)->first()->id;
         $this->withToken($this->token)->putJson("/api/v1/production/outsourcings/{$id}", $this->payload(['remark' => '改后']))
@@ -390,6 +377,7 @@ class OutsourcingTest extends TestCase
     public function test_index_with_labels_and_outsourcings_requires_permission(): void
     {
         // 正常路径：列表含工单单号/供应商/工序名/状态标签
+        $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $os = OutsourcingOrder::where('no', $no)->first();
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
@@ -398,7 +386,7 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.supplier_name', '测试供应商')
-            ->assertJsonPath('data.items.0.process_name', '组装')
+            ->assertJsonPath('data.items.0.process_name', '下料')
             ->assertJsonPath('data.items.0.status_label', '已审核');
         // 异常路径：无 production.outsource.list 权限的角色被拒（403 JSON 信封）
         $role = Role::create(['name' => '普通', 'code' => 'plain']);
@@ -475,7 +463,7 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('message', '应发数量超过单位用量折算上限');
     }
 
-    // 载荷校验：组件物料重复 → 422（格式层拦截，防 legacy/DAG 直落撞唯一键 uniq_outsourcing_order_items 抛 500）
+    // 载荷校验：组件物料重复 → 422（格式层拦截，防重复物料直落撞唯一键 uniq_outsourcing_order_items 抛 500）
     public function test_store_rejects_duplicate_items_with_422(): void
     {
         ['order' => $order, 'ops' => $ops, 'raw' => $raw] = $this->dagOrder();
@@ -513,7 +501,7 @@ class OutsourcingTest extends TestCase
         $this->assertDatabaseCount('outsourcing_orders', 0);
     }
 
-    // OUT-02：发出扣各组件库存（委外商品口径从「工单成品」改为「发料组件」）——
+    // OUT-02：发出扣各组件库存（委外商品口径=发料组件）——
     // 原料 12@B-01、半成品B 6@B-01 基线，发出 6 后两组件按应发全额扣减归零，
     // outsourcing_out 分量流水（每组件一条，source_no=委外单号、remark=委外发出）+ issued_qty 回写 = 应发
     public function test_approve_deducts_components_and_writes_movements(): void
@@ -597,7 +585,7 @@ class OutsourcingTest extends TestCase
         $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os->fresh()->status);
     }
 
-    // OUT-08：重复发出 → 1523 幂等拦截（components 路径同 legacy），不重复扣减、不产生重复流水
+    // OUT-08：重复发出 → 1523 幂等拦截（components 路径），不重复扣减、不产生重复流水
     public function test_approve_idempotent(): void
     {
         ['order' => $order, 'ops' => $ops, 'raw' => $raw, 'semiB' => $semiB, 'unit' => $unit] = $this->dagOrder();
