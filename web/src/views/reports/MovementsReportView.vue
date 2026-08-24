@@ -104,9 +104,9 @@ const dateShortcuts = [
   { text: '近 30 天', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] },
 ]
 
-// 净变动 = 总入库 - 总出库（后端字符串转数值仅用于展示比较）
-const netChange = computed(() =>
-  (Number(totals.value.inbound_qty) - Number(totals.value.outbound_qty)).toFixed(2),
+// 净变动 = 总入库 - 总出库（后端字符串转数值；展示格式化在模板统一走 formatThousand，本地不再预格式化——D-16）
+const netChange = computed(
+  () => Number(totals.value.inbound_qty) - Number(totals.value.outbound_qty),
 )
 
 // 双线图：入库绿实线 / 出库红虚线（颜色+线型双编码，色盲友好；axis tooltip）

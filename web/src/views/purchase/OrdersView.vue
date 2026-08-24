@@ -14,7 +14,7 @@ import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
-import { formatYuan, toLocalDateString } from '../../utils/format'
+import { formatThousand, formatYuan, toLocalDateString } from '../../utils/format'
 
 const auth = useAuthStore()
 const saving = ref(false)
@@ -57,9 +57,8 @@ function lineAmountYuan(item: { quantity: number; price: number }): number {
   return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
 }
 function totalYuan(): string {
-  return form.items
-    .reduce((sum, i) => sum + lineAmountYuan(i), 0)
-    .toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  // 合计展示千分位统一走 utils/format（D-16）；行金额折算（lineAmountYuan）属计算逻辑保持本地
+  return formatThousand(form.items.reduce((sum, i) => sum + lineAmountYuan(i), 0))
 }
 
 // 行金额（分→元展示，仅读列）

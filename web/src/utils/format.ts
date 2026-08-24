@@ -21,3 +21,10 @@ export function formatThousand(value: number | string): string {
   if (Number.isNaN(n)) return '0.00'
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
+
+/** 百分比格式化（比率口径）：0.666678 → '66.67'（两位小数，不附 % 号——宽度样式/文案拼接方按需追加；NaN 防御返回 '0.00'） */
+export function formatPercent(ratio: number): string {
+  const n = Number(ratio)
+  if (Number.isNaN(n)) return '0.00'
+  return (n * 100).toFixed(2)
+}

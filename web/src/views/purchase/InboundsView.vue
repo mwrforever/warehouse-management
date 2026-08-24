@@ -18,7 +18,7 @@ import { calcMaxQuantity } from '../../composables/useScanInbound'
 import { useListQuery } from '../../composables/useListQuery'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
-import { formatYuan } from '../../utils/format'
+import { formatThousand, formatYuan } from '../../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -71,11 +71,9 @@ function lineAmountYuan(item: { quantity: number; price: number }): number {
   return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
 }
 
-// 明细合计（元，实时计算）
+// 明细合计（元，实时计算；千分位展示统一走 utils/format——D-16）
 function totalYuan(): string {
-  return form.items
-    .reduce((sum, i) => sum + lineAmountYuan(i), 0)
-    .toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return formatThousand(form.items.reduce((sum, i) => sum + lineAmountYuan(i), 0))
 }
 
 // 行金额（分→元展示，仅读列）

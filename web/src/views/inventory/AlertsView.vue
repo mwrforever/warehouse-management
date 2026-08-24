@@ -47,6 +47,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { inventoryApi, type AlertItem } from '../../api/inventory'
+import { formatThousand } from '../../utils/format'
 
 const items = ref<AlertItem[]>([])
 const loading = ref(false)
@@ -55,9 +56,9 @@ const loading = ref(false)
 const lowCount = ref(0)
 const highCount = ref(0)
 
-// 超额幅度（保留两位）
+// 超额幅度（数量差展示千分位两位小数，统一走 utils/format——D-16）
 function formatGap(limit: number, qty: number): string {
-  return Math.abs(Number(limit) - Number(qty)).toFixed(2)
+  return formatThousand(Math.abs(Number(limit) - Number(qty)))
 }
 
 async function load() {

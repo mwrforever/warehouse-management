@@ -102,9 +102,9 @@ const dateShortcuts = [
   { text: '近 30 天', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] },
 ]
 
-// 差额 = 销售金额 - 采购金额（可负，红色展示）
-const diff = computed(() =>
-  (Number(totals.value.sales_amount) - Number(totals.value.purchase_amount)).toFixed(2),
+// 差额 = 销售金额 - 采购金额（可负，红色展示；展示格式化在模板统一走 formatThousand，本地不再预格式化——D-16）
+const diff = computed(
+  () => Number(totals.value.sales_amount) - Number(totals.value.purchase_amount),
 )
 
 // 分组柱状图：采购蓝 / 销售绿，值标签默认可见（chart 域 AAA 可访问性要求）

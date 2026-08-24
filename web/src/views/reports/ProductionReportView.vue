@@ -110,7 +110,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { reportApi, type ProductionStatItem, type ProductionTotal } from '../../api/report'
 import { productApi } from '../../api/product'
-import { formatThousand, toLocalDateString } from '../../utils/format'
+import { formatPercent, formatThousand, toLocalDateString } from '../../utils/format'
 
 const dateRange = ref<[string, string]>([
   toLocalDateString(new Date(Date.now() - 29 * 86400000)),
@@ -137,19 +137,19 @@ const dateShortcuts = [
 
 // 总计划数（KPI；取后端全区间 totals，截断安全）
 const totalPlan = computed(() => totals.value.total_plan)
-// 平均达成率（加权口径：Σ完工/Σ计划；计划 0 防御 0.00）
+// 平均达成率（加权口径：Σ完工/Σ计划；计划 0 防御 0.00；百分比格式化统一走 utils/format——D-16）
 const avgAchievement = computed(() => {
   const plan = Number(totals.value.total_plan)
   const done = Number(totals.value.total_completed)
   if (plan <= 0) return '0.00'
-  return ((done / plan) * 100).toFixed(2)
+  return formatPercent(done / plan)
 })
 // 平均良率（Σ合格/(Σ合格+Σ不良)；无不良→100.00）
 const avgYield = computed(() => {
   const q = Number(totals.value.total_qualified)
   const d = Number(totals.value.total_defective)
   if (q + d <= 0) return '100.00'
-  return ((q / (q + d)) * 100).toFixed(2)
+  return formatPercent(q / (q + d))
 })
 
 // 达成率/良率分级样式（与 report.md 页覆盖一致）
