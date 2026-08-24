@@ -586,10 +586,13 @@ class OutsourcingController extends Controller
         return $this->ok($result);
     }
 
-    /** 回收记录列表：该委外单全部回收单（按回收时间倒序） */
+    /** 回收记录列表：该委外单全部回收单（按回收时间倒序；预载仓库/库位防 N+1，与 returnList 同构） */
     public function receipts(OutsourcingOrder $outsourcing)
     {
-        $rows = $outsourcing->receipts()->orderByDesc('received_at')->paginate(max(1, min(100, (int) request('per_page', 10))));
+        $rows = $outsourcing->receipts()
+            ->with(['warehouse', 'location'])
+            ->orderByDesc('received_at')
+            ->paginate(max(1, min(100, (int) request('per_page', 10))));
 
         return $this->ok([
             'items' => $rows->map(fn (OutsourcingReceipt $r) => [

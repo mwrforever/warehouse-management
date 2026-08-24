@@ -24,6 +24,7 @@ use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Feature\Concerns\DagOrderFactory;
 use Tests\TestCase;
 
@@ -377,6 +378,36 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.items.0.quantity', '6.00')
             ->assertJsonPath('data.items.0.no', 'OSR'.date('YmdHi').'001');
+    }
+
+    public function test_receipts_index_eager_loads_warehouse_and_location(): void
+    {
+        // 正常路径（B-101 回归）：列表预载仓库/库位——2 行记录仅各发 1 次 in 批量查询（逐行懒加载会各发 2 次）
+        $dag = $this->dagOrder();
+        ['ops' => $ops] = $dag;
+        $os = $this->approvedDagOutsourcing($dag);
+        // 首工序（下料）报满 → 委外工序置进行中（分批回收前置，与分批回收用例同流程）
+        $this->withToken($this->token)->postJson("/api/v1/production/operations/{$ops['OP10']->id}/reports", [
+            'qualified_qty' => 6,
+        ])->assertJsonPath('code', 0);
+        // 两批回收（3+3）制造 2 行记录：懒加载时每行各触发一次仓库/库位查询
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/{$os->id}/receipts")
+            ->assertJsonPath('code', 0)
+            ->assertJsonCount(2, 'data.items')
+            ->assertJsonPath('data.items.0.warehouse_name', '主仓')
+            ->assertJsonPath('data.items.0.location_name', 'B-01');
+        $log = collect(DB::getQueryLog());
+        // 预载契约：仓库/库位各只查 1 次（in 批量）；懒加载会按行各查 2 次
+        $this->assertSame(1, $log->filter(fn (array $q) => str_contains($q['query'], 'from "warehouses"'))->count());
+        $this->assertSame(1, $log->filter(fn (array $q) => str_contains($q['query'], 'from "locations"'))->count());
     }
 
     public function test_update_destroy_draft_ok_approved_rejected_with_1521(): void
