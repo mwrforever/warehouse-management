@@ -351,6 +351,8 @@ class SalesOrderController extends Controller
         if (empty($items)) {
             return $this->fail(1401, '请至少添加一条明细');
         }
+        // 商品批量预取（B-105）：一次 whereIn 拉全明细商品，替代循环内逐行 Product::find 的 N+1 查询
+        $products = Product::whereIn('id', collect($items)->pluck('product_id')->unique())->get()->keyBy('id');
         foreach ($items as $item) {
             // 数量/价格正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）
             if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
@@ -360,7 +362,7 @@ class SalesOrderController extends Controller
                 return $this->fail(1411, '价格不能为负数');
             }
             // 原料禁售（SAL-10）：仅成品/半成品可销售（前端下拉已过滤，后端防御性兜底）
-            $product = Product::find($item['product_id']);
+            $product = $products->get($item['product_id']);
             if ($product && $product->type === 'raw_material') {
                 return $this->fail(422, '原料商品不可销售');
             }

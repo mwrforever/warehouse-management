@@ -19,6 +19,7 @@ use App\Models\Warehouse;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class SalesOutboundTest extends TestCase
@@ -191,6 +192,19 @@ class SalesOutboundTest extends TestCase
         $items[] = ['product_id' => $this->fin->id, 'quantity' => 1, 'price' => 10000, 'order_item_id' => $this->finItemId];
         $this->withToken($this->token)->postJson('/api/v1/sales/outbounds', $this->payload(['items' => $items]))
             ->assertJsonPath('code', 1412);
+    }
+
+    public function test_store_item_validation_queries_products_in_single_batch(): void
+    {
+        // 性能路径（B-105）：原料禁售校验须一次 whereIn 批量预取全部明细商品，
+        // 禁止循环内逐行 Product::find（N 行明细 N 次查询的 N+1 形态；2 行明细断言仅 1 次商品行查询）
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson('/api/v1/sales/outbounds', $this->payload())
+            ->assertJsonPath('code', 0);
+        $productSelects = collect(DB::getQueryLog())
+            ->filter(fn ($q) => str_starts_with($q['query'], 'select * from "products"'));
+        DB::disableQueryLog();
+        $this->assertCount(1, $productSelects, '明细商品校验应一次批量查询完成，实际查询：'.$productSelects->pluck('query')->implode(' | '));
     }
 
     public function test_store_standalone_outbound_without_order(): void

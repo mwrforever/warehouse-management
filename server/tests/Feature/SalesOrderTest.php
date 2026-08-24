@@ -13,6 +13,7 @@ use App\Models\Unit;
 use App\Models\User;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class SalesOrderTest extends TestCase
@@ -146,6 +147,19 @@ class SalesOrderTest extends TestCase
         $items[] = ['product_id' => $this->fin->id, 'quantity' => 1, 'price' => 1];
         $this->withToken($this->token)->postJson('/api/v1/sales/orders', ['customer_id' => $this->customer->id, 'order_date' => now()->toDateString(), 'items' => $items])
             ->assertJsonPath('code', 1412);
+    }
+
+    public function test_store_item_validation_queries_products_in_single_batch(): void
+    {
+        // 性能路径（B-105）：原料禁售校验须一次 whereIn 批量预取全部明细商品，
+        // 禁止循环内逐行 Product::find（N 行明细 N 次查询的 N+1 形态；2 行明细断言仅 1 次商品行查询）
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson('/api/v1/sales/orders', $this->payload())
+            ->assertJsonPath('code', 0);
+        $productSelects = collect(DB::getQueryLog())
+            ->filter(fn ($q) => str_starts_with($q['query'], 'select * from "products"'));
+        DB::disableQueryLog();
+        $this->assertCount(1, $productSelects, '明细商品校验应一次批量查询完成，实际查询：'.$productSelects->pluck('query')->implode(' | '));
     }
 
     public function test_update_draft_recalculates_total(): void
