@@ -177,20 +177,25 @@ async function save() {
     } else {
       const res = await productionApi.createOrder(payload)
       ElMessage.success(`工单 ${res.no} 创建成功`)
-      // 新建成功：直接以创建响应 id 拉详情打开 BOM 展开弹窗（不依赖列表回查——
-      // 旧实现列表刷新失败时误报「创建失败」误导用户重复提交，bug #11 回归）
-      expandData.value = await productionApi.orderDetail(res.id)
+      // 创建成功语义与后续展示解耦（BF-4）：先关窗清表单——若详情拉取失败落入外层 catch，
+      // 弹窗滞留+通用错误会让用户误以为创建失败而重试，造成重复建单
       dialogVisible.value = false
-      expandVisible.value = true
-      // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
-      reset()
-      // 新建弹窗提交后清空表单（下次打开即为空表单）
       Object.assign(form, {
         product_id: undefined,
         quantity: undefined,
         plan_date: toLocalDateString(new Date()),
         remark: '',
       })
+      // 以创建响应 id 拉详情打开 BOM 展开弹窗（不依赖列表回查，bug #11 回归）；
+      // 失败仅提示「已创建」语义：新单可从列表定位，不得诱导重试
+      try {
+        expandData.value = await productionApi.orderDetail(res.id)
+        expandVisible.value = true
+      } catch {
+        ElMessage.error(`工单 ${res.no} 已创建，展开确认加载失败，可从列表查看`)
+      }
+      // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
+      reset()
     }
   } catch (e) {
     ElMessage.error((e as Error).message)
