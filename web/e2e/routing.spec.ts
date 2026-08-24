@@ -1,8 +1,9 @@
 // 工艺路线 DAG E2E：TC-RTG-01~05（画布保存/环路拦截/工单展开/并行推进/兼容回退）
 // 数据策略：主数据/半成品/工序/BOM/供应商全部经 API 幂等自建（编码 RTG- 前缀），
 //   不动 MAT-001/SEMI-001/FIN-002 种子基线；库存不走盘点（1205 拒无余额商品录盘）
-//   ——FIN-RTG 经采购入库（PO→PI）注入 6@B-01 供 TC-RTG-04 委外发出扣减（成品入库会置工单
-//   completed_qty>0，污染 stats-report TC-RPT-03 的「已完成工单」前置定位）；原料不备库（下达仅告警不阻断）
+//   ——RTG-SEMI-A 经采购入库（PO→PI）注入 6@B-01 供 TC-RTG-04 委外发出扣减（组件口径；
+//   成品入库会置工单 completed_qty>0，污染 stats-report TC-RPT-03 的「已完成工单」前置定位）；
+//   原料不备库（下达仅告警不阻断）
 // 结构（钻石，基准 3）：OP10 下料(产 RTG-SEMI-A×3 耗 RTG-RAW×3) → OP20 冲压(B×2 耗 A×1) /
 //   OP30 焊接(C×2 耗 A×1，is_outsourced=1) / OP40 组装(D×2 耗 A×1) → OP50 质检(产 RTG-FIN×1 耗 B/C/D×2)
 // 并行分支产出互异半成品：后端 1704 逐节点数量闭合要求「半成品产出 = 直接后继消耗合计」，同产物会重复闭合冲突
@@ -466,13 +467,20 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     await report('OP40', 6)
     expect(await graphStatus('OP30')).toBe(1)
     expect(await graphStatus('OP50')).toBe(0)
-    // 注入 FIN-RTG 库存（采购 PO→PI 审核）：盘点 1205 拒无余额商品录盘；
+    // 注入组件库存 RTG-SEMI-A（委外发出扣减对象，采购 PO→PI 审核）：盘点 1205 拒无余额商品录盘；
     //   成品入库（FI）会把工单 completed_qty 置 >0，污染 stats-report TC-RPT-03 的
-    //   「找一台已完成工单」前置定位（本 DAG 工单无领料，展开无 MAT-001 行）→ 弃用 FI 改走采购
+    //   「找一台已完成工单」前置定位（本 DAG 工单无领料，展开无 MAT-001 行）→ 弃用 FI 改走采购；
+    //   组件口径（spec §12.10）：委外发出扣节点输入材料（OP30 焊接 耗 RTG-SEMI-A×1/单位），
+    //   回收回补节点产出（RTG-SEMI-C）——旧成品口径（扣 FIN-RTG）已随 Spec 5 废弃
+    const semiAProds = await apiGet(page, '/api/v1/products', {
+      keyword: 'RTG-SEMI-A',
+      per_page: 100,
+    })
+    const semiAId = semiAProds.items[0].id as number
     const po = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supId,
       order_date: todayStr(),
-      items: [{ product_id: finId, quantity: 6, price: 1 }],
+      items: [{ product_id: semiAId, quantity: 6, price: 1 }],
     })
     expect(po.code).toBe(0)
     const poNo = (po.data as { no: string }).no
@@ -484,20 +492,38 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
       supplier_id: supId,
       warehouse_id: whId,
       location_id: b01Id,
-      items: [{ product_id: finId, quantity: 6, price: 1 }],
+      items: [{ product_id: semiAId, quantity: 6, price: 1 }],
     })
     expect(pi.code).toBe(0)
     const piNo = (pi.data as { no: string }).no
     const piList = await apiGet(page, '/api/v1/purchase/inbounds', { keyword: piNo })
     const piAppr = await apiPost(page, `/api/v1/purchase/inbounds/${piList.items[0].id}/approve`)
     expect(piAppr.code).toBe(0)
-    // RTG-FIN 余额（关键字按名称唯一匹配，避免子串误中 RTG-FIN2/3）
-    const finBal = async (): Promise<number> => {
-      const rows = await apiGet(page, '/api/v1/inventory/balances', { keyword: 'RTG最终成品' })
+    // 组件余额（关键字按名称唯一匹配，避免子串误中 RTG-FIN2/3 等其它商品）
+    const semiABal = async (): Promise<number> => {
+      const rows = await apiGet(page, '/api/v1/inventory/balances', { keyword: 'RTG半成品A' })
       return (rows.items as { quantity: number }[]).reduce((s, r) => s + Number(r.quantity), 0)
     }
-    expect(await finBal()).toBe(6)
-    // OP30 委外：建委外单 → 发出（扣成品库存 6）→ 回收满量 → 节点已完成 + 汇合点推进
+    const semiCBal = async (): Promise<number> => {
+      const rows = await apiGet(page, '/api/v1/inventory/balances', { keyword: 'RTG半成品C' })
+      return (rows.items as { quantity: number }[]).reduce((s, r) => s + Number(r.quantity), 0)
+    }
+    expect(await semiABal()).toBe(6)
+    // OP30 委外（组件口径）：items 取自 from-operation 预填（A×1/单位 → 委外 6 应发 6）；
+    //   发出扣组件库存 6 → 回收回补节点产出 C 6（口径后 FIN-RTG 不再参与委外扣减）
+    const pref = await apiGet(
+      page,
+      `/api/v1/production/outsourcings/from-operation/${opId('OP30')}`,
+    )
+    const items = (
+      pref.items as { material_id: number; qty_per_unit: number; unit_id: number }[]
+    ).map((i) => ({
+      material_id: i.material_id,
+      required_qty: Number(i.qty_per_unit) * 6,
+      unit_id: i.unit_id,
+    }))
+    expect(items).toHaveLength(1)
+    expect(items[0].required_qty).toBe(6)
     const os = await apiPost(page, '/api/v1/production/outsourcings', {
       order_id: moId,
       operation_id: opId('OP30'),
@@ -505,6 +531,7 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
       warehouse_id: whId,
       location_id: b01Id,
       quantity: 6,
+      items,
     })
     expect(os.code).toBe(0)
     const osNo = (os.data as { no: string }).no
@@ -512,14 +539,14 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     const osId = osList.items[0].id as number
     const appr = await apiPost(page, `/api/v1/production/outsourcings/${osId}/approve`)
     expect(appr.code).toBe(0)
-    expect(await finBal()).toBe(0)
+    expect(await semiABal()).toBe(0)
     const rc = await apiPost(page, `/api/v1/production/outsourcings/${osId}/receipts`, {
       quantity: 6,
       warehouse_id: whId,
       location_id: b01Id,
     })
     expect(rc.code).toBe(0)
-    expect(await finBal()).toBe(6)
+    expect(await semiCBal()).toBe(6)
     // 委外节点经回收完成；全部前驱已完成 → 汇合点 OP50 进行中
     expect(await graphStatus('OP30')).toBe(2)
     expect(await graphStatus('OP50')).toBe(1)
