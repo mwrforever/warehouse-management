@@ -278,6 +278,7 @@ class PickListController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
             DB::transaction(function () use ($pick, &$result) {
                 // 锁领料单行：同一单据重复审核在此判重（幂等 1516）
                 $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
@@ -360,7 +361,7 @@ class PickListController extends Controller
                 $locked->approved_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
         } catch (ProductionException $e) {
             // 1516 幂等 / 1513 超需求剩余 / 1515 库存不足（事务整体回滚）
             return $this->fail($e->getCode() ?: 1513, $e->getMessage());

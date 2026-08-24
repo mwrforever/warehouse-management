@@ -1,6 +1,6 @@
 <?php
 
-// 库存引擎测试：核心不变式（事务双写/恒等式/超卖拒绝/首次入库建行/冗余同步）100% 覆盖
+// 库存引擎测试：核心不变式（事务双写/恒等式/超卖拒绝/首次入库建行/冗余同步/锁序规范化）100% 覆盖
 
 namespace Tests\Feature;
 
@@ -195,5 +195,50 @@ class InventoryServiceTest extends TestCase
         $user = User::create(['name' => '操作员', 'username' => 'op1', 'password' => 'admin123', 'status' => 1]);
         $this->svc->apply([$this->movement()], $user->id);
         $this->assertDatabaseHas('inventory_movements', ['operator_id' => $user->id]);
+    }
+
+    public function test_apply_locks_rows_in_normalized_ascending_order_regardless_of_input_order(): void
+    {
+        // B-3 锁序规范化：乱序传入的 movements 必须按 (product_id, warehouse_id, location_id) 升序加锁——
+        // 跨单据并发审核（如采购入库 [P1,P2] 与退料/盘点 [P2,P1] 同仓同位）乱序交叉持锁互等会成
+        // InnoDB 死锁环（1213 回滚一方，败方 500）；本地 SQLite 无法复现行锁死锁语义，
+        // 以「流水落库顺序 == 加锁顺序」间接验证（applyOne 先锁后写，自增 id 序即加锁序的落库投影）
+        $mkProduct = fn (string $code) => Product::create([
+            'name' => '锁序商品'.$code, 'code' => $code, 'type' => 'raw_material',
+            'category_id' => $this->product->category_id, 'unit_id' => $this->product->unit_id, 'status' => 1,
+        ]);
+        $p2 = $mkProduct('MAT-002');
+        $w2 = Warehouse::create(['name' => '副仓', 'code' => 'WH02', 'status' => 1]);
+        $l2 = Location::create([
+            'warehouse_id' => $this->warehouse->id, 'name' => 'A-02', 'code' => 'A-02', 'status' => 1,
+        ]);
+        $w2l1 = Location::create(['warehouse_id' => $w2->id, 'name' => 'B-01', 'code' => 'B-01', 'status' => 1]);
+        // 四条流水覆盖三级排序键：P1 组内 warehouse 升序（W1 先于 W2）、W1 组内 location 升序（L1 先于 L2）、
+        // 组间 product 升序（P1 全部先于 P2）
+        $a = $this->movement(['quantity' => 10]); // (P1, W1, L1)
+        $d = $this->movement(['location_id' => $l2->id, 'quantity' => 40]); // (P1, W1, L2)
+        // (P1, W2, B-01)
+        $c = $this->movement(['warehouse_id' => $w2->id, 'location_id' => $w2l1->id, 'quantity' => 30]);
+        $b = $this->movement(['product_id' => $p2->id, 'quantity' => 20]); // (P2, W1, L1)
+        // 完全逆序传入（与期望加锁序相反，最大化模拟乱序调用方）
+        $this->svc->apply([$b, $c, $d, $a]);
+        // 断言：流水 id 升序（即加锁序）为三元组字典升序 [A, D, C, B]
+        $key = fn (array $m) => $m['product_id'].':'.$m['warehouse_id'].':'.$m['location_id'];
+        $this->assertSame(
+            [$key($a), $key($d), $key($c), $key($b)],
+            InventoryMovement::query()->orderBy('id')->get()
+                ->map(fn (InventoryMovement $m) => $m->product_id.':'.$m->warehouse_id.':'.$m->location_id)
+                ->all()
+        );
+        // 排序只改变处理序不改变业务结果：四行余额数量各自正确（防明细串行错位）
+        $this->assertSame(4, InventoryBalance::count());
+        foreach ([[$a, '10.00'], [$d, '40.00'], [$c, '30.00'], [$b, '20.00']] as [$m, $qty]) {
+            $this->assertDatabaseHas('inventory_balances', [
+                'product_id' => $m['product_id'],
+                'warehouse_id' => $m['warehouse_id'],
+                'location_id' => $m['location_id'],
+                'quantity' => $qty,
+            ]);
+        }
     }
 }

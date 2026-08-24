@@ -338,6 +338,7 @@ class PurchaseInboundController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
             DB::transaction(function () use ($inbound, &$result) {
                 // 锁入库单行：同一单据重复审核在此判重（幂等 1310）
                 $locked = PurchaseInbound::whereKey($inbound->id)->lockForUpdate()->firstOrFail();
@@ -413,7 +414,7 @@ class PurchaseInboundController extends Controller
                 $locked->inbound_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
             // 审核成功（事务已提交）失效成本价缓存：审核是价格集合的唯一变化点（见 CostPriceService 失效契约）；
             // 回滚路径抛异常跳过此处，缓存最多早清（下次访问重建），无脏读风险
             try {

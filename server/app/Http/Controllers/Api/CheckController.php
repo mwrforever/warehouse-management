@@ -255,6 +255,8 @@ class CheckController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3；余额行锁序已由 InventoryService 统一，兜底盘点按明细序
+            // 内联预锁的残余交叉窗口——apply 单条调用无法重排该预锁序列）
             DB::transaction(function () use ($check, &$result) {
                 // 锁盘点单行：同一单据重复审核在此判重（幂等）
                 $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
@@ -321,7 +323,7 @@ class CheckController extends Controller
                     'increased_items' => $increasedItems,
                     'decreased_items' => $decreasedItems,
                 ];
-            });
+            }, 2);
         } catch (InventoryException $e) {
             // 1204 已审核 / 1206 并发变动（余额不足等防御性场景同样归 1206）
             return $this->fail($e->getCode() ?: 1206, $e->getMessage());

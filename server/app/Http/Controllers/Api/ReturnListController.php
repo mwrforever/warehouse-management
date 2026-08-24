@@ -245,6 +245,7 @@ class ReturnListController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
             DB::transaction(function () use ($return, &$result) {
                 // 锁退料单行：同一单据重复审核在此判重（幂等 1519）
                 $locked = ReturnList::whereKey($return->id)->lockForUpdate()->firstOrFail();
@@ -308,7 +309,7 @@ class ReturnListController extends Controller
                 $locked->approved_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
         } catch (ProductionException $e) {
             // 1519 幂等 / 1517 超已领（事务整体回滚）
             return $this->fail($e->getCode() ?: 1517, $e->getMessage());

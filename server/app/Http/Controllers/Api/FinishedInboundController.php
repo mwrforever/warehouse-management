@@ -256,6 +256,7 @@ class FinishedInboundController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
             DB::transaction(function () use ($finishedInbound, &$result) {
                 // 锁入库单行：同一单据重复审核在此判重（幂等 1528）
                 $locked = FinishedInbound::whereKey($finishedInbound->id)->lockForUpdate()->firstOrFail();
@@ -313,7 +314,7 @@ class FinishedInboundController extends Controller
                 $locked->approved_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
         } catch (ProductionException $e) {
             // 1528 幂等 / 1525 超剩余产量 / 1526 成品不一致（事务整体回滚）
             return $this->fail($e->getCode() ?: 1525, $e->getMessage());

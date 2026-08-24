@@ -15,7 +15,8 @@ use Illuminate\Support\Facades\DB;
 class InventoryService
 {
     /**
-     * 统一库存变动入口：事务内写流水 + 更新余额 + 冗余上下限同步
+     * 统一库存变动入口：事务内写流水 + 更新余额 + 冗余上下限同步；
+     * 余额行加锁前按 (product_id, warehouse_id, location_id) 升序规范化——调用方传入顺序无关
      *
      * @param  array  $movements  变动列表，每条含：product_id/warehouse_id/location_id(int)、
      *                            direction(int 1=入库 -1=出库)、quantity(float 恒正)、
@@ -27,6 +28,18 @@ class InventoryService
      */
     public function apply(array $movements, ?int $operatorId = null): void
     {
+        // 锁序规范化（B-3）：全项目库存行锁统一按 (product_id, warehouse_id, location_id) 升序获取。
+        // 调用方传入序五花八门（明细序/索引序/部分路径已自排序），乱序逐行 lockForUpdate 在跨单据
+        // 并发审核时（如采购入库 [P1,P2] 与退料/盘点 [P2,P1] 同仓同位）交叉持锁互等 → InnoDB 死锁
+        // 1213 回滚一方（败方 500）；在引擎入口统一排序后，任意调用组合的加锁序列全序单调，
+        // 死锁环不可能成立（与报工路径「全集升序获取」同思路，见 OperationReportController 锁序注释）。
+        // usort 稳定排序：同余额行多笔变动保持传入相对序（balance_after 快照语义不变）
+        usort($movements, fn (array $a, array $b) => [
+            (int) $a['product_id'], (int) $a['warehouse_id'], (int) $a['location_id'],
+        ] <=> [
+            (int) $b['product_id'], (int) $b['warehouse_id'], (int) $b['location_id'],
+        ]);
+
         // 商品预取（P1-2）：N 条明细 → 1 次 whereIn 单查上下限快照（只读，余额行锁语义不涉及商品行，
         // 与逐笔 findOrFail 行为一致仅减查询次数；缺失商品在 applyOne 内回退 findOrFail 保持 404 语义）
         $productIds = array_values(array_unique(array_map(fn ($m) => (int) $m['product_id'], $movements)));

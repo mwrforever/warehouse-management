@@ -328,6 +328,7 @@ class SalesOutboundController extends Controller
     {
         try {
             $result = null;
+            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
             DB::transaction(function () use ($outbound, &$result) {
                 // 锁出库单行：同一单据重复审核在此判重（幂等 1410）
                 $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
@@ -423,7 +424,7 @@ class SalesOutboundController extends Controller
                 $locked->outbound_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
         } catch (SalesException $e) {
             // 1410 幂等 / 1407 超量或订单状态不符 / 1409 库存不足（事务整体回滚）
             return $this->fail($e->getCode() ?: 1407, $e->getMessage());
