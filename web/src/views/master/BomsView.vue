@@ -327,15 +327,20 @@ async function remove(row: BomRow) {
 
 onMounted(async () => {
   search()
-  const [fin, mat, unit] = await Promise.all([
-    productApi.list({ page: 1, per_page: 100, type: 'finished' }),
-    productApi.list({ page: 1, per_page: 100 }),
-    unitApi.list({ page: 1, per_page: 100 }),
-  ])
-  finishedProducts.value = fin.items
-  // 物料下拉：仅原料/半成品（成品嵌套由后端 1119 兜底，前端直接过滤）
-  materialProducts.value = mat.items.filter((p) => p.type !== 'finished')
-  units.value = unit.items
+  try {
+    // 三路下拉数据互不依赖，并行加载缩短首屏等待
+    const [fin, mat, unit] = await Promise.all([
+      productApi.list({ page: 1, per_page: 100, type: 'finished' }),
+      productApi.list({ page: 1, per_page: 100 }),
+      unitApi.list({ page: 1, per_page: 100 }),
+    ])
+    finishedProducts.value = fin.items
+    // 物料下拉：仅原料/半成品（成品嵌套由后端 1119 兜底，前端直接过滤）
+    materialProducts.value = mat.items.filter((p) => p.type !== 'finished')
+    units.value = unit.items
+  } catch {
+    // 下拉加载失败不阻塞主流程（对齐 InboundsView 兜底；主列表由 useListQuery 独立提示）
+  }
 })
 </script>
 
