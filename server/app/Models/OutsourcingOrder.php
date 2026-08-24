@@ -1,6 +1,6 @@
 <?php
 
-// 委外加工单模型：草稿→已审核(发出)→已回收→已关闭 四态；发出扣成品库存(outsourcing_out)、回收加库存(outsourcing_in)；
+// 委外加工单模型：草稿→已审核(发出)→已回收→已关闭 四态；发出按发料组件扣库存(outsourcing_out)、回收加节点输出库存(outsourcing_in)；
 // 已关闭=余料全部退回后自动（status 3）；附发料组件（items）与余料退回（returns）两个明细域
 
 namespace App\Models;
@@ -59,7 +59,7 @@ class OutsourcingOrder extends Model
     }
 
     /** @return BelongsTo<ProductionOrder, $this> */
-    // 所属工单（委外商品 = 工单成品）
+    // 所属工单（委外加工归属的工单；发料组件与回收品均取工艺节点口径，spec §12.10）
     public function order(): BelongsTo
     {
         return $this->belongsTo(ProductionOrder::class, 'order_id');

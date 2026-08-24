@@ -324,14 +324,16 @@ class OutsourcingController extends Controller
 
     /**
      * 发出（审核）：事务内「锁单幂等 1523 → 锁工单行校验状态 [RELEASED, PRODUCING] 1523 →
-     * 按发料组件逐行扣（锁序：委外单 → 工单 → 组件余额行按 material_id 升序，不足 →
-     * 1522「商品[组件名]库存不足」整单回滚；每组件一条 outsourcing_out 流水（source_no=委外单号、
-     * remark=委外发出）→ issued_qty 回写=应发 → 已发出）」任一步失败整体回滚
+     * 剩余量复查（Σ同节点非草稿 + 本次 ≤ 工单计划量，1520）→ 按发料组件逐行扣（锁序：委外单 → 工单 →
+     * 组件余额行按 material_id 升序，不足 → 1522「商品[组件名]库存不足」整单回滚；每组件一条
+     * outsourcing_out 流水（source_no=委外单号、remark=委外发出）→ issued_qty 回写=应发 → 已发出）」任一步失败整体回滚
      */
     public function approve(OutsourcingOrder $outsourcing)
     {
         try {
             $result = null;
+            // 事务第 2 参数为死锁(1213)重试次数（并发发出/回收的余额行与工单行锁冲突，
+            // 死锁败方整体回滚后重跑闭包重新锁行+重发库存流水，幂等安全）
             DB::transaction(function () use ($outsourcing, &$result) {
                 // 锁委外单行：同一单据重复审核在此判重（幂等 1523）
                 $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
@@ -345,6 +347,17 @@ class OutsourcingController extends Controller
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
                 if (! in_array($order->status, [ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING], true)) {
                     throw new ProductionException('工单当前状态不可委外', 1523);
+                }
+                // 事务内剩余量复查：草稿期校验在事务外且互不计，审批时须守「已委外合计（含自身）≤ 工单计划量」，
+                // 防同节点两草稿各 ≤ 计划量先后审批致合计超计划（组件双倍发出/回收）
+                // 同节点并发审批已被工单行锁串行化，SUM 普通读即可（锁序不变）
+                $plannedByNode = OutsourcingOrder::where('operation_id', $locked->operation_id)
+                    ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)
+                    ->where('id', '!=', $locked->id)
+                    ->sum('quantity');
+                $aggregate = bcadd((string) $plannedByNode, (string) $locked->quantity, 2);
+                if (bccomp($aggregate, (string) $order->quantity, 2) > 0) {
+                    throw new ProductionException('委外数量超过节点剩余计划量', 1520);
                 }
                 // 按发料组件逐行扣（spec §12.10：委外商品=节点输入组件；仅 is_outsourced=1 节点可委外）
                 // 组件预载（items + material 各一条查询，循环内不再触发 N+1 懒加载）
@@ -393,9 +406,9 @@ class OutsourcingController extends Controller
                 $locked->approved_at = now();
                 $locked->save();
                 $result = ['no' => $locked->no];
-            });
+            }, 2);
         } catch (ProductionException $e) {
-            // 1523 幂等/工单状态不符 / 1522 库存不足（事务整体回滚）
+            // 1523 幂等/工单状态不符 / 1520 剩余量复查 / 1522 库存不足（事务整体回滚）
             return $this->fail($e->getCode() ?: 1523, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）
@@ -430,7 +443,7 @@ class OutsourcingController extends Controller
             DB::transaction(function () use ($outsourcing, $data, &$result) {
                 // 锁委外单行：回收并发串行化（累计回收判定一致）；仅 [已发出, 已回收] 可回收——
                 // 草稿（422）与已关闭（422 防关闭后回灌库存）拦截；已回收单放行到超收校验：
-                // 再回收必然超收 → 1524（E2E TC-PRD-06 锁定）
+                // 再回收必然超收 → 1524（超收链路由 Feature 用例锁定，事务整体回滚）
                 $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
                 if (! in_array($locked->status, [OutsourcingOrder::STATUS_APPROVED, OutsourcingOrder::STATUS_RECEIVED], true)) {
                     throw new ProductionException('当前委外单不可回收', 422);

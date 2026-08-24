@@ -281,7 +281,7 @@ class OutsourcingTest extends TestCase
         $dag = $this->dagOrder();
         ['ops' => $ops, 'semiB' => $semiB] = $dag;
         $os = $this->approvedDagOutsourcing($dag);
-        // 首工序（下料）报满 → 委外工序（焊接）置进行中（DAG 推进前置，与 E2E TC-PRD-06 流程一致）
+        // 首工序（下料）报满 → 委外工序（焊接）置进行中（DAG 推进前置，与 E2E TC-OS-01 流程一致）
         $this->withToken($this->token)->postJson("/api/v1/production/operations/{$ops['OP10']->id}/reports", [
             'qualified_qty' => 6,
         ])->assertJsonPath('code', 0);
@@ -698,6 +698,33 @@ class OutsourcingTest extends TestCase
         $this->assertSame('0.00', $this->balanceOf($semiB->id));
         $this->assertSame(2, InventoryMovement::where('source_no', $no)->count());
         $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os->fresh()->status);
+    }
+
+    // 审批期剩余量复查（1520）：草稿期校验在事务外且互不计（两草稿各 5 各自过 1520），
+    // 相继审批时守「Σ同节点非草稿 + 本次 ≤ 工单计划 6」——首张 5 过、第二张合计 10 > 6 → 1520 整体回滚
+    public function test_approve_rejects_aggregate_over_plan_with_1520(): void
+    {
+        $this->baseDag();
+        // 同节点（OP30 委外）两草稿各 5：草稿期互不计（均 5 ≤ 6 各自通过）
+        $no1 = $this->createOutsourcing($this->payload());
+        $no2 = $this->createOutsourcing($this->payload(['remark' => '草稿二']));
+        $os1 = OutsourcingOrder::where('no', $no1)->firstOrFail();
+        $os2 = OutsourcingOrder::where('no', $no2)->firstOrFail();
+        // 首张审批：已委外 0 + 本次 5 ≤ 计划 6 → 成功，组件按应发 10/5 扣减（原料 12→2、半成品B 6→1）
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os1->id}/approve")
+            ->assertJsonPath('code', 0);
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
+        $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
+        $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os1->fresh()->status);
+        // 第二张审批：已委外 5 + 本次 5 = 10 > 计划 6 → 1520 整体回滚
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os2->id}/approve")
+            ->assertJsonPath('code', 1520)
+            ->assertJsonPath('message', '委外数量超过节点剩余计划量');
+        // 回滚断言：组件余额不再扣减（保持 2/1）、无草稿二流水、草稿二仍为草稿
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
+        $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
+        $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no2]);
+        $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os2->fresh()->status);
     }
 
     // 组件余额读取（该委外仓位的余额行；无行=0，decimal 归一字符串——测试断言口径与实现 bcmath 一致）
