@@ -1,5 +1,10 @@
 <?php
 
+use App\Exceptions\InventoryException;
+use App\Exceptions\ProductionException;
+use App\Exceptions\PurchaseException;
+use App\Exceptions\RoutingException;
+use App\Exceptions\SalesException;
 use App\Http\Middleware\EnsurePermission;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
@@ -7,6 +12,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -26,6 +32,25 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
 
+        // 系统异常统一记 error 级中文日志（AGENTS.md §7.2：系统异常记 error 含堆栈）：
+        // 业务异常族（*Exception）属预期业务失败（控制器捕获转统一响应），不刷 error 防噪音；
+        // 只记录 URL+方法，不记录请求参数（请求体可能含密码等敏感信息，AGENTS.md §8.5）
+        // 本文件处于全局命名空间，Throwable 直接解析为全局类（禁止 use Throwable——非复合名 use 触发 PHP 警告）
+        $exceptions->report(function (Throwable $e): void {
+            if ($e instanceof PurchaseException || $e instanceof SalesException || $e instanceof ProductionException
+                || $e instanceof InventoryException || $e instanceof RoutingException) {
+                return;
+            }
+            $request = request();
+            Log::error('系统异常：未捕获异常进入全局处理', [
+                'exception_class' => $e::class,
+                'message' => $e->getMessage(),
+                // console 上下文无请求实例，null 安全兜底
+                'url' => $request?->fullUrl(),
+                'method' => $request?->getMethod(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+        })->stop(); // 已自行记录（含上下文与堆栈），停止框架默认英文报告，避免同一异常重复落盘
         // 未认证与无权限统一返回 JSON（前后端分离约定）
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {
