@@ -192,7 +192,7 @@
                     v-if="!readonly && selectedNode.is_outsourced === 1"
                     class="panel-outsourced-hint"
                   >
-                    委外工序将在工单下达后生成委外需求（spec 5）
+                    委外工序将在工单下达后生成委外需求
                   </div>
                 </div>
               </el-form-item>

@@ -287,7 +287,7 @@ describe('工艺路线画布编辑器', () => {
     await flushPromises()
     const hint = wrapper.find('.panel-outsourced-hint')
     expect(hint.exists()).toBe(true)
-    expect(hint.text()).toBe('委外工序将在工单下达后生成委外需求（spec 5）')
+    expect(hint.text()).toBe('委外工序将在工单下达后生成委外需求')
 
     // 开关关闭后提示消失
     await wrapper.find('.panel-outsourced .el-switch').trigger('click')
