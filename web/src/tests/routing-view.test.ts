@@ -274,6 +274,28 @@ describe('工艺路线画布编辑器', () => {
     wrapper.unmount()
   })
 
+  it('委外开关打开显示提示文案：工单下达后生成委外需求（spec 6.3）', async () => {
+    // 正常路径：面板「委外工序」switch 打开 → 提示行出现，关闭后消失
+    const wrapper = mountView()
+    await flushPromises()
+    await openCreateDialog(wrapper)
+
+    await addNode(wrapper, '下料') // OP10 自动选中进入面板
+    expect(wrapper.find('.panel-outsourced-hint').exists()).toBe(false)
+
+    await wrapper.find('.panel-outsourced .el-switch').trigger('click')
+    await flushPromises()
+    const hint = wrapper.find('.panel-outsourced-hint')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toBe('委外工序将在工单下达后生成委外需求（spec 5）')
+
+    // 开关关闭后提示消失
+    await wrapper.find('.panel-outsourced .el-switch').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.panel-outsourced-hint').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('删除节点连带删边：删 OP10 后保存载荷仅剩 OP20 且边为空', async () => {
     // 边界路径：节点删除必须级联清理引用它的连线（否则保存载荷边端点悬空被后端拒）
     const wrapper = mountView()

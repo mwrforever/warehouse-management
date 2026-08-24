@@ -25,6 +25,14 @@
               {{ num(nodeById(id)?.defective_qty) }} / 工时 {{ num(nodeById(id)?.hours) }}
             </div>
             <span v-if="nodeById(id)?.is_outsourced === 1" class="og-badge">委外</span>
+            <button
+              v-if="nodeById(id)?.is_outsourced === 1"
+              type="button"
+              class="og-outsource-btn"
+              @click.stop="onOutsourceClick(id)"
+            >
+              委 外 单
+            </button>
             <Handle type="source" :position="Position.Right" />
           </div>
         </template>
@@ -67,6 +75,11 @@ import type { OperationGraphData, OperationGraphNode } from '../api/production'
 const props = defineProps<{
   /** 工单工序图（详情接口 graph 字段；仅按路由下达的 DAG 工单非空） */
   graph: OperationGraphData
+}>()
+
+const emit = defineEmits<{
+  /** 点击委外节点「委 外 单」按钮：携带完整工序节点通知父级打开委外单列表（仅委外节点可发） */
+  'outsourcing-click': [operation: OperationGraphNode]
 }>()
 
 /** 选中节点的工序 id（字符串形式，与画布节点 id 同口径） */
@@ -139,6 +152,13 @@ const predecessorText = computed(() => {
 function onNodeClick({ node }: { node: { id: string } }) {
   selectedId.value = node.id
 }
+
+/** 「委 外 单」按钮：仅委外节点渲染；点击通知父级打开该工序委外单列表。
+    按钮用 .stop 阻断冒泡——不触发画布 node-click，避免与节点选中联动打架 */
+function onOutsourceClick(id: unknown) {
+  const node = nodeById(id)
+  if (node?.is_outsourced === 1) emit('outsourcing-click', node)
+}
 </script>
 
 <style scoped>
@@ -202,6 +222,21 @@ function onNodeClick({ node }: { node: { id: string } }) {
   color: #fff;
   font-size: 11px;
   line-height: 18px;
+}
+/* 「委 外 单」按钮（委外节点卡片内小号琥珀按钮，点击查看委外单列表） */
+.og-outsource-btn {
+  margin-top: var(--sp-1);
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--warn);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.og-outsource-btn:hover {
+  opacity: 0.9;
 }
 /* 未选中时的提示文案 */
 .og-hint {

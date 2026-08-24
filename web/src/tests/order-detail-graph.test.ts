@@ -136,4 +136,25 @@ describe('工单详情工序网络画布', () => {
     expect(text).not.toContain('OP30')
     wrapper.unmount()
   })
+
+  it('委外节点「委 外 单」按钮点击 emit outsourcing-click（携带完整节点，且不触发画布选中）', async () => {
+    // 正常路径：仅委外节点渲染按钮；点击经 stop 只发联动事件——下方明细不被选中（提示文案保留）
+    const wrapper = mountGraph()
+    await wrapper.findAll('.og-outsource-btn')[0]!.trigger('click')
+    expect(wrapper.emitted('outsourcing-click')).toHaveLength(1)
+    expect(wrapper.emitted('outsourcing-click')![0]![0]).toEqual(graph.nodes[1])
+    // 按钮点击不选中节点：明细描述区不出现，hint 文案保留
+    expect(wrapper.find('.og-detail').exists()).toBe(false)
+    expect(wrapper.find('.og-hint').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('非委外节点无「委 外 单」按钮（与委外角标同步渲染）', () => {
+    // 边界路径：按钮仅挂在委外节点卡片上，非委外节点不得出现
+    const wrapper = mountGraph()
+    const cards = wrapper.findAll('.og-node')
+    expect(cards[0]!.find('.og-outsource-btn').exists()).toBe(false)
+    expect(cards[2]!.find('.og-outsource-btn').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })
