@@ -129,6 +129,9 @@ async function load() {
   try {
     const res = await systemSettingApi.list()
     rows.value = res.items
+  } catch (e) {
+    // 首屏加载失败必须反馈，避免 rejection 无人接住导致页面静默空白（BF-5）
+    ElMessage.error((e as Error).message)
   } finally {
     loading.value = false
   }

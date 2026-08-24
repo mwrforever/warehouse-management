@@ -1,5 +1,6 @@
 // 编号规则页组件测试：保存失败必须弹错（BUG-01 空 catch 回归）+ 非法 prefix/超长 remark 前端拦截 + 合法保存正常路径；
-// 预览请求防抖与乱序守卫（BUG-03：并发乱序回写使预览短暂显示与表单不符的示例号）
+// 预览请求防抖与乱序守卫（BUG-03：并发乱序回写使预览短暂显示与表单不符的示例号）；
+// 首屏列表加载失败弹错（BF-5：load 无 catch 时 rejection 无人接住，页面静默空白）
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -182,6 +183,33 @@ describe('编号规则页保存反馈与表单校验', () => {
     const msg = document.querySelector('.el-message--success')
     expect(msg, '保存成功应弹出提示').toBeTruthy()
     expect((msg as HTMLElement).textContent).toContain('已保存')
+    wrapper.unmount()
+  })
+})
+
+describe('编号规则页首屏加载失败反馈（BF-5）', () => {
+  let pinia: ReturnType<typeof createPinia>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // 清理前一用例残留的 ElMessage（同上：避免旧消息影响断言）
+    document.querySelectorAll('.el-message').forEach((m) => m.remove())
+    pinia = createPinia()
+    setActivePinia(pinia)
+  })
+
+  it('列表加载被拒绝时弹出错误提示而非静默空白', async () => {
+    // 异常场景：onMounted 内 load 无 catch，rejection 无人接住，首屏静默空白且用户无感知（BF-5 回归）
+    vi.mocked(systemSettingApi.list).mockRejectedValueOnce(new Error('编号规则加载失败'))
+    const wrapper = mount(NumberingConfigsView, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus, pinia] },
+    })
+    await flushPromises()
+
+    const msg = document.querySelector('.el-message--error')
+    expect(msg, '加载失败应弹出错误提示').toBeTruthy()
+    expect((msg as HTMLElement).textContent).toContain('编号规则加载失败')
     wrapper.unmount()
   })
 })
