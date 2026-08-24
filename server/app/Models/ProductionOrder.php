@@ -47,7 +47,7 @@ class ProductionOrder extends Model
         self::STATUS_CLOSED => '关闭',
     ];
 
-    protected $fillable = ['no', 'product_id', 'quantity', 'plan_date', 'bom_id', 'status', 'completed_qty', 'created_by', 'released_at', 'completed_at', 'closed_at', 'remark'];
+    protected $fillable = ['no', 'product_id', 'quantity', 'plan_date', 'bom_id', 'routing_id', 'status', 'completed_qty', 'created_by', 'released_at', 'completed_at', 'closed_at', 'remark'];
 
     protected function casts(): array
     {
@@ -73,6 +73,13 @@ class ProductionOrder extends Model
     public function bom(): BelongsTo
     {
         return $this->belongsTo(BomHeader::class, 'bom_id');
+    }
+
+    /** @return BelongsTo<RoutingHeader, $this> */
+    // 工艺路线快照（null=旧逻辑 BOM 展开，存量单不回写）
+    public function routing(): BelongsTo
+    {
+        return $this->belongsTo(RoutingHeader::class, 'routing_id');
     }
 
     /** @return HasMany<ProductionOrderMaterial, $this> */

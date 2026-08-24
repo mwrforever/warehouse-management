@@ -65,6 +65,10 @@ class RbacSeeder extends Seeder
             ['name' => 'BOM创建', 'code' => 'bom.create', 'group' => '基础资料'],
             ['name' => 'BOM更新', 'code' => 'bom.update', 'group' => '基础资料'],
             ['name' => 'BOM删除', 'code' => 'bom.delete', 'group' => '基础资料'],
+            ['name' => '工艺路线列表', 'code' => 'routing.list', 'group' => '基础资料'],
+            ['name' => '工艺路线新建', 'code' => 'routing.create', 'group' => '基础资料'],
+            ['name' => '工艺路线更新', 'code' => 'routing.update', 'group' => '基础资料'],
+            ['name' => '工艺路线删除', 'code' => 'routing.delete', 'group' => '基础资料'],
             // 库存管理模块权限（inventory 查询 + check 四动作，group=库存管理；盘点审核复用 check.update）
             ['name' => '库存查询', 'code' => 'inventory.list', 'group' => '库存管理'],
             ['name' => '盘点单列表', 'code' => 'check.list', 'group' => '库存管理'],
