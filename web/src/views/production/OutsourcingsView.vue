@@ -2,7 +2,7 @@
      发出扣库存（1522 失败红色提示）+ 回收弹窗（剩余可回收/回收品只读/独立入库仓库库位）+
      余料退回弹窗（可退=已发−已退）+ 回收/退回记录弹窗 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -118,8 +118,17 @@ function statusTagType(status: number) {
   return 'success'
 }
 
+// 会话序号守卫（评审 F5，模式同 RoutingCanvasDialog）：工序预填/编辑回填为异步落点，
+// 快速切换工序/关窗重开时旧会话的慢响应必须丢弃（防 A 的迟到响应覆盖 B 已回填的编辑态）
+let sessionSeq = 0
+
+// 关窗即作废在途：主弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+
 // 选工单 → 加载该工单委外工序（下拉数据源）
-async function onOrderChange(orderId: number | undefined) {
+async function onOrderChange(orderId: number | undefined, session: number = ++sessionSeq) {
   form.operation_id = undefined
   processOptions.value = []
   prefill.value = null
@@ -127,21 +136,26 @@ async function onOrderChange(orderId: number | undefined) {
   if (!orderId) return
   try {
     const d = await productionApi.orderDetail(orderId)
-    // 委外对象=工艺路线节点：仅 is_outsourced=1 且未完成（status 2 已完成）的节点可委外（spec §5）
+    // 迟到守卫：会话已作废（工序切换/关窗重开）时丢弃过期下拉回写
+    if (session !== sessionSeq) return
+    // 委外对象=工艺路线节点：仅 is_outsourced=1 且未完成（status 2 已完成）的节点可委外（spec 5 §4 规则定义）
     processOptions.value = d.operations.filter((op) => op.is_outsourced === 1 && op.status !== 2)
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
     form.order_id = undefined
   }
 }
 
 // 选中委外工序 → 拉节点预填：回收品只读 + 组件行（应发基数）+ 剩余可委外量
-async function onOperationChange(opId: number | undefined) {
+async function onOperationChange(opId: number | undefined, session: number = ++sessionSeq) {
   prefill.value = null
   itemRows.value = []
   if (!opId) return
   try {
     const p = await productionApi.fromOperation(opId)
+    // 迟到守卫：会话已作废（已切到其它工序/关窗重开）时丢弃过期预填，防覆盖新工序回填
+    if (session !== sessionSeq) return
     prefill.value = p
     itemRows.value = p.items.map((it) => ({
       material_id: it.material_id,
@@ -157,6 +171,7 @@ async function onOperationChange(opId: number | undefined) {
     // 数量已填（编辑回填场景）时直接按当前数量折算应发
     if (form.quantity != null) recomputeRows()
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
     form.operation_id = undefined
   }
@@ -228,11 +243,16 @@ function openCreate(orderId?: number) {
   }
 }
 
-// 编辑草稿：详情回填（含仓库/库位 id 与已保存组件应发）+ 节点预填同构
+// 编辑草稿：详情回填（含仓库/库位 id 与已保存组件应发）+ 节点预填同构；
+// 编辑回填链（详情→工序下拉→预填→库位）共用同一会话号（子拉取不再自增），
+// 快速连点编辑/关窗重开时慢响应不得覆盖新会话
 async function openEdit(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.outsourcingDetail(row.id)
-    await onOrderChange(d.order_id)
+    if (session !== sessionSeq) return
+    await onOrderChange(d.order_id, session)
+    if (session !== sessionSeq) return
     editingId.value = row.id
     form.order_id = d.order_id
     form.operation_id = d.operation_id
@@ -242,16 +262,20 @@ async function openEdit(row: OutsourcingItem) {
     form.quantity = Number(d.quantity)
     form.remark = d.remark ?? ''
     // 节点预填（组件行先按数量折算应发）
-    await onOperationChange(d.operation_id)
+    await onOperationChange(d.operation_id, session)
+    if (session !== sessionSeq) return
     // 草稿内手工调整过的组件应发优先（详情 items 为准，防编辑后折回默认折算值）
     const savedQty = new Map((d.items ?? []).map((i) => [i.material_id, Number(i.required_qty)]))
     for (const row of itemRows.value) {
       const saved = savedQty.get(row.material_id)
       if (saved != null) row.required_qty = saved
     }
-    locations.value = (await warehouseApi.locations(d.warehouse_id)).items
+    const locs = await warehouseApi.locations(d.warehouse_id)
+    if (session !== sessionSeq) return
+    locations.value = locs.items
     dialogVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

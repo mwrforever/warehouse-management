@@ -54,6 +54,7 @@ vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ has: () => true }) }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 // DAG 基线：OP10 下料（委外+待开工，可选）/ OP20 组装（非委外，不可选）/ OP30 质检（委外但已完成，不可选）
+// / OP40 冲压（委外+待开工，可选——竞态用例的「工序 B」）
 const ops = [
   {
     id: 11,
@@ -70,6 +71,22 @@ const ops = [
     is_outsourced: 1,
     output_product_id: 2,
     output_product_name: '半成品B',
+  },
+  {
+    id: 14,
+    seq: 4,
+    node_no: 'OP40',
+    process_name: '冲压',
+    process_id: 4,
+    process_code: 'STP',
+    status: 0,
+    status_label: '待开工',
+    qualified_qty: 0,
+    defective_qty: 0,
+    hours: 0,
+    is_outsourced: 1,
+    output_product_id: 3,
+    output_product_name: '半成品D',
   },
   {
     id: 12,
@@ -134,8 +151,44 @@ const prefill = {
   ],
 }
 
+// 竞态用例「工序 B」的节点预填：OP40 产出半成品D，输入 原料C×1
+const prefillB: typeof prefill = {
+  operation_id: 14,
+  node_no: 'OP40',
+  process_name: '冲压',
+  order_id: 1,
+  order_no: 'MO-001',
+  plan_qty: '10.00',
+  outsourced_qty: '0.00',
+  remaining_qty: '8.00',
+  output_product_id: 3,
+  output_product_name: '半成品D',
+  items: [
+    {
+      material_id: 103,
+      material_name: '原料C',
+      material_code: 'MAT-003',
+      qty_per_unit: '1.00',
+      unit_id: 1,
+      unit_name: '个',
+      stock: '20.00',
+    },
+  ],
+}
+
 function page(items: unknown[], total = items.length) {
   return { items, total, page: 1, per_page: 10 }
+}
+
+// 可控 deferred：竞态用例手动控制慢响应 resolve 时机（无需真实定时器）
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 // 弹窗内下拉选项点击（真实交互：校验选项过滤与回填）
@@ -420,6 +473,163 @@ describe('委外页：工序节点预填 + 组件应发折算 + 余料退回', (
         ],
       }),
     )
+  })
+
+  // 评审 F5：快速切换工序 A（慢）→ B（快）时，迟到的 A 预填响应不得覆盖 B 已回填的编辑态
+  it('竞态：快速切换工序时慢预填响应不得覆盖新工序回填', async () => {
+    const dA = deferred<typeof prefill>()
+    // 工序 A（OP10）响应受控慢；工序 B（OP40）立即返回
+    mocks.fromOperation.mockImplementationOnce(() => dA.promise).mockResolvedValueOnce(prefillB)
+    const wrapper = await mountView()
+    await openCreateWithOrder(wrapper)
+    // 先选 OP10（在途）：预填区未出现（旧会话残留不展示）
+    await pickOption(wrapper, 1, 'OP10. 下料（产出：半成品B）')
+    expect(mocks.fromOperation).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.el-dialog .prefill-block').exists()).toBe(false)
+    // 切工序 B（快）→ 回填为 B 的预填（回收品=半成品D）
+    await pickOption(wrapper, 1, 'OP40. 冲压（产出：半成品D）')
+    await flushPromises()
+    expect(wrapper.find('.el-dialog .prefill-product').text().trim()).toBe('半成品D')
+    // 迟到响应 A 落点：会话守卫丢弃，不覆盖 B（回收品仍是半成品D、组件行仍是 B 的原料C）
+    dA.resolve(prefill)
+    await flushPromises()
+    expect(wrapper.find('.el-dialog .prefill-product').text().trim()).toBe('半成品D')
+    const rows = wrapper.findAll('.item-table .el-table__row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.text()).toContain('原料C')
+  })
+
+  // 评审 F5：编辑弹窗快速连点重开（A 慢 B 快）时，慢详情响应不得覆盖新会话回填
+  it('竞态：编辑弹窗快速重开时慢详情响应不得覆盖新会话', async () => {
+    // 两个草稿行：row1 慢、row2 快
+    const row1 = {
+      id: 4,
+      no: 'OS20260824-001',
+      order_id: 1,
+      order_no: 'MO-001',
+      operation_id: 11,
+      node_no: 'OP10',
+      process_name: '下料',
+      supplier_id: 1,
+      supplier_name: '测试供应商',
+      quantity: '3.00',
+      status: 0,
+      status_label: '草稿',
+      approved_at: null,
+      operator: null,
+      created_at: '2026-08-24 10:00:00',
+    }
+    const row2 = { ...row1, id: 5, no: 'OS20260824-002' }
+    mocks.outsourcings.mockResolvedValue(page([row1, row2]))
+    const detailShape = {
+      order_id: 1,
+      order_no: 'MO-001',
+      operation_id: 11,
+      node_no: 'OP10',
+      process_name: '下料',
+      output_product_name: '半成品B',
+      supplier_id: 1,
+      supplier_name: '测试供应商',
+      status: 0,
+      status_label: '草稿',
+      warehouse_id: 1,
+      warehouse_name: '主仓',
+      location_id: 2,
+      location_name: 'B-01',
+      quantity: '',
+      received_qty: '0.00',
+      approved_at: null,
+      operator: null,
+      remark: null,
+      items: [] as {
+        id: number
+        material_id: number
+        material_name: string
+        required_qty: string
+        issued_qty: string
+        returned_qty: string
+        unit_name: string
+      }[],
+    }
+    // row1 详情受控慢（数量 3、应发 5.00/2.50）；row2 详情立即返回（数量 2、应发 4.00/2.00）
+    const detail1 = {
+      ...detailShape,
+      id: 4,
+      no: 'OS20260824-001',
+      quantity: '3.00',
+      items: [
+        {
+          id: 31,
+          material_id: 101,
+          material_name: '原料A',
+          required_qty: '5.00',
+          issued_qty: '0.00',
+          returned_qty: '0.00',
+          unit_name: '个',
+        },
+        {
+          id: 32,
+          material_id: 102,
+          material_name: '半成品B',
+          required_qty: '2.50',
+          issued_qty: '0.00',
+          returned_qty: '0.00',
+          unit_name: '个',
+        },
+      ],
+    }
+    const detail2 = {
+      ...detailShape,
+      id: 5,
+      no: 'OS20260824-002',
+      quantity: '2.00',
+      items: [
+        {
+          id: 41,
+          material_id: 101,
+          material_name: '原料A',
+          required_qty: '4.00',
+          issued_qty: '0.00',
+          returned_qty: '0.00',
+          unit_name: '个',
+        },
+        {
+          id: 42,
+          material_id: 102,
+          material_name: '半成品B',
+          required_qty: '2.00',
+          issued_qty: '0.00',
+          returned_qty: '0.00',
+          unit_name: '个',
+        },
+      ],
+    }
+    const d1 = deferred<typeof detail2>()
+    mocks.outsourcingDetail.mockImplementationOnce(() => d1.promise).mockResolvedValueOnce(detail2)
+    mocks.fromOperation.mockResolvedValue(prefill)
+    const wrapper = await mountView()
+
+    // 连点「编 辑」row1（慢，在途）→ row2（快）→ 弹窗回填为 row2（数量 2、应发 4.00/2.00）
+    const editBtns = () => wrapper.findAll('button').filter((b) => b.text().trim() === '编 辑')
+    await editBtns()[0]!.trigger('click')
+    await flushPromises()
+    expect(mocks.outsourcingDetail).toHaveBeenCalledTimes(1)
+    await editBtns()[1]!.trigger('click')
+    await flushPromises()
+    expect(mocks.outsourcingDetail).toHaveBeenCalledTimes(2)
+    const qtyInput = wrapper.find('.el-dialog .el-input-number input')
+    expect((qtyInput.element as HTMLInputElement).value).toBe('2.00')
+    let rowInputs = wrapper.findAll('.item-table .el-input-number input')
+    expect((rowInputs[0]!.element as HTMLInputElement).value).toBe('4.00')
+    expect((rowInputs[1]!.element as HTMLInputElement).value).toBe('2.00')
+    // 迟到响应 row1 落点：会话守卫丢弃——弹窗仍为 row2 回填，无过期错误提示
+    d1.resolve(detail1)
+    await flushPromises()
+    expect((qtyInput.element as HTMLInputElement).value).toBe('2.00')
+    rowInputs = wrapper.findAll('.item-table .el-input-number input')
+    expect((rowInputs[0]!.element as HTMLInputElement).value).toBe('4.00')
+    expect((rowInputs[1]!.element as HTMLInputElement).value).toBe('2.00')
+    expect([...document.querySelectorAll('.el-message--error')]).toHaveLength(0)
   })
 
   it('余料退回：可退=已发−已退列表、超退回弹 warning、提交载荷', async () => {
