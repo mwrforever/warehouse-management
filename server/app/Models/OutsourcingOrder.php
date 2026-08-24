@@ -1,6 +1,7 @@
 <?php
 
-// 委外加工单模型：草稿→已审核(发出)→已回收 三态；发出扣成品库存(outsourcing_out)、回收加库存(outsourcing_in)
+// 委外加工单模型：草稿→已审核(发出)→已回收→已关闭 四态；发出按发料组件扣库存(outsourcing_out)、回收加节点输出库存(outsourcing_in)；
+// 已关闭=余料全部退回后自动（status 3）；附发料组件（items）与余料退回（returns）两个明细域
 
 namespace App\Models;
 
@@ -21,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property int $warehouse_id
  * @property int $location_id
  * @property string $quantity
+ * @property int|null $output_product_id
  * @property Carbon|null $approved_at
  * @property string|null $operator
  * @property string|null $remark
@@ -33,14 +35,18 @@ class OutsourcingOrder extends Model
 
     public const STATUS_RECEIVED = 2;  // 已回收
 
+    public const STATUS_CLOSED = 3;    // 已关闭（余料全部退回后自动）
+
     /** 状态中文标签（列表展示） */
     public const STATUS_LABELS = [
         self::STATUS_DRAFT => '草稿',
         self::STATUS_APPROVED => '已审核',
         self::STATUS_RECEIVED => '已回收',
+        self::STATUS_CLOSED => '已关闭',
     ];
 
-    protected $fillable = ['no', 'order_id', 'operation_id', 'supplier_id', 'status', 'warehouse_id', 'location_id', 'quantity', 'approved_at', 'operator', 'remark'];
+    // 已回收累计不落列（实时 SUM outsourcing_receipts 派生，spec 5 §13.13）
+    protected $fillable = ['no', 'order_id', 'operation_id', 'supplier_id', 'status', 'warehouse_id', 'location_id', 'quantity', 'output_product_id', 'approved_at', 'operator', 'remark'];
 
     protected function casts(): array
     {
@@ -52,7 +58,7 @@ class OutsourcingOrder extends Model
     }
 
     /** @return BelongsTo<ProductionOrder, $this> */
-    // 所属工单（委外商品 = 工单成品）
+    // 所属工单（委外加工归属的工单；发料组件与回收品均取工艺节点口径，spec 5 §4 规则定义）
     public function order(): BelongsTo
     {
         return $this->belongsTo(ProductionOrder::class, 'order_id');
@@ -91,5 +97,26 @@ class OutsourcingOrder extends Model
     public function receipts(): HasMany
     {
         return $this->hasMany(OutsourcingReceipt::class, 'outsourcing_id');
+    }
+
+    /** @return BelongsTo<Product, $this> */
+    // 回收品（工序节点输出：半成品或成品）
+    public function outputProduct(): BelongsTo
+    {
+        return $this->belongsTo(Product::class, 'output_product_id');
+    }
+
+    /** @return HasMany<OutsourcingOrderItem, $this> */
+    // 发料组件明细（随单级联删除）
+    public function items(): HasMany
+    {
+        return $this->hasMany(OutsourcingOrderItem::class, 'outsourcing_id');
+    }
+
+    /** @return HasMany<OutsourcingReturn, $this> */
+    // 余料退回单（随单级联删除）
+    public function returns(): HasMany
+    {
+        return $this->hasMany(OutsourcingReturn::class, 'outsourcing_id');
     }
 }

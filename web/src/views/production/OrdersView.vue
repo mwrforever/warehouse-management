@@ -5,7 +5,9 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   productionApi,
+  type OperationGraphNode,
   type OperationReportRecord,
+  type OutsourcingItem,
   type ProductionOrderDetail,
   type ProductionOrderItem,
   type ReleaseWarning,
@@ -16,7 +18,7 @@ import ListFilterBar from '../../components/ListFilterBar.vue'
 import OperationGraph from '../../components/OperationGraph.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
-import { toLocalDateString } from '../../utils/format'
+import { formatThousand, toLocalDateString } from '../../utils/format'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -58,6 +60,12 @@ const detail = ref<ProductionOrderDetail | null>(null)
 const reportOpId = ref<number | null>(null)
 const reportRecords = ref<OperationReportRecord[]>([])
 
+// 工序网络「委外单」弹窗状态（委外节点按钮点击 → 按工单+工序过滤委外单列表）
+const outsourceVisible = ref(false)
+const outsourceOp = ref<OperationGraphNode | null>(null)
+const outsourceList = ref<OutsourcingItem[]>([])
+const outsourceLoading = ref(false)
+
 // 工单五态筛选（value 与后端状态码一致）
 const STATUS_OPTIONS: Record<number, string> = {
   0: '草稿',
@@ -80,6 +88,14 @@ function statusTagType(status: number) {
 function opTagType(status: number) {
   if (status === 0) return 'info'
   if (status === 1) return 'primary'
+  return 'success'
+}
+
+// 委外单状态标签语义色（与委外页一致：草稿灰/已发出蓝/已回收绿/已关闭橙）
+function outsourceTagType(status: number) {
+  if (status === 0) return 'info'
+  if (status === 1) return 'primary'
+  if (status === 3) return 'warning'
   return 'success'
 }
 
@@ -314,6 +330,29 @@ async function onReportOpChange(opId: number | undefined) {
     reportRecords.value = (await productionApi.operationReports(opId)).items
   } catch (e) {
     ElMessage.error((e as Error).message)
+  }
+}
+
+// 工序网络委外节点按钮点击：按当前工单 + 委外工序过滤委外单（per_page 100 覆盖该工序全量）
+async function onOutsourceClick(op: OperationGraphNode) {
+  if (!detail.value) return
+  outsourceOp.value = op
+  outsourceVisible.value = true
+  outsourceLoading.value = true
+  try {
+    outsourceList.value = (
+      await productionApi.outsourcings({
+        order_id: detail.value.id,
+        operation_id: op.id,
+        per_page: 100,
+      })
+    ).items
+  } catch (e) {
+    // 列表加载失败：提示并关闭弹窗，避免空态误导（与详情弹窗加载失败同语义）
+    ElMessage.error((e as Error).message)
+    outsourceVisible.value = false
+  } finally {
+    outsourceLoading.value = false
   }
 }
 
@@ -719,7 +758,11 @@ onMounted(async () => {
           </el-tab-pane>
           <!-- 工序网络：仅按路由下达的 DAG 工单展示（routing_id 为空 = 旧逻辑展开的工单，隐藏） -->
           <el-tab-pane v-if="detail?.routing_id" label="工序网络">
-            <OperationGraph v-if="detail?.graph" :graph="detail.graph" />
+            <OperationGraph
+              v-if="detail?.graph"
+              :graph="detail.graph"
+              @outsourcing-click="onOutsourceClick"
+            />
             <el-empty v-else description="暂无工序网络数据" />
           </el-tab-pane>
           <el-tab-pane label="报工记录">
@@ -779,6 +822,38 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="detailVisible = false">关 闭</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 工序网络委外单弹窗：展示该委外工序的委外单（单号/供应商/数量/状态），可跳转委外页按单号定位 -->
+    <el-dialog
+      v-model="outsourceVisible"
+      :title="`委外单${outsourceOp ? ` - ${outsourceOp.node_no ?? ''} ${outsourceOp.process_name ?? ''}` : ''}`"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <el-table v-loading="outsourceLoading" :data="outsourceList" size="small" class="data-table">
+        <el-table-column prop="no" label="单号" min-width="140" class-name="font-code" />
+        <el-table-column prop="supplier_name" label="供应商" min-width="120" />
+        <el-table-column label="数量" align="right" width="90" class-name="font-code">
+          <template #default="{ row }">{{ formatThousand(Number(row.quantity)) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="outsourceTagType(row.status)">{{ row.status_label }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              @click="router.push(`/production/outsourcings?keyword=${row.no}`)"
+              >打开委外页</el-button
+            >
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!outsourceLoading && outsourceList.length === 0" description="暂无委外单" />
     </el-dialog>
   </div>
 </template>

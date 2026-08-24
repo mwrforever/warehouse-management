@@ -188,6 +188,12 @@
                     :inactive-value="0"
                     :disabled="readonly"
                   />
+                  <div
+                    v-if="!readonly && selectedNode.is_outsourced === 1"
+                    class="panel-outsourced-hint"
+                  >
+                    委外工序将在工单下达后生成委外需求
+                  </div>
                 </div>
               </el-form-item>
               <el-form-item label="输入材料">
@@ -841,6 +847,13 @@ function closeDialog() {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+}
+/* 委外开关提示（spec 6.3）：开启后提示下达生成委外需求，readonly 不展示 */
+.panel-outsourced-hint {
+  margin-top: var(--sp-1);
+  color: var(--t3);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .mat-row {
   display: flex;

@@ -18,7 +18,7 @@ class DocumentNumberConfigController extends Controller
     private const TYPE_LABELS = [
         'check' => '盘点单', 'bom' => 'BOM', 'po' => '采购订单', 'pi' => '采购入库单',
         'so' => '销售订单', 'sout' => '销售出库单', 'mo' => '生产工单', 'pl' => '生产领料单',
-        'rl' => '生产退料单', 'os' => '委外加工单', 'osr' => '委外回收单', 'fi' => '成品入库单',
+        'rl' => '生产退料单', 'os' => '委外加工单', 'osr' => '委外回收单', 'osrt' => '委外退料', 'fi' => '成品入库单',
         'rtg' => '工艺路线', 'prd' => '商品编码',
     ];
 

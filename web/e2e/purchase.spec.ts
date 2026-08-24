@@ -180,7 +180,9 @@ test.describe('采购管理模块', () => {
     await pickOption(page, 'A-01')
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    const piRow = page.locator('.el-table__row', { hasText: 'PI' })
+    // 列表按 id 倒序 → .first() 即刚保存的草稿（前置 spec（outsourcing/routing 库存注入）会留
+    // 已审核 PI 行，全量串行下不可假设 PI 行唯一；与 TC-PUR-04 的 .first() 口径一致）
+    const piRow = page.locator('.el-table__row', { hasText: 'PI' }).first()
     await expect(piRow).toContainText('草稿')
     // 超量拦截：MAT-001 数量改 200（>剩余 120）→ 前端/后端拒绝
     await piRow.getByRole('button', { name: /编\s*辑/ }).click()

@@ -1,12 +1,16 @@
-<!-- 委外加工页：筛选列表 + 新建弹窗（工单工序/供应商/数量 ≤ 计划 + 1520 校验）+ 发出扣库存（1522 失败红色提示）+ 回收弹窗（剩余可回收/独立入库仓库库位）+ 回收记录弹窗 -->
+<!-- 委外加工页：筛选列表 + 新建/编辑弹窗（工单→委外工序节点预填：回收品只读/组件应发=数量×单位用量/数量≤节点剩余 1520）
+     发出扣库存（1522 失败红色提示）+ 回收弹窗（剩余可回收/回收品只读/独立入库仓库库位）+
+     余料退回弹窗（可退=已发−已退）+ 回收/退回记录弹窗 -->
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   productionApi,
   type OutsourcingItem,
+  type OutsourcingPrefill,
   type OutsourcingReceiptRecord,
+  type OutsourcingReturnRecord,
   type ProductionOperation,
   type ProductionOrderItem,
 } from '../../api/production'
@@ -15,6 +19,7 @@ import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/w
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
+import { formatThousand } from '../../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -24,10 +29,27 @@ const orders = ref<ProductionOrderItem[]>([])
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
-// 当前工单的未完成工序（label「seq. 工序名」）
+// 当前工单的委外工序（仅 is_outsourced=1 且未完成的节点可选，label 含节点号与产出）
 const processOptions = ref<ProductionOperation[]>([])
-// 当前工单计划数（委外量上限校验数据源）
-const orderPlanQty = ref(0)
+// 选中工序的节点预填（组件清单/回收品/剩余可委外量）
+const prefill = ref<OutsourcingPrefill | null>(null)
+// 发料组件行视图模型（预填行 + 行内可调应发）
+interface PrefillRow {
+  material_id: number
+  material_name: string
+  material_code: string
+  qty_per_unit: number
+  required_qty: number
+  unit_id: number
+  unit_name: string
+  stock: number
+}
+const itemRows = ref<PrefillRow[]>([])
+
+// 数量精度工具：前端 Number 口径四舍五入 2 位（后端口径 bcmath 权威，超限 422 兜底）
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
 
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
 const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
@@ -49,10 +71,11 @@ const form = reactive({
   remark: '',
 })
 
-// 回收弹窗状态（剩余可回收 = 委外量 - 已回收累计；入库仓库/库位独立选择）
+// 回收弹窗状态（剩余可回收 = 委外量 - 已回收累计；入库仓库/库位独立选择；回收品只读）
 const receiptVisible = ref(false)
 const receiptId = ref<number | null>(null)
 const receiptRemaining = ref(0)
+const receiptOutput = ref('')
 const receiptLocations = ref<LocationItem[]>([])
 const receiptForm = reactive({
   quantity: undefined as number | undefined,
@@ -61,34 +84,133 @@ const receiptForm = reactive({
   remark: '',
 })
 
-// 回收记录弹窗状态
-const recordsVisible = ref(false)
-const receiptRecords = ref<OutsourcingReceiptRecord[]>([])
+// 余料退回弹窗状态（明细行可退 = 组件已发 − 已退；入库仓库/库位独立选择）
+const returnVisible = ref(false)
+const returnId = ref<number | null>(null)
+// 退回明细行（return_qty 行内输入；可退为 0 的行不渲染）
+interface ReturnRow {
+  item_id: number
+  material_name: string
+  issued_qty: number
+  returned_qty: number
+  remaining: number
+  return_qty: number
+}
+const returnRows = ref<ReturnRow[]>([])
+const returnLocations = ref<LocationItem[]>([])
+const returnForm = reactive({
+  warehouse_id: undefined as number | undefined,
+  location_id: undefined as number | undefined,
+  remark: '',
+})
 
-// 委外状态标签语义色（production.md：草稿灰/已审核蓝/已回收绿）
+// 回收/退回记录弹窗状态（共用容器，标题区分）
+const recordsVisible = ref(false)
+const recordsTitle = ref('回收记录')
+const receiptRecords = ref<OutsourcingReceiptRecord[]>([])
+const returnRecords = ref<OutsourcingReturnRecord[]>([])
+
+// 委外状态标签语义色（草稿灰/已审核蓝/已回收绿/已关闭橙）
 function statusTagType(status: number) {
   if (status === 0) return 'info'
   if (status === 1) return 'primary'
+  if (status === 3) return 'warning'
   return 'success'
 }
 
-// 选工单 → 加载该工单未完成工序（委外工序下拉数据源）+ 计划数（数量上限）
-async function onOrderChange(orderId: number | undefined) {
+// 会话序号守卫（评审 F5，模式同 RoutingCanvasDialog）：工序预填/编辑回填为异步落点，
+// 快速切换工序/关窗重开时旧会话的慢响应必须丢弃（防 A 的迟到响应覆盖 B 已回填的编辑态）
+let sessionSeq = 0
+
+// 关窗即作废在途：主弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+
+// 选工单 → 加载该工单委外工序（下拉数据源）
+async function onOrderChange(orderId: number | undefined, session: number = ++sessionSeq) {
   form.operation_id = undefined
   processOptions.value = []
+  prefill.value = null
+  itemRows.value = []
   if (!orderId) return
   try {
     const d = await productionApi.orderDetail(orderId)
-    orderPlanQty.value = Number(d.quantity)
-    // 仅未完成工序可委外（status 0 待开工 / 1 进行中；已完成 2 不展示）
-    processOptions.value = d.operations.filter((op) => op.status !== 2)
+    // 迟到守卫：会话已作废（工序切换/关窗重开）时丢弃过期下拉回写
+    if (session !== sessionSeq) return
+    // 委外对象=工艺路线节点：仅 is_outsourced=1 且未完成（status 2 已完成）的节点可委外（spec 5 §4 规则定义）
+    processOptions.value = d.operations.filter((op) => op.is_outsourced === 1 && op.status !== 2)
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
     form.order_id = undefined
   }
 }
 
-// 仓库切换 → 联动库位下拉
+// 选中委外工序 → 拉节点预填：回收品只读 + 组件行（应发基数）+ 剩余可委外量
+async function onOperationChange(opId: number | undefined, session: number = ++sessionSeq) {
+  prefill.value = null
+  itemRows.value = []
+  if (!opId) return
+  try {
+    const p = await productionApi.fromOperation(opId)
+    // 迟到守卫：会话已作废（已切到其它工序/关窗重开）时丢弃过期预填，防覆盖新工序回填
+    if (session !== sessionSeq) return
+    prefill.value = p
+    itemRows.value = p.items.map((it) => ({
+      material_id: it.material_id,
+      material_name: it.material_name,
+      material_code: it.material_code,
+      // 单位用量/库存后端 decimal 字符串形态（bcmath 权威），前端 Number 归一参与折算
+      qty_per_unit: Number(it.qty_per_unit),
+      required_qty: 0,
+      unit_id: it.unit_id,
+      unit_name: it.unit_name,
+      stock: Number(it.stock),
+    }))
+    // 数量已填（编辑回填场景）时直接按当前数量折算应发
+    if (form.quantity != null) recomputeRows()
+  } catch (e) {
+    if (session !== sessionSeq) return
+    ElMessage.error((e as Error).message)
+    form.operation_id = undefined
+  }
+}
+
+// 剩余可委外量（预填数据源；委外数量上限）
+const remainingQty = computed(() => Number(prefill.value?.remaining_qty ?? 0))
+
+// 应发重算：组件行 = 委外数量 × 单位用量（行内手工调整在数量变更时被折算值覆盖）
+function recomputeRows() {
+  if (form.quantity == null) return
+  const qty = Number(form.quantity)
+  for (const row of itemRows.value) {
+    row.required_qty = round2(qty * row.qty_per_unit)
+  }
+}
+
+// 委外数量 on-blur 校验：≤ 节点剩余计划量（1520 文案，超量回弹剩余值）+ 触发应发重算
+function validateQuantity() {
+  if (form.quantity == null) return
+  if (Number(form.quantity) > remainingQty.value) {
+    ElMessage.warning('委外数量超过节点剩余计划量')
+    form.quantity = remainingQty.value
+  }
+  recomputeRows()
+}
+
+// 组件应发 on-blur 校验：≤ 单位用量×委外数量折算上限（后端 422 同文案，前端先回弹）
+function validateItemQty(row: PrefillRow) {
+  if (row.required_qty == null) return
+  const cap = round2(Number(form.quantity ?? 0) * row.qty_per_unit)
+  if (Number(row.required_qty) > cap) {
+    ElMessage.warning('应发数量超过单位用量折算上限')
+    row.required_qty = cap
+  }
+  if (Number(row.required_qty) < 0) row.required_qty = 0
+}
+
+// 仓库切换 → 联动库位下拉（新建/编辑弹窗）
 async function onWarehouseChange(whId: number | undefined) {
   form.location_id = undefined
   locations.value = []
@@ -100,16 +222,7 @@ async function onWarehouseChange(whId: number | undefined) {
   }
 }
 
-// 委外数量 on-blur 校验：≤ 工单计划数（1520 文案，超量回弹计划数）
-function validateQuantity() {
-  if (form.quantity == null) return
-  if (Number(form.quantity) > orderPlanQty.value) {
-    ElMessage.warning('委外数量超过工单计划数量')
-    form.quantity = orderPlanQty.value
-  }
-}
-
-// 新建：清空表单；路由直达时携带工单自动预填工序
+// 新建：清空表单（含节点预填与组件行）；路由直达时携带工单自动预填工序
 function openCreate(orderId?: number) {
   editingId.value = null
   Object.assign(form, {
@@ -121,6 +234,8 @@ function openCreate(orderId?: number) {
     quantity: undefined,
     remark: '',
   })
+  prefill.value = null
+  itemRows.value = []
   dialogVisible.value = true
   if (orderId) {
     form.order_id = orderId
@@ -128,11 +243,16 @@ function openCreate(orderId?: number) {
   }
 }
 
-// 编辑草稿：详情回填（含仓库/库位 id）+ 工单详情取工序与计划数
+// 编辑草稿：详情回填（含仓库/库位 id 与已保存组件应发）+ 节点预填同构；
+// 编辑回填链（详情→工序下拉→预填→库位）共用同一会话号（子拉取不再自增），
+// 快速连点编辑/关窗重开时慢响应不得覆盖新会话
 async function openEdit(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.outsourcingDetail(row.id)
-    await onOrderChange(d.order_id)
+    if (session !== sessionSeq) return
+    await onOrderChange(d.order_id, session)
+    if (session !== sessionSeq) return
     editingId.value = row.id
     form.order_id = d.order_id
     form.operation_id = d.operation_id
@@ -141,14 +261,26 @@ async function openEdit(row: OutsourcingItem) {
     form.location_id = d.location_id
     form.quantity = Number(d.quantity)
     form.remark = d.remark ?? ''
-    locations.value = (await warehouseApi.locations(d.warehouse_id)).items
+    // 节点预填（组件行先按数量折算应发）
+    await onOperationChange(d.operation_id, session)
+    if (session !== sessionSeq) return
+    // 草稿内手工调整过的组件应发优先（详情 items 为准，防编辑后折回默认折算值）
+    const savedQty = new Map((d.items ?? []).map((i) => [i.material_id, Number(i.required_qty)]))
+    for (const row of itemRows.value) {
+      const saved = savedQty.get(row.material_id)
+      if (saved != null) row.required_qty = saved
+    }
+    const locs = await warehouseApi.locations(d.warehouse_id)
+    if (session !== sessionSeq) return
+    locations.value = locs.items
     dialogVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
 
-// 保存：校验链（工单 → 工序 → 供应商 → 数量>0 且 ≤ 计划 → 仓库/库位）→ 新建/更新
+// 保存：校验链（工单 → 工序 → 供应商 → 数量>0 且 ≤ 节点剩余 → 组件行 ≥1 → 仓库/库位）→ 新建/更新
 async function save() {
   if (!form.order_id) {
     ElMessage.warning('请选择工单')
@@ -166,8 +298,28 @@ async function save() {
     ElMessage.warning('委外数量必须大于 0')
     return
   }
-  if (Number(form.quantity) > orderPlanQty.value) {
-    ElMessage.warning('委外数量超过工单计划数量')
+  if (Number(form.quantity) > remainingQty.value) {
+    ElMessage.warning('委外数量超过节点剩余计划量')
+    return
+  }
+  // 未触发过数量 blur（如输入后直接点保存）时按当前数量兜底重算，防组件行残留折算旧值
+  if (
+    form.quantity != null &&
+    itemRows.value.length > 0 &&
+    itemRows.value.every((r) => Number(r.required_qty) <= 0)
+  ) {
+    recomputeRows()
+  }
+  // 过滤 0 行：空组件行不随单提交（后端 min:1 由非空行满足）
+  const items = itemRows.value
+    .filter((r) => Number(r.required_qty) > 0)
+    .map((r) => ({
+      material_id: r.material_id,
+      required_qty: round2(Number(r.required_qty)),
+      unit_id: r.unit_id,
+    }))
+  if (items.length === 0) {
+    ElMessage.warning('至少需要一个发料组件')
     return
   }
   if (!form.warehouse_id || !form.location_id) {
@@ -180,7 +332,8 @@ async function save() {
     supplier_id: form.supplier_id,
     warehouse_id: form.warehouse_id,
     location_id: form.location_id,
-    quantity: form.quantity,
+    quantity: Number(form.quantity),
+    items,
     remark: form.remark,
   }
   saving.value = true
@@ -239,12 +392,13 @@ async function approveRow(row: OutsourcingItem) {
   }
 }
 
-// 回收弹窗打开：取已回收累计，剩余可回收 = 委外量 - 已回收，默认全量回收
+// 回收弹窗打开：取已回收累计与回收品，剩余可回收 = 委外量 - 已回收，默认全量回收
 async function openReceipt(row: OutsourcingItem) {
   try {
     const d = await productionApi.outsourcingDetail(row.id)
     receiptId.value = row.id
-    receiptRemaining.value = Number(d.quantity) - Number(d.received_qty)
+    receiptRemaining.value = round2(Number(d.quantity) - Number(d.received_qty))
+    receiptOutput.value = d.output_product_name ?? '—'
     Object.assign(receiptForm, {
       quantity: receiptRemaining.value,
       warehouse_id: undefined,
@@ -312,10 +466,118 @@ async function submitReceipt() {
   }
 }
 
+// 退回余料弹窗打开：详情组件行 → 可退 = 已发 − 已退（已退满的行不展示）
+async function openReturn(row: OutsourcingItem) {
+  try {
+    const d = await productionApi.outsourcingDetail(row.id)
+    if (!d.items?.length) {
+      ElMessage.warning('该委外单无发料组件，不可退回')
+      return
+    }
+    returnId.value = row.id
+    returnRows.value = d.items
+      .map((i) => ({
+        item_id: i.id,
+        material_name: i.material_name,
+        issued_qty: Number(i.issued_qty),
+        returned_qty: Number(i.returned_qty),
+        // 可退 = 已发 − 已退（后端 bcmath 归一，前端 Number 口径）
+        remaining: round2(Number(i.issued_qty) - Number(i.returned_qty)),
+        return_qty: 0,
+      }))
+      .filter((r) => r.remaining > 0)
+    Object.assign(returnForm, {
+      warehouse_id: undefined,
+      location_id: undefined,
+      remark: '',
+    })
+    returnLocations.value = []
+    returnVisible.value = true
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+// 退回量 on-blur 校验：≤ 可退（超退 422 文案，超量回弹可退值）
+function validateReturnQty(row: ReturnRow) {
+  if (row.return_qty == null) return
+  if (Number(row.return_qty) > row.remaining) {
+    ElMessage.warning('退回数量超过已发未退数量')
+    row.return_qty = row.remaining
+  }
+  if (Number(row.return_qty) < 0) row.return_qty = 0
+}
+
+// 退回入库仓库切换 → 联动库位下拉（独立选择）
+async function onReturnWarehouseChange(whId: number | undefined) {
+  returnForm.location_id = undefined
+  returnLocations.value = []
+  if (!whId) return
+  try {
+    returnLocations.value = (await warehouseApi.locations(whId)).items
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+// 提交退回：校验链（至少一行退回量>0 → 逐行 ≤ 可退 → 入库仓库/库位）→ 创建即审核退回单 → 刷新
+async function submitReturn() {
+  if (!returnId.value) return
+  const lines = returnRows.value
+    .filter((r) => Number(r.return_qty) > 0)
+    .map((r) => ({ item_id: r.item_id, quantity: round2(Number(r.return_qty)) }))
+  if (lines.length === 0) {
+    ElMessage.warning('请填写退回数量')
+    return
+  }
+  if (
+    lines.some((line) => {
+      const row = returnRows.value.find((r) => r.item_id === line.item_id)
+      return row ? line.quantity > row.remaining : true
+    })
+  ) {
+    ElMessage.warning('退回数量超过已发未退数量')
+    return
+  }
+  if (!returnForm.warehouse_id || !returnForm.location_id) {
+    ElMessage.warning('仓库与库位不能为空')
+    return
+  }
+  saving.value = true
+  try {
+    await productionApi.createOutsourcingReturn(returnId.value, {
+      items: lines,
+      warehouse_id: returnForm.warehouse_id,
+      location_id: returnForm.location_id,
+      remark: returnForm.remark,
+    })
+    ElMessage.success('退回成功')
+    returnVisible.value = false
+    // 全部组件退回后委外单自动关闭（status 3），刷新列表同步
+    refresh()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    saving.value = false
+  }
+}
+
 // 回收记录弹窗：按委外单加载回收流水
 async function openReceipts(row: OutsourcingItem) {
   try {
+    recordsTitle.value = '回收记录'
     receiptRecords.value = (await productionApi.outsourcingReceipts(row.id)).items
+    recordsVisible.value = true
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+
+// 退回记录弹窗：按委外单加载退回流水
+async function openReturns(row: OutsourcingItem) {
+  try {
+    recordsTitle.value = '退回记录'
+    returnRecords.value = (await productionApi.outsourcingReturns(row.id)).items
     recordsVisible.value = true
   } catch (e) {
     ElMessage.error((e as Error).message)
@@ -360,6 +622,7 @@ onMounted(async () => {
         <el-option label="草稿" :value="0" />
         <el-option label="已审核" :value="1" />
         <el-option label="已回收" :value="2" />
+        <el-option label="已关闭" :value="3" />
       </el-select>
       <template #actions>
         <el-button
@@ -374,7 +637,12 @@ onMounted(async () => {
     <el-table v-loading="loading" :data="list" class="data-table">
       <el-table-column prop="no" label="单号" min-width="150" class-name="font-code" />
       <el-table-column prop="order_no" label="工单" min-width="150" class-name="font-code" />
-      <el-table-column prop="process_name" label="委外工序" min-width="140" />
+      <el-table-column label="委外工序" min-width="160">
+        <template #default="{ row }">{{ row.node_no ?? '' }}{{ row.process_name }}</template>
+      </el-table-column>
+      <el-table-column label="回收品" min-width="110">
+        <template #default="{ row }">{{ row.output_product_name ?? '—' }}</template>
+      </el-table-column>
       <el-table-column prop="supplier_name" label="供应商" min-width="140" />
       <el-table-column
         prop="quantity"
@@ -383,14 +651,17 @@ onMounted(async () => {
         width="100"
         class-name="font-code"
       />
+      <el-table-column label="已回收" align="right" width="100" class-name="font-code">
+        <template #default="{ row }">{{ formatThousand(row.received_qty ?? 0) }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="statusTagType(row.status)">{{ row.status_label }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{ row }">
-          <!-- 草稿：编辑/删除/审核（发出）；已审核：回收/回收记录；已回收：回收记录 -->
+          <!-- 草稿：编辑/删除/审核（发出）；已审核：回收/退回余料；已回收：退回余料；均可看回收/退回记录 -->
           <el-button
             v-if="row.status === 0 && auth.has('production.outsource.update')"
             link
@@ -419,7 +690,15 @@ onMounted(async () => {
             @click="openReceipt(row)"
             >回 收</el-button
           >
+          <el-button
+            v-if="(row.status === 1 || row.status === 2) && auth.has('production.outsource.update')"
+            link
+            type="warning"
+            @click="openReturn(row)"
+            >退回余料</el-button
+          >
           <el-button link type="primary" @click="openReceipts(row)">回收记录</el-button>
+          <el-button link type="primary" @click="openReturns(row)">退回记录</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -433,7 +712,7 @@ onMounted(async () => {
       />
     </div>
 
-    <!-- 新建/编辑弹窗：工单 → 委外工序/供应商/数量 → 仓库/库位 -->
+    <!-- 新建/编辑弹窗：工单 → 委外工序（节点预填：回收品只读 + 组件表格）→ 供应商/数量 → 仓库/库位 -->
     <el-dialog
       v-model="dialogVisible"
       :title="editingId ? '编辑委外单' : '新 建委外单'"
@@ -464,11 +743,12 @@ onMounted(async () => {
               placeholder="选择工序"
               style="width: 100%"
               :disabled="!form.order_id"
+              @change="onOperationChange"
             >
               <el-option
                 v-for="op in processOptions"
                 :key="op.id"
-                :label="`${op.seq}. ${op.process_name}`"
+                :label="`${op.node_no ?? op.seq}. ${op.process_name}（产出：${op.output_product_name ?? '—'}）`"
                 :value="op.id"
               />
             </el-select>
@@ -497,6 +777,7 @@ onMounted(async () => {
               placeholder="委外数量"
               style="width: 100%"
               @blur="validateQuantity"
+              @change="validateQuantity"
             />
           </el-form-item>
           <el-form-item label="仓库" required>
@@ -510,13 +791,54 @@ onMounted(async () => {
             </el-select>
           </el-form-item>
           <el-form-item label="库位" required>
-            <el-select v-model="form.location_id" placeholder="选择库位" style="width: 100%">
+            <el-select
+              v-model="form.location_id"
+              placeholder="选择库位"
+              style="width: 100%"
+              :disabled="!form.warehouse_id"
+            >
               <el-option v-for="l in locations" :key="l.id" :label="l.name" :value="l.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="备注">
             <el-input v-model="form.remark" maxlength="200" />
           </el-form-item>
+        </div>
+        <!-- 工序选中后的节点预填区：回收品只读 + 剩余可委外量 + 组件行（应发=数量×单位用量，行内可调） -->
+        <div v-if="prefill" class="prefill-block">
+          <div class="prefill-meta">
+            <span class="prefill-label"
+              >回收品：<span class="prefill-product">{{ prefill.output_product_name }}</span></span
+            >
+            <span class="prefill-label"
+              >可用量：<span class="remain-cell">{{ formatThousand(remainingQty) }}</span></span
+            >
+          </div>
+          <el-table :data="itemRows" size="small" class="data-table item-table">
+            <el-table-column label="物料" min-width="180">
+              <template #default="{ row }"
+                >{{ row.material_name }} {{ row.material_code }}</template
+              >
+            </el-table-column>
+            <el-table-column label="应发数量" width="160">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="row.required_qty"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  placeholder="应发数量"
+                  size="small"
+                  @blur="validateItemQty(row)"
+                  @change="validateItemQty(row)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column prop="unit_name" label="单位" width="80" />
+            <el-table-column label="可用库存" align="right" width="110" class-name="font-code">
+              <template #default="{ row }">{{ formatThousand(row.stock) }}</template>
+            </el-table-column>
+          </el-table>
         </div>
       </el-form>
       <template #footer>
@@ -525,7 +847,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 回收弹窗：剩余可回收展示 + 回收量（≤ 剩余）+ 入库仓库/库位（独立选择） -->
+    <!-- 回收弹窗：回收品只读 + 剩余可回收展示 + 回收量（≤ 剩余）+ 入库仓库/库位（独立选择） -->
     <el-dialog
       v-model="receiptVisible"
       title="委外回收"
@@ -533,8 +855,11 @@ onMounted(async () => {
       :close-on-click-modal="false"
     >
       <el-form label-width="90px">
+        <el-form-item label="回收品">
+          <span class="receipt-product">{{ receiptOutput }}</span>
+        </el-form-item>
         <el-form-item label="剩余可回收">
-          <span class="remain-cell">{{ receiptRemaining }}</span>
+          <span class="remain-cell">{{ formatThousand(receiptRemaining) }}</span>
         </el-form-item>
         <el-form-item label="回收数量" required>
           <el-input-number
@@ -558,7 +883,12 @@ onMounted(async () => {
           </el-select>
         </el-form-item>
         <el-form-item label="入库库位" required>
-          <el-select v-model="receiptForm.location_id" placeholder="选择库位" style="width: 100%">
+          <el-select
+            v-model="receiptForm.location_id"
+            placeholder="选择库位"
+            style="width: 100%"
+            :disabled="!receiptForm.warehouse_id"
+          >
             <el-option v-for="l in receiptLocations" :key="l.id" :label="l.name" :value="l.id" />
           </el-select>
         </el-form-item>
@@ -574,9 +904,72 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 回收记录弹窗：该委外单的回收流水 -->
-    <el-dialog v-model="recordsVisible" title="回收记录" width="700px">
-      <el-table :data="receiptRecords" size="small" class="data-table">
+    <!-- 余料退回弹窗：组件明细（已发/已退/可退）+ 退回量（≤ 可退）+ 入库仓库/库位（独立选择） -->
+    <el-dialog v-model="returnVisible" title="余料退回" width="720px" :close-on-click-modal="false">
+      <el-form label-width="90px">
+        <el-table :data="returnRows" size="small" class="data-table">
+          <el-table-column prop="material_name" label="物料" min-width="140" />
+          <el-table-column label="已发" align="right" width="90" class-name="font-code">
+            <template #default="{ row }">{{ formatThousand(row.issued_qty) }}</template>
+          </el-table-column>
+          <el-table-column label="已退" align="right" width="90" class-name="font-code">
+            <template #default="{ row }">{{ formatThousand(row.returned_qty) }}</template>
+          </el-table-column>
+          <el-table-column label="可退" align="right" width="90" class-name="font-code">
+            <template #default="{ row }">{{ formatThousand(row.remaining) }}</template>
+          </el-table-column>
+          <el-table-column label="退回量" width="150">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.return_qty"
+                :min="0"
+                :precision="2"
+                :controls="false"
+                size="small"
+                @blur="validateReturnQty(row)"
+                @change="validateReturnQty(row)"
+              />
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-form-item label="入库仓库" required>
+          <el-select
+            v-model="returnForm.warehouse_id"
+            placeholder="选择仓库"
+            style="width: 100%"
+            @change="onReturnWarehouseChange"
+          >
+            <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="入库库位" required>
+          <el-select
+            v-model="returnForm.location_id"
+            placeholder="选择库位"
+            style="width: 100%"
+            :disabled="!returnForm.warehouse_id"
+          >
+            <el-option v-for="l in returnLocations" :key="l.id" :label="l.name" :value="l.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="returnForm.remark" maxlength="200" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="returnVisible = false">取 消</el-button>
+        <el-button class="btn-primary" :loading="saving" @click="submitReturn">提交退回</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 回收/退回记录弹窗：按委外单加载对应流水 -->
+    <el-dialog v-model="recordsVisible" :title="recordsTitle" width="700px">
+      <el-table
+        v-if="recordsTitle === '回收记录'"
+        :data="receiptRecords"
+        size="small"
+        class="data-table"
+      >
         <el-table-column prop="no" label="回收单号" min-width="150" class-name="font-code" />
         <el-table-column
           prop="quantity"
@@ -588,6 +981,23 @@ onMounted(async () => {
         <el-table-column prop="warehouse_name" label="仓库" min-width="100" />
         <el-table-column prop="location_name" label="库位" min-width="100" />
         <el-table-column prop="received_at" label="回收时间" width="160" />
+        <el-table-column prop="operator" label="操作人" min-width="90">
+          <template #default="{ row }">{{ row.operator ?? '—' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-table v-else :data="returnRecords" size="small" class="data-table">
+        <el-table-column prop="no" label="退回单号" min-width="150" class-name="font-code" />
+        <el-table-column prop="material_name" label="物料" min-width="140" />
+        <el-table-column
+          prop="quantity"
+          label="数量"
+          align="right"
+          width="100"
+          class-name="font-code"
+        />
+        <el-table-column prop="warehouse_name" label="仓库" min-width="100" />
+        <el-table-column prop="location_name" label="库位" min-width="100" />
+        <el-table-column prop="returned_at" label="退回时间" width="160" />
         <el-table-column prop="operator" label="操作人" min-width="90">
           <template #default="{ row }">{{ row.operator ?? '—' }}</template>
         </el-table-column>
@@ -624,9 +1034,30 @@ onMounted(async () => {
   grid-template-columns: 1fr 1fr;
   gap: 0 var(--space-lg);
 }
-/* 剩余可回收（Fira Code 加粗，production.md §2） */
+/* 节点预填区（回收品/可用量/组件表格） */
+.prefill-block {
+  margin-top: var(--space-md);
+}
+.prefill-meta {
+  display: flex;
+  gap: var(--space-xl);
+  margin-bottom: var(--space-sm);
+}
+.prefill-label {
+  color: var(--color-text-secondary);
+}
+.prefill-product {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+/* 剩余可回收/可用量（Fira Code 加粗，production.md §2） */
 .remain-cell {
   font-family: 'Fira Code', monospace;
   font-weight: 700;
+}
+/* 回收品只读展示（回收弹窗） */
+.receipt-product {
+  color: var(--color-accent);
+  font-weight: 600;
 }
 </style>
