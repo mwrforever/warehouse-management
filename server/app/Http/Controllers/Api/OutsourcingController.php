@@ -13,6 +13,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DocumentSequence;
 use App\Models\InventoryBalance;
 use App\Models\OutsourcingOrder;
+use App\Models\OutsourcingOrderItem;
 use App\Models\OutsourcingReceipt;
 use App\Models\OutsourcingReturn;
 use App\Models\ProductionOrder;
@@ -36,7 +37,7 @@ class OutsourcingController extends Controller
         private OutsourcingService $outsourcingService,
     ) {}
 
-    /** 分页列表：单号/工单/工序/供应商/状态 筛选；含工单单号/供应商名/工序名与状态标签 */
+    /** 分页列表：单号/工单/工序/供应商/状态 筛选；含工单单号/供应商名/工序名/节点号/回收品与已回收累计 */
     public function index(Request $request)
     {
         $query = OutsourcingOrder::query()
@@ -44,12 +45,18 @@ class OutsourcingController extends Controller
             ->join('suppliers', 'suppliers.id', '=', 'outsourcing_orders.supplier_id')
             ->join('work_order_operations', 'work_order_operations.id', '=', 'outsourcing_orders.operation_id')
             ->join('processes', 'processes.id', '=', 'work_order_operations.process_id')
+            // 回收品名称联查（output_product_id 可空=历史脏数据，leftJoin 保行）
+            ->leftJoin('products', 'products.id', '=', 'outsourcing_orders.output_product_id')
             ->select(
                 'outsourcing_orders.*',
                 'production_orders.no as order_no',
                 'suppliers.name as supplier_name',
                 'processes.name as process_name',
+                'work_order_operations.node_no as node_no',
+                'products.name as output_product_name',
             )
+            // 已回收累计（标量子查询免 N+1；与 show 的 SUM 口径一致）
+            ->withSum('receipts as receipt_qty_sum', 'quantity')
             ->orderByDesc('outsourcing_orders.id');
 
         if ($keyword = $request->input('keyword')) {
@@ -76,10 +83,16 @@ class OutsourcingController extends Controller
                 'order_id' => $o->order_id,
                 'order_no' => $o->getAttribute('order_no'),
                 'operation_id' => $o->operation_id,
+                // 委外工序展示=节点号+工序名（列表联动/节点口径回显）
+                'node_no' => $o->getAttribute('node_no'),
                 'process_name' => $o->getAttribute('process_name'),
+                // 回收品（节点输出半成品/成品；无路线历史单为空）
+                'output_product_name' => $o->getAttribute('output_product_name'),
                 'supplier_id' => $o->supplier_id,
                 'supplier_name' => $o->getAttribute('supplier_name'),
                 'quantity' => $o->quantity,
+                // 已回收累计（SUM 归一 bcmath；回收弹窗打开前列表即可见进度）
+                'received_qty' => bcadd((string) $o->getAttribute('receipt_qty_sum'), '0', 2),
                 'status' => (int) $o->status,
                 'status_label' => OutsourcingOrder::STATUS_LABELS[$o->status] ?? '未知',
                 'approved_at' => $o->approved_at?->toDateTimeString(),
@@ -173,16 +186,23 @@ class OutsourcingController extends Controller
         }
     }
 
-    /** 详情：头信息 + 回收记录摘要 */
+    /** 详情：头信息 + 组件明细（余料退回可退数=已发−已退）+ 回收记录摘要 */
     public function show(OutsourcingOrder $outsourcing)
     {
+        // 单行预载防 N+1：工序（含工艺名）+ 回收品 + 组件（物料/单位）
+        $outsourcing->load(['operation.process', 'outputProduct', 'items.material', 'items.unit']);
+
         return $this->ok([
             'id' => $outsourcing->id,
             'no' => $outsourcing->no,
             'order_id' => $outsourcing->order_id,
             'order_no' => $outsourcing->order?->no,
             'operation_id' => $outsourcing->operation_id,
+            // 委外工序展示=节点号+工艺名（编辑回填/退回弹窗口径）
+            'node_no' => $outsourcing->operation?->node_no,
             'process_name' => $outsourcing->operation?->process?->name,
+            // 回收品（节点输出快照，编辑弹窗只读展示）
+            'output_product_name' => $outsourcing->outputProduct?->name,
             'supplier_id' => $outsourcing->supplier_id,
             'supplier_name' => $outsourcing->supplier?->name,
             'status' => (int) $outsourcing->status,
@@ -197,6 +217,16 @@ class OutsourcingController extends Controller
             'remark' => $outsourcing->remark,
             // 已回收累计（回收弹窗剩余量数据源）
             'received_qty' => $this->receivedQty($outsourcing->id),
+            // 组件明细（退回余料数据源：可退=已发−已退；id 供退回载荷 item_id）
+            'items' => $outsourcing->items->map(fn (OutsourcingOrderItem $i) => [
+                'id' => $i->id,
+                'material_id' => $i->material_id,
+                'material_name' => $i->material?->name,
+                'required_qty' => $i->required_qty,
+                'issued_qty' => $i->issued_qty,
+                'returned_qty' => $i->returned_qty,
+                'unit_name' => $i->unit?->name,
+            ])->values(),
         ]);
     }
 
