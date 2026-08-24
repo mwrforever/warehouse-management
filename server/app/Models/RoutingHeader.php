@@ -7,7 +7,21 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
+/**
+ * 工艺路线头
+ *
+ * @property int $id
+ * @property string $code
+ * @property int $product_id
+ * @property string $version
+ * @property string $quantity
+ * @property int $status
+ * @property string|null $remark
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ */
 class RoutingHeader extends Model
 {
     /** 状态：0停用 1启用 */
@@ -27,16 +41,19 @@ class RoutingHeader extends Model
         return ['status' => 'int', 'quantity' => 'decimal:2'];
     }
 
+    /** @return BelongsTo<Product, *> */
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
     }
 
+    /** @return HasMany<RoutingNode, *> */
     public function nodes(): HasMany
     {
         return $this->hasMany(RoutingNode::class, 'routing_id');
     }
 
+    /** @return HasMany<RoutingEdge, *> */
     public function edges(): HasMany
     {
         return $this->hasMany(RoutingEdge::class, 'routing_id');

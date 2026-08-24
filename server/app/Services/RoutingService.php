@@ -5,7 +5,13 @@
 namespace App\Services;
 
 use App\Exceptions\RoutingException;
+use App\Models\DocumentSequence;
 use App\Models\Product;
+use App\Models\RoutingEdge;
+use App\Models\RoutingHeader;
+use App\Models\RoutingNode;
+use App\Models\RoutingNodeMaterial;
+use Illuminate\Support\Facades\DB;
 
 class RoutingService
 {
@@ -165,5 +171,118 @@ class RoutingService
         }
 
         return $order;
+    }
+
+    /**
+     * 保存（新建/更新）：事务内「锁成品行 → 启用唯一 1707 → DAG 校验 → 取号建头/改头 → 全量替换节点/材料/边」
+     *
+     * @param  array  $data  validatePayload 归一化后的载荷（edges 已转 from/to）
+     */
+    public function persist(array $data, ?RoutingHeader $routing, DocumentSequenceService $sequenceService): RoutingHeader
+    {
+        return DB::transaction(function () use ($data, $routing, $sequenceService) {
+            // 锁成品行串行化同成品并发启停（同 BOM 口径）
+            Product::whereKey($data['product_id'])->lockForUpdate()->first();
+            if ($data['status'] === 1 && RoutingHeader::where('product_id', $data['product_id'])
+                ->where('status', 1)->when($routing, fn ($q) => $q->where('id', '!=', $routing->id))->exists()) {
+                throw new RoutingException('该成品已有启用版本的工艺路线', 1707);
+            }
+
+            // 商品预取（节点输出+全部材料 + 路线成品），DAG 校验一次遍历
+            $productIds = [$data['product_id']];
+            foreach ($data['nodes'] as $n) {
+                $productIds[] = $n['output_product_id'];
+                foreach ($n['materials'] as $m) {
+                    $productIds[] = $m['material_id'];
+                }
+            }
+            $products = Product::whereIn('id', array_unique($productIds))->get()->keyBy('id');
+            $routingProduct = $products->get($data['product_id']);
+            $this->validateAndTopoSort($data['nodes'], $data['edges'], $products->all(), $routingProduct, $data['quantity']);
+
+            if ($routing) {
+                $routing->update([
+                    'product_id' => $data['product_id'], 'version' => $data['version'],
+                    'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'],
+                ]);
+                // DAG 全量替换：节点删除级联材料/边（FK cascade）
+                $routing->nodes()->delete();
+            } else {
+                $routing = $sequenceService->nextNoByConfig(
+                    DocumentSequence::TYPE_RTG,
+                    fn (string $code) => RoutingHeader::create([
+                        'code' => $code, 'product_id' => $data['product_id'], 'version' => $data['version'],
+                        'quantity' => $data['quantity'], 'status' => $data['status'], 'remark' => $data['remark'],
+                    ]),
+                    fn (string $prefix, string $dateKey) => ($no = RoutingHeader::where('code', 'like', $prefix.date('Ymd').'%')
+                        ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
+                );
+            }
+
+            $nodeIdByNo = [];
+            foreach ($data['nodes'] as $n) {
+                $node = $routing->nodes()->create([
+                    'node_no' => $n['node_no'], 'process_id' => $n['process_id'], 'name' => $n['name'],
+                    'output_product_id' => $n['output_product_id'], 'output_qty' => $n['output_qty'],
+                    'is_outsourced' => $n['is_outsourced'], 'remark' => $n['remark'],
+                ]);
+                $nodeIdByNo[$n['node_no']] = $node->id;
+                foreach ($n['materials'] as $m) {
+                    $node->materials()->create($m);
+                }
+            }
+            foreach ($data['edges'] as $e) {
+                $routing->edges()->create(['from_node_id' => $nodeIdByNo[$e['from']], 'to_node_id' => $nodeIdByNo[$e['to']]]);
+            }
+
+            return $routing;
+        }, 2);
+    }
+
+    /** 删除（头删除级联节点/材料/边） */
+    public function delete(RoutingHeader $routing): void
+    {
+        $routing->delete();
+    }
+
+    /** 启用自动停用同成品其他版本（同 BOM toggle） */
+    public function toggle(RoutingHeader $routing, int $status): void
+    {
+        DB::transaction(function () use ($routing, $status) {
+            if ($status === 1) {
+                RoutingHeader::where('product_id', $routing->product_id)->where('status', 1)
+                    ->where('id', '!=', $routing->id)->update(['status' => 0]);
+            }
+            $routing->update(['status' => $status]);
+        });
+    }
+
+    /** 完整 DAG 图（画布回显/查看） */
+    public function graph(RoutingHeader $routing): array
+    {
+        $routing->load(['product', 'nodes.materials.material', 'nodes.materials.unit', 'nodes.process', 'nodes.outputProduct']);
+
+        return [
+            'routing' => [
+                'id' => $routing->id, 'code' => $routing->code, 'product_id' => $routing->product_id,
+                'product_name' => $routing->product?->name, 'version' => $routing->version,
+                'quantity' => (float) $routing->quantity, 'status' => (int) $routing->status,
+                'remark' => $routing->remark,
+            ],
+            'nodes' => $routing->nodes()->orderBy('id')->get()->map(fn (RoutingNode $n) => [
+                'id' => $n->id, 'node_no' => $n->node_no, 'process_id' => $n->process_id,
+                'process_name' => $n->process?->name, 'name' => $n->name,
+                'output_product_id' => $n->output_product_id, 'output_product_name' => $n->outputProduct?->name,
+                'output_qty' => (float) $n->output_qty, 'is_outsourced' => (int) $n->is_outsourced,
+                'remark' => $n->remark,
+                'materials' => $n->materials->map(fn (RoutingNodeMaterial $m) => [
+                    'id' => $m->id, 'material_id' => $m->material_id, 'material_name' => $m->material?->name,
+                    'qty_per_unit' => (float) $m->qty_per_unit, 'unit_id' => $m->unit_id, 'unit_name' => $m->unit?->name,
+                ])->all(),
+            ]),
+            'edges' => $routing->edges()->orderBy('id')->get()->map(fn (RoutingEdge $e) => [
+                'id' => $e->id, 'from_node_no' => $e->fromNode?->node_no, 'to_node_no' => $e->toNode?->node_no,
+            ]),
+        ];
     }
 }
