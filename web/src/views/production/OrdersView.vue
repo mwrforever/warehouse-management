@@ -13,6 +13,7 @@ import {
 import { bomApi } from '../../api/bom'
 import { productApi, type ProductItem } from '../../api/product'
 import ListFilterBar from '../../components/ListFilterBar.vue'
+import OperationGraph from '../../components/OperationGraph.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { toLocalDateString } from '../../utils/format'
@@ -715,6 +716,11 @@ onMounted(async () => {
                 class-name="font-code"
               />
             </el-table>
+          </el-tab-pane>
+          <!-- 工序网络：仅按路由下达的 DAG 工单展示（routing_id 为空 = 旧逻辑展开的工单，隐藏） -->
+          <el-tab-pane v-if="detail?.routing_id" label="工序网络">
+            <OperationGraph v-if="detail?.graph" :graph="detail.graph" />
+            <el-empty v-else description="暂无工序网络数据" />
           </el-tab-pane>
           <el-tab-pane label="报工记录">
             <el-select
