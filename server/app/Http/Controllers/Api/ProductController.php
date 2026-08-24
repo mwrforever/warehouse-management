@@ -108,7 +108,7 @@ class ProductController extends Controller
                 'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
                 'spec' => $data['spec'] ?? null,
                 'safety_min' => $min, 'safety_max' => $max,
-                'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
+                'status' => $data['status'] ?? Product::STATUS_ENABLED, 'remark' => $data['remark'] ?? null,
             ];
             // 编码留空 → 走编号配置自动生成（商品编码 PRD 前缀全局自增，含老库衔接）；条码留空 → 默认 = 编码。
             // Product::create 必须封装在 persist 闭包内（与其余 12 个单据调用点对齐，B-1）：

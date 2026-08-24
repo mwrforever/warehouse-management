@@ -66,7 +66,7 @@ class CategoryController extends Controller
 
         $category = Category::create([
             'name' => $data['name'], 'parent_id' => $parentId,
-            'sort' => $data['sort'] ?? 0, 'status' => $data['status'] ?? 1,
+            'sort' => $data['sort'] ?? 0, 'status' => $data['status'] ?? Category::STATUS_ENABLED,
         ]);
 
         return $this->ok(['id' => $category->id]);

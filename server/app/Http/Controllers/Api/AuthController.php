@@ -33,7 +33,7 @@ class AuthController extends Controller
         }
 
         // 禁用账号拦截：不签发 token
-        if ($user->status !== 1) {
+        if ($user->status !== User::STATUS_ENABLED) {
             return $this->fail(1006, '账号已被禁用');
         }
 

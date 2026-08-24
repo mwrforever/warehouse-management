@@ -41,7 +41,10 @@ class UnitController extends Controller
         if (Unit::where('code', $data['code'])->exists()) {
             return $this->fail(1103, '单位编码已存在');
         }
-        $unit = Unit::create(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? 1]);
+        $unit = Unit::create([
+            'name' => $data['name'], 'code' => $data['code'],
+            'status' => $data['status'] ?? Unit::STATUS_ENABLED,
+        ]);
 
         return $this->ok(['id' => $unit->id]);
     }

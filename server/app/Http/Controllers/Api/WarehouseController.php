@@ -59,7 +59,7 @@ class WarehouseController extends Controller
             'code' => $data['code'],
             'address' => $data['address'] ?? null,
             'manager' => $data['manager'] ?? null,
-            'status' => $data['status'] ?? 1,
+            'status' => $data['status'] ?? Warehouse::STATUS_ENABLED,
         ]);
 
         return $this->ok(['id' => $warehouse->id]);
@@ -130,7 +130,7 @@ class WarehouseController extends Controller
         $location = $warehouse->locations()->create([
             'name' => $data['name'],
             'code' => $data['code'],
-            'status' => $data['status'] ?? 1,
+            'status' => $data['status'] ?? Location::STATUS_ENABLED,
         ]);
 
         return $this->ok(['id' => $location->id]);

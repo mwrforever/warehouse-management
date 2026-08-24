@@ -26,6 +26,11 @@ use Illuminate\Support\Carbon;
  */
 class DictionaryItem extends Model
 {
+    /** 字典项状态：0停用 1启用（下拉取值接口仅返回启用项） */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['dictionary_id', 'label', 'value', 'sort', 'status'];
 
     // 所属字典（一对一反向，外键 dictionary_id）

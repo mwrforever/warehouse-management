@@ -48,7 +48,7 @@ class ProcessController extends Controller
             'code' => $data['code'],
             'sort' => $data['sort'] ?? 0,
             'description' => $data['description'] ?? null,
-            'status' => $data['status'] ?? 1,
+            'status' => $data['status'] ?? Process::STATUS_ENABLED,
         ]);
 
         return $this->ok(['id' => $process->id]);

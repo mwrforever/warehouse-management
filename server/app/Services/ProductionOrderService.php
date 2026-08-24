@@ -32,7 +32,7 @@ class ProductionOrderService
         // 工序序列 = 全部启用工序按 sort 升序（V1 设计：BOM 头无工序字段，全量启用工序进入工单）
         $seq = 0;
         $operations = Process::query()
-            ->where('status', 1)
+            ->where('status', Process::STATUS_ENABLED)
             ->orderBy('sort')
             ->orderBy('id')
             ->get()

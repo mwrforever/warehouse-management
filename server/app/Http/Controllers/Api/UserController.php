@@ -68,7 +68,7 @@ class UserController extends Controller
         // 内置管理员保护：禁止改 username（防改名后绕过删除保护）与 status（防禁用唯一管理员锁死系统）
         if (
             $user->username === 'admin'
-            && ($request->input('username') !== 'admin' || (int) $request->input('status') !== 1)
+            && ($request->input('username') !== 'admin' || (int) $request->input('status') !== User::STATUS_ENABLED)
         ) {
             return $this->fail(1003, '内置管理员不可修改');
         }

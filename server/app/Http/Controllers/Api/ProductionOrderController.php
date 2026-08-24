@@ -106,14 +106,16 @@ class ProductionOrderController extends Controller
                 // 锁成品行：与 BOM 启用切换并发时串行化（1501 判定读一致）
                 $product = Product::whereKey($data['product_id'])->lockForUpdate()->firstOrFail();
                 // 启用版本唯一（BOM 模块不变式），按 id 倒序取最新启用版
-                $bom = BomHeader::where('product_id', $product->id)->where('status', 1)->orderByDesc('id')->first();
+                $bom = BomHeader::where('product_id', $product->id)
+                    ->where('status', BomHeader::STATUS_ENABLED)->orderByDesc('id')->first();
                 if (! $bom) {
                     throw new ProductionException('该成品没有启用版本的 BOM', 1501);
                 }
                 $expansion = $this->orderService->expandBom($product, (string) $data['quantity'], $bom);
 
                 // 取启用工艺路线（同成品启用唯一，同 BOM 口径）：有→DAG 展开；无→旧逻辑全量工序快照 + 告警（RTG-06）
-                $routing = RoutingHeader::where('product_id', $product->id)->where('status', 1)->orderByDesc('id')->first();
+                $routing = RoutingHeader::where('product_id', $product->id)
+                    ->where('status', RoutingHeader::STATUS_ENABLED)->orderByDesc('id')->first();
                 if ($routing) {
                     $rex = $this->orderService->expandRouting($routing);
                 } else {
@@ -316,14 +318,16 @@ class ProductionOrderController extends Controller
                 }
                 // 锁成品行 + 取启用 BOM（与 store 同口径）
                 Product::whereKey($data['product_id'])->lockForUpdate()->firstOrFail();
-                $bom = BomHeader::where('product_id', $data['product_id'])->where('status', 1)->orderByDesc('id')->first();
+                $bom = BomHeader::where('product_id', $data['product_id'])
+                    ->where('status', BomHeader::STATUS_ENABLED)->orderByDesc('id')->first();
                 if (! $bom) {
                     throw new ProductionException('该成品没有启用版本的 BOM', 1501);
                 }
                 $expansion = $this->orderService->expandBom($locked->product, (string) $data['quantity'], $bom);
 
                 // 取启用工艺路线（与 store 同口径，成品可改故随新成品重取）：有→DAG 展开重建；无→旧逻辑线性快照 + 告警
-                $routing = RoutingHeader::where('product_id', $data['product_id'])->where('status', 1)->orderByDesc('id')->first();
+                $routing = RoutingHeader::where('product_id', $data['product_id'])
+                    ->where('status', RoutingHeader::STATUS_ENABLED)->orderByDesc('id')->first();
                 if ($routing) {
                     $rex = $this->orderService->expandRouting($routing);
                 } else {

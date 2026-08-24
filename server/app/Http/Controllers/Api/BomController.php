@@ -59,7 +59,7 @@ class BomController extends Controller
         return DB::transaction(function () use ($data) {
             // 先锁成品行串行化同成品并发创建，再查启用版本，守住「同成品启用版本唯一」核心不变式
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
-            if ($data['status'] === 1 && $this->hasEnabledVersion($data['product_id'], null)) {
+            if ($data['status'] === BomHeader::STATUS_ENABLED && $this->hasEnabledVersion($data['product_id'], null)) {
                 return $this->fail(1120, '该成品已有启用版本的 BOM');
             }
             // 生成单号：按编号规则配置格式（BOM 前缀+日期段+补零），持久序列原子取号（删除不回退，撞号自动重试）
@@ -95,7 +95,10 @@ class BomController extends Controller
         return DB::transaction(function () use ($data, $bom) {
             // 先锁成品行串行化同成品并发更新，再查启用版本（排除自身 id）
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
-            if ($data['status'] === 1 && $this->hasEnabledVersion($data['product_id'], $bom->id)) {
+            if (
+                $data['status'] === BomHeader::STATUS_ENABLED
+                && $this->hasEnabledVersion($data['product_id'], $bom->id)
+            ) {
                 return $this->fail(1120, '该成品已有启用版本的 BOM');
             }
             $bom->update([
@@ -144,10 +147,10 @@ class BomController extends Controller
             // 否则 toggle 与新建/更新交错时各自的启用判断互看不到对方未提交的变更，可产生双启用版本
             Product::whereKey($bom->product_id)->lockForUpdate()->first();
             // 启用新版本：同成品其他启用版本全部停用，保证启用唯一
-            if ($status === 1) {
+            if ($status === BomHeader::STATUS_ENABLED) {
                 BomHeader::where('product_id', $bom->product_id)
-                    ->where('status', 1)->where('id', '!=', $bom->id)
-                    ->update(['status' => 0]);
+                    ->where('status', BomHeader::STATUS_ENABLED)->where('id', '!=', $bom->id)
+                    ->update(['status' => BomHeader::STATUS_DISABLED]);
             }
             $bom->update(['status' => $status]);
         });
@@ -189,8 +192,8 @@ class BomController extends Controller
             return $this->fail(1123, 'BOM 明细存在重复物料');
         }
 
-        // 启用状态：status 为空默认 1=启用（1120 唯一性检查在事务内配合成品行锁执行）
-        $status = (int) ($data['status'] ?? 1);
+        // 启用状态：status 为空默认启用（1120 唯一性检查在事务内配合成品行锁执行）
+        $status = (int) ($data['status'] ?? BomHeader::STATUS_ENABLED);
 
         return [
             'product_id' => $data['product_id'], 'version' => $data['version'],
@@ -205,7 +208,7 @@ class BomController extends Controller
     // 同成品是否存在启用版本（更新场景排除自身 id）
     private function hasEnabledVersion(int $productId, ?int $ignoreId): bool
     {
-        $query = BomHeader::where('product_id', $productId)->where('status', 1);
+        $query = BomHeader::where('product_id', $productId)->where('status', BomHeader::STATUS_ENABLED);
         if ($ignoreId) {
             $query->where('id', '!=', $ignoreId);
         }

@@ -27,6 +27,11 @@ use Illuminate\Support\Carbon;
  */
 class BomHeader extends Model
 {
+    /** 版本状态：0停用 1启用（同成品启用版本唯一，由控制器事务保证） */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['code', 'product_id', 'version', 'quantity', 'status', 'remark'];
 
     protected function casts(): array

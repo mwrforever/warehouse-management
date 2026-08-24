@@ -130,6 +130,8 @@ class DictionaryController extends Controller
             return $this->fail(1008, '字典不存在');
         }
 
-        return $this->ok(['items' => $dictionary->items()->where('status', 1)->orderBy('sort')->get()]);
+        $items = $dictionary->items()->where('status', DictionaryItem::STATUS_ENABLED)->orderBy('sort')->get();
+
+        return $this->ok(['items' => $items]);
     }
 }

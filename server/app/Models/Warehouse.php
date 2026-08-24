@@ -25,6 +25,11 @@ use Illuminate\Support\Carbon;
  */
 class Warehouse extends Model
 {
+    /** 仓库状态：0停用 1启用 */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['name', 'code', 'address', 'manager', 'status'];
 
     protected function casts(): array

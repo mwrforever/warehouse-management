@@ -9,11 +9,13 @@ namespace App\Services;
 use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\OperationReport;
+use App\Models\PickList;
 use App\Models\PickListItem;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\PurchaseInbound;
 use App\Models\PurchaseInboundItem;
+use App\Models\ReturnList;
 use App\Models\ReturnListItem;
 use App\Models\SalesOutbound;
 use App\Models\SalesOutboundItem;
@@ -278,7 +280,7 @@ class ReportService
             // 已审核领料明细（耗用加项）
             $materials['picks'] = PickListItem::query()
                 ->join('pick_lists', 'pick_lists.id', '=', 'pick_list_items.pick_id')
-                ->where('pick_lists.status', 1)
+                ->where('pick_lists.status', PickList::STATUS_APPROVED)
                 ->whereIn('pick_lists.order_id', $orderIds)
                 ->selectRaw('pick_lists.order_id, pick_list_items.product_id, SUM(pick_list_items.pick_qty) as qty')
                 ->groupBy('pick_lists.order_id', 'pick_list_items.product_id')
@@ -286,7 +288,7 @@ class ReportService
             // 已审核退料明细（耗用减项）
             $materials['returns'] = ReturnListItem::query()
                 ->join('return_lists', 'return_lists.id', '=', 'return_list_items.return_id')
-                ->where('return_lists.status', 1)
+                ->where('return_lists.status', ReturnList::STATUS_APPROVED)
                 ->whereIn('return_lists.order_id', $orderIds)
                 ->selectRaw('return_lists.order_id, return_list_items.product_id, SUM(return_list_items.quantity) as qty')
                 ->groupBy('return_lists.order_id', 'return_list_items.product_id')
@@ -389,14 +391,14 @@ class ReportService
             'purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0',
         ];
         $amount = PurchaseInbound::query()
-            ->where('status', 1)
+            ->where('status', PurchaseInbound::STATUS_APPROVED)
             ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('inbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(total_amount) as a')
             ->value('a');
         $qty = PurchaseInboundItem::query()
             ->join('purchase_inbounds', 'purchase_inbounds.id', '=', 'purchase_inbound_items.inbound_id')
-            ->where('purchase_inbounds.status', 1)
+            ->where('purchase_inbounds.status', PurchaseInbound::STATUS_APPROVED)
             ->where('purchase_inbounds.inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('purchase_inbounds.inbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(purchase_inbound_items.quantity) as q')
@@ -410,14 +412,14 @@ class ReportService
             $totals['purchase_qty'] = bcadd((string) $qty, '0', 2);
         }
         $amount = SalesOutbound::query()
-            ->where('status', 1)
+            ->where('status', SalesOutbound::STATUS_APPROVED)
             ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('outbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(total_amount) as a')
             ->value('a');
         $qty = SalesOutboundItem::query()
             ->join('sales_outbounds', 'sales_outbounds.id', '=', 'sales_outbound_items.outbound_id')
-            ->where('sales_outbounds.status', 1)
+            ->where('sales_outbounds.status', SalesOutbound::STATUS_APPROVED)
             ->where('sales_outbounds.outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('sales_outbounds.outbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(sales_outbound_items.quantity) as q')
@@ -433,7 +435,7 @@ class ReportService
         // 会退化为逐单懒加载 N+1，故用 lazy）；明细数量合计保留 PHP 侧分桶（跨库方言无关）
         $inbounds = PurchaseInbound::query()
             ->with('items')
-            ->where('status', 1)
+            ->where('status', PurchaseInbound::STATUS_APPROVED)
             ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('inbound_at', '<=', $dateTo.' 23:59:59')
             ->orderBy('inbound_at')
@@ -460,7 +462,7 @@ class ReportService
         // 销售侧：同构（升序 + 500 周期预剪枝；截断标志两侧共用，任一侧触及即置位）
         $outbounds = SalesOutbound::query()
             ->with('items')
-            ->where('status', 1)
+            ->where('status', SalesOutbound::STATUS_APPROVED)
             ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('outbound_at', '<=', $dateTo.' 23:59:59')
             ->orderBy('outbound_at')

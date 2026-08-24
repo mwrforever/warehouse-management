@@ -42,6 +42,11 @@ class User extends Authenticatable
 
     use Notifiable;
 
+    /** 账号状态：0禁用 1启用（禁用后登录被拒，见 AuthController） */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     // 用户字段白名单：账号信息、状态与最后登录时间（密码单独走 setter）
     protected $fillable = ['name', 'username', 'email', 'password', 'status', 'last_login_at'];
 

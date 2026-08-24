@@ -156,7 +156,7 @@ class RoutingController extends Controller
             'product_id' => (int) $data['product_id'],
             'version' => $data['version'],
             'quantity' => (string) ($data['quantity'] ?? 1),
-            'status' => (int) ($data['status'] ?? 1),
+            'status' => (int) ($data['status'] ?? RoutingHeader::STATUS_ENABLED),
             'remark' => $data['remark'] ?? null,
             'nodes' => array_map(fn ($n) => [
                 'node_no' => $n['node_no'],

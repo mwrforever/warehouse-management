@@ -55,7 +55,7 @@ class CustomerController extends Controller
         $customer = Customer::create([
             'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? null,
             'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
-            'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? 1,
+            'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? Customer::STATUS_ENABLED,
         ]);
 
         return $this->ok(['id' => $customer->id]);

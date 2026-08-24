@@ -24,6 +24,11 @@ use Illuminate\Support\Carbon;
  */
 class Process extends Model
 {
+    /** 工序状态：0停用 1启用（仅启用工序进入生产工单工序序列） */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['name', 'code', 'sort', 'description', 'status'];
 
     protected function casts(): array

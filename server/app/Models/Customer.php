@@ -25,6 +25,11 @@ use Illuminate\Support\Carbon;
  */
 class Customer extends Model
 {
+    /** 客户状态：0停用 1启用 */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['name', 'code', 'contact', 'phone', 'address', 'remark', 'status'];
 
     protected function casts(): array
