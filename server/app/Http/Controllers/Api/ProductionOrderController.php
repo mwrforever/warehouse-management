@@ -289,7 +289,7 @@ class ProductionOrderController extends Controller
         ], '', JSON_PRESERVE_ZERO_FRACTION);
     }
 
-    /** 更新草稿：仅草稿（1503）；物料快照/工序序列全量重建（BOM 展开）；事务内锁行复查防并发 */
+    /** 更新草稿：仅草稿（1503）；被委外单引用不可改（1504）；物料快照/工序序列全量重建（BOM 展开）；事务内锁行复查防并发 */
     public function update(Request $request, ProductionOrder $order)
     {
         try {
@@ -306,6 +306,12 @@ class ProductionOrderController extends Controller
                 $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== ProductionOrder::STATUS_DRAFT) {
                     throw new ProductionException('已下达工单不可修改', 1503);
+                }
+                // 防外键卡死（B-1）：草稿工单工序被委外单引用（operation_id RESTRICT）时全删重建工序
+                // 行会撞外键抛 QueryException 500——比照 destroy 引用检查同口径拒绝（1504 族）；
+                // 用户可先删除草稿委外单再编辑工单（自愈路径）
+                if (OutsourcingOrder::where('order_id', $locked->id)->exists()) {
+                    throw new ProductionException('工单已被委外单使用，不可修改', 1504);
                 }
                 // 锁成品行 + 取启用 BOM（与 store 同口径）
                 Product::whereKey($data['product_id'])->lockForUpdate()->firstOrFail();
@@ -384,7 +390,7 @@ class ProductionOrderController extends Controller
                 }
             });
         } catch (ProductionException $e) {
-            // 1503 已下达（锁行复查与并发下达幂等拦截）/1501 BOM 变更（改成品后新成品无启用 BOM）
+            // 1503 已下达（锁行复查与并发下达幂等拦截）/1504 工序被委外单引用/1501 BOM 变更（改成品后新成品无启用 BOM）
             return $this->fail($e->getCode() ?: 1503, $e->getMessage());
         }
 

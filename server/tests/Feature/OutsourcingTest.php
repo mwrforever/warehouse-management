@@ -210,6 +210,29 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('code', 422);
     }
 
+    public function test_store_rejects_draft_order_with_1523(): void
+    {
+        // 异常路径（B-1）：草稿工单不可建委外单（与发出 approve 同口径 [已下达,生产中]，1523）——
+        // 修复前 store 无工单状态校验，草稿工单可挂草稿委外单；该草稿单 operation_id 外键会卡死
+        // 工单编辑（update 重建工序行撞 FK），故从源头禁止
+        $this->baseDag();
+        // 模拟「新建草稿 DAG 工单」形态：dagOrder 默认下达+开工，改库打回草稿（OP30 仍为待开工委外节点）；
+        // 先 refresh 对齐库内生产中态——否则内存模型仍为建单时的草稿值，同值赋值 save 短路不打 UPDATE
+        $this->order->refresh();
+        $this->order->status = ProductionOrder::STATUS_DRAFT;
+        $this->order->save();
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload())
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '工单当前状态不可委外');
+        // 拒绝时不落单据
+        $this->assertDatabaseCount('outsourcing_orders', 0);
+        // 回归路径：工单下达（草稿→已下达）后建单放行
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$this->order->id}/release")
+            ->assertJsonPath('code', 0);
+        $this->createOutsourcing($this->payload());
+        $this->assertDatabaseCount('outsourcing_orders', 1);
+    }
+
     // 核心不变式（发出，默认载荷 5）：组件余额 12→2、6→1，分量 outsourcing_out 流水（direction=-1、
     // 商品=发料组件）+ 操作人/时间落库
     public function test_approve_deducts_default_payload_components_and_writes_movement(): void

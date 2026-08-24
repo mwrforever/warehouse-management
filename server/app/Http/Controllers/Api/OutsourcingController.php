@@ -103,7 +103,7 @@ class OutsourcingController extends Controller
         ]);
     }
 
-    /** 新建草稿：委外量 ≤ 节点剩余计划量（1520）；工序必须属于该工单（422）；组件载荷检单元节点口径（422） */
+    /** 新建草稿：工单状态 ∈ [已下达,生产中]（1523，与发出 approve 同口径）；委外量 ≤ 节点剩余计划量（1520）；工序必须属于该工单（422）；组件载荷检单元节点口径（422） */
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
@@ -133,9 +133,19 @@ class OutsourcingController extends Controller
             }
             // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
             $order = ProductionOrder::find($data['order_id']);
+            // 工单状态校验（B-1）：与发出 approve 同口径 [已下达,生产中]（1523，spec §5.1 生产中→委外）——
+            // 草稿工单的工序行会随工单编辑全删重建，草稿期挂委外单会令 operation_id 外键（RESTRICT）
+            // 卡死工单编辑（QueryException 500 且无自愈路径），从源头禁止
+            $canOutsource = $order && in_array($order->status, [
+                ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING,
+            ], true);
+            if (! $canOutsource) {
+                return $this->fail(1523, '工单当前状态不可委外');
+            }
             $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
                 ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
-            if (! $order || bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+            // 工单缺失分支已由上方 1523 守卫承接（$canOutsource 对 null 工单恒 false），此处 $order 必非空
+            if (bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
                 return $this->fail(1520, '委外数量超过节点剩余计划量');
             }
 
