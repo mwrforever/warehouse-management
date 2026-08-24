@@ -711,14 +711,15 @@ class OutsourcingController extends Controller
     }
 
     // 已回收累计（Σ 回收单数量；SQL SUM 聚合——回收单创建即审核 status 恒 1，SUM 与逐行 bcadd 语义等价，
-    // 跨库 SUM 返回形态不一（MySQL 字符串 / SQLite 数值）统一 bcmath 归一；P1-3）
+    // 跨库 SUM 返回形态不一（MySQL 字符串 / SQLite 数值）统一 bcmath 归一；无回收单 SUM 为空 → '0.00'，
+    // 与 index 的 withSum（0）口径一致（P1-3；修复轮：show 曾返回 '0' 与 index '0.00' 不一致）
     private function receivedQty(int $outsourcingId): string
     {
         $total = OutsourcingReceipt::where('outsourcing_id', $outsourcingId)
             ->selectRaw('SUM(quantity) as total')
             ->value('total');
 
-        return $total === null ? '0' : bcadd((string) $total, '0', 2);
+        return $total === null ? '0.00' : bcadd((string) $total, '0', 2);
     }
 
     // 委外单载荷格式校验（422 仅格式层）；业务码在方法内检查；items 组件行归一化字符串供 bcmath 校验

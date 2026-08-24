@@ -379,7 +379,7 @@ class OutsourcingTest extends TestCase
 
     public function test_index_with_labels_and_outsourcings_requires_permission(): void
     {
-        // 正常路径：列表含工单单号/供应商/工序名/状态标签
+        // 正常路径：列表含工单单号/供应商/工序名/状态标签 + 节点口径字段（节点号/回收品/已回收累计）
         $this->baseDag();
         $no = $this->createOutsourcing($this->payload());
         $os = OutsourcingOrder::where('no', $no)->first();
@@ -390,7 +390,11 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('data.items.0.order_no', 'MO'.date('YmdHi').'001')
             ->assertJsonPath('data.items.0.supplier_name', '测试供应商')
             ->assertJsonPath('data.items.0.process_name', '下料')
-            ->assertJsonPath('data.items.0.status_label', '已审核');
+            ->assertJsonPath('data.items.0.status_label', '已审核')
+            // 节点口径契约：委外工序展示=节点号、回收品=节点输出（半成品B）、已回收累计=0
+            ->assertJsonPath('data.items.0.node_no', 'OP30')
+            ->assertJsonPath('data.items.0.output_product_name', '半成品B')
+            ->assertJsonPath('data.items.0.received_qty', '0.00');
         // 异常路径：无 production.outsource.list 权限的角色被拒（403 JSON 信封）
         $role = Role::create(['name' => '普通', 'code' => 'plain']);
         $u = User::create(['name' => '普通', 'username' => 'plain', 'password' => 'admin123', 'status' => 1]);
@@ -400,6 +404,38 @@ class OutsourcingTest extends TestCase
         // 真实 HTTP 每次请求独立容器不受影响），故先重置 guard，再以普通用户 token 验证无权限被拒
         $this->app['auth']->forgetGuards();
         $this->withToken($token)->getJson('/api/v1/production/outsourcings')->assertStatus(403);
+    }
+
+    // show：详情含头信息（节点号/回收品/已回收累计）+ 组件明细（material_name/应发/已发/已退/单位）
+    public function test_show_returns_detail_with_items_and_received_qty(): void
+    {
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        // 草稿详情：节点口径字段 + 组件行（应发 10/5，未发出已发=0）
+        $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/{$os->id}")
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.node_no', 'OP30')
+            ->assertJsonPath('data.process_name', '下料')
+            ->assertJsonPath('data.output_product_name', '半成品B')
+            ->assertJsonPath('data.status_label', '草稿')
+            ->assertJsonPath('data.received_qty', '0.00')
+            ->assertJsonPath('data.items.0.material_name', '铝材')
+            ->assertJsonPath('data.items.0.required_qty', '10.00')
+            ->assertJsonPath('data.items.0.issued_qty', '0.00')
+            ->assertJsonPath('data.items.0.returned_qty', '0.00')
+            ->assertJsonPath('data.items.1.material_name', '半成品B')
+            ->assertJsonPath('data.items.1.required_qty', '5.00');
+        // 发出后：已发=应发（实发口径）；回收一批后已回收累计回写
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 2, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/{$os->id}")
+            ->assertJsonPath('data.status_label', '已审核')
+            ->assertJsonPath('data.received_qty', '2.00')
+            ->assertJsonPath('data.items.0.issued_qty', '10.00')
+            ->assertJsonPath('data.items.1.issued_qty', '5.00');
     }
 
     // OUT-01：从工序节点预填组件清单（应发基数=节点单位用量）+ 回收品 + 剩余可委外量（DAG 委外节点 OP30：
