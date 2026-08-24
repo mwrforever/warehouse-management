@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Services\DocumentSequenceService;
 use App\Support\ApiResponse;
 use App\Support\DeletionGuard;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -46,6 +47,10 @@ class BomController extends Controller
     public function store(Request $request)
     {
         $data = $this->validateBom($request);
+        // 业务校验失败：校验器返回 fail 信封，直接透出（不进入建单事务）
+        if ($data instanceof JsonResponse) {
+            return $data;
+        }
 
         // 事务第 2 参数为死锁(1213)重试次数：编号序列行首建时（MySQL RR 隔离级别下取号走
         // lockForUpdate+INSERT，间隙锁使并发双方各自 INSERT 同键序列行互等死锁）败方整单回滚 500；
@@ -82,6 +87,10 @@ class BomController extends Controller
     public function update(Request $request, BomHeader $bom)
     {
         $data = $this->validateBom($request);
+        // 业务校验失败：校验器返回 fail 信封，直接透出（不进入更新事务）
+        if ($data instanceof JsonResponse) {
+            return $data;
+        }
 
         return DB::transaction(function () use ($data, $bom) {
             // 先锁成品行串行化同成品并发更新，再查启用版本（排除自身 id）
@@ -143,8 +152,9 @@ class BomController extends Controller
         return $this->ok();
     }
 
-    // BOM 表单校验：格式 422 + 业务码（1118 成品类型/1119 物料类型/1123 重复物料；1120 启用唯一在事务内配合成品行锁检查）
-    private function validateBom(Request $request): array
+    // BOM 表单校验：格式 422 + 业务码（1118 成品类型/1119 物料类型/1123 重复物料；1120 启用唯一在事务内配合成品行锁检查）。
+    // 业务校验失败直接返回 fail 信封（JsonResponse），调用方（store/update）须先判 instanceof 早退再使用数组
+    private function validateBom(Request $request): array|JsonResponse
     {
         $data = $request->validate([
             'product_id' => 'required|exists:products,id',
@@ -161,19 +171,19 @@ class BomController extends Controller
         // 成品类型校验 1118
         $product = Product::find($data['product_id']);
         if ($product->type !== 'finished') {
-            abort(response()->json(['code' => 1118, 'message' => 'BOM 关联商品必须是成品', 'data' => null], 200));
+            return $this->fail(1118, 'BOM 关联商品必须是成品');
         }
 
         // 物料类型校验 1119：明细物料仅原料/半成品（不允许成品嵌套）
         $materialIds = array_column($data['items'], 'material_id');
         $materials = Product::whereIn('id', $materialIds)->get();
         if ($materials->contains(fn ($m) => $m->type === 'finished')) {
-            abort(response()->json(['code' => 1119, 'message' => 'BOM 明细物料必须是原料或半成品', 'data' => null], 200));
+            return $this->fail(1119, 'BOM 明细物料必须是原料或半成品');
         }
 
         // 重复物料 1123
         if (count($materialIds) !== count(array_unique($materialIds))) {
-            abort(response()->json(['code' => 1123, 'message' => 'BOM 明细存在重复物料', 'data' => null], 200));
+            return $this->fail(1123, 'BOM 明细存在重复物料');
         }
 
         // 启用状态：status 为空默认 1=启用（1120 唯一性检查在事务内配合成品行锁执行）
