@@ -183,8 +183,11 @@ class RoutingService
         return DB::transaction(function () use ($data, $routing, $sequenceService) {
             // 锁成品行串行化同成品并发启停（同 BOM 口径）
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
-            if ($data['status'] === 1 && RoutingHeader::where('product_id', $data['product_id'])
-                ->where('status', 1)->when($routing, fn ($q) => $q->where('id', '!=', $routing->id))->exists()) {
+            if (
+                $data['status'] === 1
+                && RoutingHeader::where('product_id', $data['product_id'])->where('status', 1)
+                    ->when($routing, fn ($q) => $q->where('id', '!=', $routing->id))->exists()
+            ) {
                 throw new RoutingException('该成品已有启用版本的工艺路线', 1707);
             }
 
