@@ -29,10 +29,10 @@ class DocumentNumberConfigTest extends TestCase
 
     public function test_index_lists_all_configs_paginated(): void
     {
-        // 正常路径：14 类规则全部可查（13 类单据含工艺路线 rtg + 商品编码 prd，per_page 覆盖）
+        // 正常路径：15 类规则全部可查（14 类单据含工艺路线 rtg/委外退料 osrt + 商品编码 prd，per_page 覆盖）
         $this->withToken($this->token)->getJson('/api/v1/document-number-configs?per_page=50')
             ->assertJsonPath('code', 0)
-            ->assertJsonPath('data.total', 14);
+            ->assertJsonPath('data.total', 15);
     }
 
     public function test_update_changes_rule_and_preview_reflects(): void
