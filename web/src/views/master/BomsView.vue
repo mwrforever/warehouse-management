@@ -57,8 +57,13 @@
       @current-change="refresh"
     />
 
-    <!-- 新建/编辑弹窗：单头 + 明细动态行（宽 800px） -->
-    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑 BOM' : '新建 BOM'" width="800px">
+    <!-- 新建/编辑弹窗：单头 + 明细动态行（宽 800px）；禁点遮罩关闭防误触丢失已录明细 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="form.id ? '编辑 BOM' : '新建 BOM'"
+      width="800px"
+      :close-on-click-modal="false"
+    >
       <el-form :model="form" label-width="90px">
         <el-form-item label="成品" required>
           <el-select
