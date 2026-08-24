@@ -135,11 +135,11 @@ class RoutingController extends Controller
         $seen = [];
         foreach ($data['edges'] ?? [] as $e) {
             if (! in_array($e['from_node_no'], $nodeNos, true) || ! in_array($e['to_node_no'], $nodeNos, true)) {
-                return abort(response()->json(['code' => 422, 'message' => '连线端点不存在于节点集中', 'data' => null], 200));
+                abort($this->fail(422, '连线端点不存在于节点集中'));
             }
             $key = $e['from_node_no'].'>'.$e['to_node_no'];
             if (isset($seen[$key])) {
-                return abort(response()->json(['code' => 422, 'message' => '连线重复', 'data' => null], 200));
+                abort($this->fail(422, '连线重复'));
             }
             $seen[$key] = true;
         }
@@ -147,7 +147,7 @@ class RoutingController extends Controller
         foreach ($data['nodes'] as $n) {
             $ids = array_column($n['materials'] ?? [], 'material_id');
             if (count($ids) !== count(array_unique($ids))) {
-                return abort(response()->json(['code' => 422, 'message' => '工序['.$n['name'].']存在重复输入材料', 'data' => null], 200));
+                abort($this->fail(422, '工序['.$n['name'].']存在重复输入材料'));
             }
         }
 

@@ -27,14 +27,16 @@ return new class extends Migration
         // 工序节点：node_no 同路线唯一（如 OP10），输出产品=半成品或成品
         Schema::create('routing_nodes', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('routing_id')->constrained('routing_headers')->cascadeOnDelete();
+            // 外键列 comment 必须置于 constrained() 之前：链到 ForeignKeyDefinition 上的 comment 属性
+            // 会被 Fluent __call 静默吞掉、MySQL 语法器不写进 DDL（同域旧迁移为滞后的无效写法，勿模仿）
+            $table->foreignId('routing_id')->comment('所属工艺路线')->constrained('routing_headers')->cascadeOnDelete();
             $table->foreignId('process_id')->constrained('processes')->restrictOnDelete()->comment('工序');
             $table->string('node_no', 20)->comment('节点号 OP10');
             $table->string('name', 50)->comment('工序名快照');
             $table->foreignId('output_product_id')->constrained('products')->restrictOnDelete()->comment('输出产品');
             $table->decimal('output_qty', 12, 2)->default(1)->comment('相对基准产出的产出数量');
             $table->tinyInteger('is_outsourced')->default(0)->comment('0自制 1委外');
-            $table->string('remark', 200)->nullable();
+            $table->string('remark', 200)->nullable()->comment('备注');
             $table->timestamps();
             $table->unique(['routing_id', 'node_no'], 'uniq_routing_nodes_node_no');
         });
@@ -42,10 +44,10 @@ return new class extends Migration
         // 节点输入材料：原料或前驱半成品；同节点同物料唯一
         Schema::create('routing_node_materials', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('node_id')->constrained('routing_nodes')->cascadeOnDelete();
-            $table->foreignId('material_id')->constrained('products')->restrictOnDelete();
+            $table->foreignId('node_id')->comment('所属工序节点')->constrained('routing_nodes')->cascadeOnDelete();
+            $table->foreignId('material_id')->comment('物料商品（原料/半成品）')->constrained('products')->restrictOnDelete();
             $table->decimal('qty_per_unit', 12, 2)->comment('单位产出的投入用量');
-            $table->foreignId('unit_id')->constrained('units')->restrictOnDelete();
+            $table->foreignId('unit_id')->comment('计量单位')->constrained('units')->restrictOnDelete();
             $table->timestamps();
             $table->unique(['node_id', 'material_id'], 'uniq_routing_node_materials');
         });
@@ -53,9 +55,9 @@ return new class extends Migration
         // DAG 边：直接前驱→后继依赖
         Schema::create('routing_edges', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('routing_id')->constrained('routing_headers')->cascadeOnDelete();
-            $table->foreignId('from_node_id')->constrained('routing_nodes')->cascadeOnDelete();
-            $table->foreignId('to_node_id')->constrained('routing_nodes')->cascadeOnDelete();
+            $table->foreignId('routing_id')->comment('所属工艺路线')->constrained('routing_headers')->cascadeOnDelete();
+            $table->foreignId('from_node_id')->comment('直接前驱节点')->constrained('routing_nodes')->cascadeOnDelete();
+            $table->foreignId('to_node_id')->comment('直接后继节点')->constrained('routing_nodes')->cascadeOnDelete();
             $table->timestamps();
             $table->unique(['routing_id', 'from_node_id', 'to_node_id'], 'uniq_routing_edges_triple');
         });

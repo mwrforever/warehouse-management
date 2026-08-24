@@ -31,12 +31,15 @@ return new class extends Migration
             $table->unique(['order_id', 'node_no'], 'uniq_work_order_operations_node_no');
         });
 
-        // 工单工序边表：DAG 快照（from/to 双 FK 级联，工序删除随删）
+        // 工单工序边表：DAG 快照（from/to 双 FK 级联，工序删除随删）；
+        // 外键列 comment 置于 constrained() 之前才能写入 MySQL DDL（挂在 ForeignKeyDefinition 上会被静默丢弃）
         Schema::create('work_order_operation_edges', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('order_id')->constrained('production_orders')->cascadeOnDelete();
-            $table->foreignId('from_operation_id')->constrained('work_order_operations')->cascadeOnDelete();
-            $table->foreignId('to_operation_id')->constrained('work_order_operations')->cascadeOnDelete();
+            $table->foreignId('order_id')->comment('所属工单')->constrained('production_orders')->cascadeOnDelete();
+            $table->foreignId('from_operation_id')->comment('直接前驱工序')
+                ->constrained('work_order_operations')->cascadeOnDelete();
+            $table->foreignId('to_operation_id')->comment('直接后继工序')
+                ->constrained('work_order_operations')->cascadeOnDelete();
             $table->timestamps();
             $table->unique(['order_id', 'from_operation_id', 'to_operation_id'], 'uniq_work_order_operation_edges');
         });
