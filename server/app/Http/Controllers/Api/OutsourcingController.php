@@ -1,8 +1,8 @@
 <?php
 
 // 委外加工控制器：from-operation 预填 + 草稿 CRUD（组件载荷校验，委外量 ≤ 节点剩余计划量 1520）+ 发出
-// （审核：锁余额行防超卖 1522）+ 回收（创建即审核回收单 + 工序联动）
-// 委外商品 = 工单成品（spec 数据模型无 product_id，E2E TC-PRD-06 锁定——Task 3 起改组件口径）
+// （审核：DAG 工单扣发料组件库存防超卖 1522，旧线性工单仍扣成品，Task 5 收敛）+ 回收（创建即审核回收单 + 工序联动）
+// 委外商品口径：DAG 工单 = 发料组件（Task 3 起，spec §12.10）；无路线旧工单 = 工单成品（legacy 兼容，Task 5 移除）
 
 namespace App\Http\Controllers\Api;
 
@@ -293,8 +293,11 @@ class OutsourcingController extends Controller
     }
 
     /**
-     * 发出（审核）：事务内「锁单幂等 1523 → 锁工单行取成品 → 锁余额行校验充足 1522
-     * → InventoryService 写 outsourcing_out 流水(-qty) 扣成品库存」任一步失败整体回滚
+     * 发出（审核）：事务内「锁单幂等 1523 → 锁工单行校验状态 [RELEASED, PRODUCING] 1523 →
+     * DAG 工单（routing_id 非空）按发料组件逐行扣（锁序：委外单 → 工单 → 组件余额行按 material_id 升序，
+     * 不足 → 1522「商品[组件名]库存不足」整单回滚；每组件一条 outsourcing_out 流水（source_no=委外单号、
+     * remark=委外发出）→ issued_qty 回写=应发 → 已发出；无路线旧工单 legacy 兼容仍扣工单成品，Task 5 收敛移除）」
+     * 任一步失败整体回滚
      */
     public function approve(OutsourcingOrder $outsourcing)
     {
@@ -309,34 +312,79 @@ class OutsourcingController extends Controller
                 if ($locked->status === OutsourcingOrder::STATUS_RECEIVED) {
                     throw new ProductionException('该委外单已回收', 1523);
                 }
-                // 锁工单行：取委外商品（= 工单成品）并校验工单状态（草稿/关闭不可发出）
+                // 锁工单行：校验工单状态（草稿/关闭不可发出）——锁序「委外单 → 工单」与回收 storeReceipt 单调同向
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
                 if (! in_array($order->status, [ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING], true)) {
                     throw new ProductionException('工单当前状态不可委外', 1523);
                 }
-                // 防超卖：锁余额行校验（消息含商品编码与精确库存快照）
-                $balance = InventoryBalance::where('product_id', $order->product_id)
-                    ->where('warehouse_id', $locked->warehouse_id)
-                    ->where('location_id', $locked->location_id)
-                    ->lockForUpdate()
-                    ->first();
-                $current = $balance ? (string) $balance->quantity : '0';
-                if (bccomp((string) $locked->quantity, $current, 2) > 0) {
-                    $code = Product::find($order->product_id)->code ?? ('#'.$order->product_id);
-                    throw new ProductionException("商品[{$code}]库存不足", 1522);
+                // 委外商品口径分流：DAG 工单（routing_id 非空）=发料组件逐行扣（spec §12.10）；
+                // 无路线旧线性工单（legacy 兼容，Task 5 收敛移除）= 工单成品扣减（现状行为不变）
+                if ($order->routing_id) {
+                    // 组件预载（items + material 各一条查询，循环内不再触发 N+1 懒加载）
+                    $locked->load('items.material');
+                    // 组件预锁与校验：按 material_id 升序遍历（多组件锁序稳定，同仓同库位并发扣减串行化；
+                    // 余额行「锁+取值」合并单查——锁后从内存取 quantity，避免锁后重查）
+                    $movements = [];
+                    foreach ($locked->items->sortBy('material_id') as $item) {
+                        $balanceRow = InventoryBalance::where('product_id', $item->material_id)
+                            ->where('warehouse_id', $locked->warehouse_id)
+                            ->where('location_id', $locked->location_id)
+                            ->lockForUpdate()->first();
+                        // 该仓该位余额（bcmath 归一；无余额行=0——?? 对空左操作数短路，无需 nullsafe）
+                        $balance = bcadd((string) ($balanceRow->quantity ?? '0'), '0', 2);
+                        if (bccomp($balance, (string) $item->required_qty, 2) < 0) {
+                            throw new ProductionException(
+                                '商品['.($item->material->name ?? '#'.$item->material_id).']库存不足',
+                                1522
+                            );
+                        }
+                        $movements[] = [
+                            'product_id' => $item->material_id,
+                            'warehouse_id' => $locked->warehouse_id,
+                            'location_id' => $locked->location_id,
+                            'direction' => -1,
+                            // 引擎签名 quantity 为 float（历史契约单值传输，余额预校验全走 bcmath 字符串，偏离记录⑤）
+                            'quantity' => (float) $item->required_qty,
+                            'source_type' => 'outsourcing_out',
+                            'source_id' => $locked->id,
+                            'source_no' => $locked->no,
+                            'remark' => '委外发出',
+                        ];
+                    }
+                    // 全部组件校验通过后统一写流水+扣余额（余额行已按升序预锁，引擎内重复加锁幂等）
+                    if ($movements !== []) {
+                        $this->inventoryService->apply($movements, auth()->id());
+                    }
+                    foreach ($locked->items as $item) {
+                        // 实发=应发：草稿期可调应发，发出时全额扣减（简化模型，spec §12 偏离记录⑦）
+                        $item->issued_qty = (string) $item->required_qty;
+                        $item->save();
+                    }
+                } else {
+                    // legacy 口径（无路线旧线性工单）：防超卖锁成品余额行校验（消息含商品编码与精确库存快照）
+                    $balance = InventoryBalance::where('product_id', $order->product_id)
+                        ->where('warehouse_id', $locked->warehouse_id)
+                        ->where('location_id', $locked->location_id)
+                        ->lockForUpdate()
+                        ->first();
+                    $current = $balance ? (string) $balance->quantity : '0';
+                    if (bccomp((string) $locked->quantity, $current, 2) > 0) {
+                        $code = Product::find($order->product_id)->code ?? ('#'.$order->product_id);
+                        throw new ProductionException("商品[{$code}]库存不足", 1522);
+                    }
+                    // 统一引擎写流水+扣余额（同事务双写；余额行已被本事务锁定，引擎内重复加锁幂等）
+                    $this->inventoryService->apply([[
+                        'product_id' => $order->product_id,
+                        'warehouse_id' => $locked->warehouse_id,
+                        'location_id' => $locked->location_id,
+                        'direction' => -1,
+                        'quantity' => $locked->quantity,
+                        'source_type' => 'outsourcing_out',
+                        'source_id' => $locked->id,
+                        'source_no' => $locked->no,
+                        'remark' => '委外发出',
+                    ]], auth()->id());
                 }
-                // 统一引擎写流水+扣余额（同事务双写；余额行已被本事务锁定，引擎内重复加锁幂等）
-                $this->inventoryService->apply([[
-                    'product_id' => $order->product_id,
-                    'warehouse_id' => $locked->warehouse_id,
-                    'location_id' => $locked->location_id,
-                    'direction' => -1,
-                    'quantity' => $locked->quantity,
-                    'source_type' => 'outsourcing_out',
-                    'source_id' => $locked->id,
-                    'source_no' => $locked->no,
-                    'remark' => '委外发出',
-                ]], auth()->id());
                 // 置已审核（已发出）+ 操作人/时间
                 $locked->status = OutsourcingOrder::STATUS_APPROVED;
                 $locked->operator = auth()->user()->name ?? '';

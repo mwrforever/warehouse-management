@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\BomHeader;
 use App\Models\Category;
 use App\Models\InventoryBalance;
+use App\Models\InventoryMovement;
 use App\Models\Location;
 use App\Models\OutsourcingOrder;
 use App\Models\OutsourcingReceipt;
@@ -475,5 +476,134 @@ class OutsourcingTest extends TestCase
         ])->assertJsonPath('code', 422)
             ->assertJsonPath('message', '工艺路线节点不存在');
         $this->assertDatabaseCount('outsourcing_orders', 0);
+    }
+
+    // OUT-02：发出扣各组件库存（委外商品口径从「工单成品」改为「发料组件」）——
+    // 原料 12@B-01、半成品B 6@B-01 基线，发出 6 后两组件按应发全额扣减归零，
+    // outsourcing_out 分量流水（每组件一条，source_no=委外单号、remark=委外发出）+ issued_qty 回写 = 应发
+    public function test_approve_deducts_components_and_writes_movements(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw, 'semiB' => $semiB, 'unit' => $unit] = $this->dagOrder();
+        // 组件基线注入（采购入库直插引擎，同仓同库位 B-01：原料 12 = 应发 12、半成品B 6 = 应发 6）
+        app(InventoryService::class)->apply([
+            ['product_id' => $raw->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 12, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+            ['product_id' => $semiB->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 6, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+        ]);
+        $no = $this->createOutsourcing([
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $raw->id, 'required_qty' => 12, 'unit_id' => $unit->id],
+                ['material_id' => $semiB->id, 'required_qty' => 6, 'unit_id' => $unit->id],
+            ],
+        ]);
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        // 两组件按应发全额扣减归零（12→0、6→0）
+        $this->assertSame('0.00', $this->balanceOf($raw->id));
+        $this->assertSame('0.00', $this->balanceOf($semiB->id));
+        // 分量流水：每组件一条 outsourcing_out（source_no=委外单号、remark=委外发出）
+        $this->assertDatabaseHas('inventory_movements', [
+            'source_type' => 'outsourcing_out', 'source_no' => $no, 'product_id' => $raw->id,
+            'direction' => -1, 'quantity' => '12.00', 'balance_after' => '0.00', 'remark' => '委外发出',
+        ]);
+        $this->assertDatabaseHas('inventory_movements', [
+            'source_type' => 'outsourcing_out', 'source_no' => $no, 'product_id' => $semiB->id,
+            'direction' => -1, 'quantity' => '6.00', 'balance_after' => '0.00', 'remark' => '委外发出',
+        ]);
+        // issued_qty 回写 = 应发（发出全额，草稿期可调应发）；状态已发出
+        $item = $os->items()->where('material_id', $raw->id)->first();
+        $this->assertSame('12.00', (string) $item->fresh()->issued_qty);
+        $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os->fresh()->status);
+    }
+
+    // OUT-02：组件库存不足整单回滚 1522——不足落在第二组件（半成品B 5 < 应发 6，首组件原料 12 充足校验通过），
+    // 验证任一组分不足即整体原子回滚：两组件余额均不变 / 无流水 / 状态仍草稿
+    public function test_approve_rejects_insufficient_stock_rollback(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw, 'semiB' => $semiB, 'unit' => $unit] = $this->dagOrder();
+        app(InventoryService::class)->apply([
+            ['product_id' => $raw->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 12, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+            ['product_id' => $semiB->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 5, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+        ]);
+        $no = $this->createOutsourcing([
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $raw->id, 'required_qty' => 12, 'unit_id' => $unit->id],
+                ['material_id' => $semiB->id, 'required_qty' => 6, 'unit_id' => $unit->id],
+            ],
+        ]);
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 1522)
+            ->assertJsonPath('message', '商品[半成品B]库存不足');
+        // 三连断言：余额均不变 / 无流水 / 状态仍草稿
+        $this->assertSame('12.00', $this->balanceOf($raw->id));
+        $this->assertSame('5.00', $this->balanceOf($semiB->id));
+        $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no]);
+        $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os->fresh()->status);
+    }
+
+    // OUT-08：重复发出 → 1523 幂等拦截（components 路径同 legacy），不重复扣减、不产生重复流水
+    public function test_approve_idempotent(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw, 'semiB' => $semiB, 'unit' => $unit] = $this->dagOrder();
+        app(InventoryService::class)->apply([
+            ['product_id' => $raw->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 12, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+            ['product_id' => $semiB->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 6, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+        ]);
+        $no = $this->createOutsourcing([
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $raw->id, 'required_qty' => 12, 'unit_id' => $unit->id],
+                ['material_id' => $semiB->id, 'required_qty' => 6, 'unit_id' => $unit->id],
+            ],
+        ]);
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '该委外单已审核');
+        // 二次发出被拒：余额不再扣减（12→0 后保持 0，未变负）、该委外单流水仅首次发出的 2 条分量流水（无重复）
+        $this->assertSame('0.00', $this->balanceOf($raw->id));
+        $this->assertSame('0.00', $this->balanceOf($semiB->id));
+        $this->assertSame(2, InventoryMovement::where('source_no', $no)->count());
+        $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os->fresh()->status);
+    }
+
+    // 组件余额读取（该委外仓位的余额行；无行=0，decimal 归一字符串——测试断言口径与实现 bcmath 一致）
+    private function balanceOf(int $productId): string
+    {
+        $balance = InventoryBalance::where('product_id', $productId)->first();
+
+        return $balance ? (string) $balance->quantity : '0';
     }
 }
