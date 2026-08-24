@@ -19,6 +19,7 @@ use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Feature\Concerns\DagOrderFactory;
 use Tests\TestCase;
 
@@ -97,7 +98,7 @@ class OutsourcingReturnTest extends TestCase
         return $res->json('data.no');
     }
 
-    // 已发出委外单辅助：OP30 委外单（6）×组件基线 + 审核发出（组件按应发全额扣减归零，spec §12.10）
+    // 已发出委外单辅助：OP30 委外单（6）×组件基线 + 审核发出（组件按应发全额扣减归零，spec 5 §13.1）
     private function approvedOutsourcing(array $dag): OutsourcingOrder
     {
         $this->seedComponents($dag);
@@ -214,7 +215,7 @@ class OutsourcingReturnTest extends TestCase
         $this->assertMatchesRegularExpression('/^ORT\d{12}\d{3}$/', $res->json('data.no'));
         $this->assertSame('12.00', $this->balanceOf($raw->id));
         $this->assertSame('6.00', $this->balanceOf($semiB->id));
-        // 退回单落库：创建即审核（status=1、returned_at 非空）；多行提交仅记首行（偏离记录⑨）
+        // 退回单落库：创建即审核（status=1、returned_at 非空）；多行提交仅记首行（偏离记录③）
         $this->assertDatabaseHas('outsourcing_returns', [
             'outsourcing_id' => $os->id, 'material_id' => $raw->id, 'item_id' => $rawItem->id,
             'quantity' => '12.00', 'status' => OutsourcingReturn::STATUS_APPROVED,
@@ -346,5 +347,67 @@ class OutsourcingReturnTest extends TestCase
         ])->assertJsonPath('code', 422)
             ->assertJsonPath('message', '当前委外单不可退回');
         $this->assertSame('12.00', $this->balanceOf($raw->id));
+    }
+
+    // 评审 F1：已关闭委外单（全量回收 + 全量退回自动关闭）后再 approve → 1523「该委外单已关闭」——
+    // 修复前 STATUS_CLOSED 未被 approve 状态守卫拦截：工单状态仍 [RELEASED, PRODUCING] 通过、1520 复查
+    // （排除自身 SUM=0+6≤6）通过 → 二次全额扣组件库存 + 状态被打回已审核
+    public function test_closed_order_blocks_approve_with_1523(): void
+    {
+        $dag = $this->dagOrder();
+        ['raw' => $raw, 'semiB' => $semiB] = $dag;
+        $os = $this->approvedOutsourcing($dag);
+        // 全量回收（6/6）→ 已回收；回收品=节点输出半成品B 回补库存
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 6, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+        $this->assertSame(OutsourcingOrder::STATUS_RECEIVED, (int) $os->fresh()->status);
+        $this->assertSame('6.00', $this->balanceOf($semiB->id));
+        // 全量退回（原料 12/半成品B 6）→ 自动关闭（组件库存全部恢复）
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/returns", [
+            'items' => [
+                ['item_id' => $os->items()->where('material_id', $raw->id)->firstOrFail()->id, 'quantity' => 12],
+                ['item_id' => $os->items()->where('material_id', $semiB->id)->firstOrFail()->id, 'quantity' => 6],
+            ],
+            'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+        $this->assertSame(OutsourcingOrder::STATUS_CLOSED, (int) $os->fresh()->status);
+        // 关闭后再 approve → 1523 拦截：状态仍已关闭、组件余额不变、无新增 outsourcing_out 流水
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '该委外单已关闭');
+        $this->assertSame(OutsourcingOrder::STATUS_CLOSED, (int) $os->fresh()->status);
+        $this->assertSame('12.00', $this->balanceOf($raw->id));
+        $this->assertSame('12.00', $this->balanceOf($semiB->id));
+        // 发出流水仅首次 2 条（原料/半成品B 各一），被拒 approve 不新增
+        $this->assertSame(
+            2,
+            DB::table('inventory_movements')->where('source_type', 'outsourcing_out')
+                ->where('source_id', $os->id)->count()
+        );
+    }
+
+    // 评审 F2：零组件历史草稿（迁移前建单可能无 outsourcing_order_items 行）approve → 422 拒绝——
+    // 修复前 $movements 为空跳过扣减直接置已审核（历史脏数据防线，同 1529 数据异常防御哲学）
+    public function test_approve_rejects_legacy_draft_without_items_422(): void
+    {
+        $dag = $this->dagOrder();
+        ['raw' => $raw] = $dag;
+        // 组件基线注入（approve 被拒后余额须保持 12.00 不变）
+        $this->seedComponents($dag);
+        $no = $this->createOutsourcing($this->payload($dag));
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        // 模拟迁移前旧草稿：删空组件行（新单载荷必带 items，历史行可能缺失）
+        $os->items()->delete();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '委外单缺少发料组件，不可发出');
+        // 三连断言：状态仍草稿、组件余额未动、无 outsourcing_out 流水
+        $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os->fresh()->status);
+        $this->assertSame('12.00', $this->balanceOf($raw->id));
+        $this->assertSame(
+            0,
+            DB::table('inventory_movements')->where('source_type', 'outsourcing_out')->count()
+        );
     }
 }

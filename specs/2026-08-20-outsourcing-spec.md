@@ -185,3 +185,4 @@ CI 由 `.github/workflows/ci.yml` 三 job（backend/frontend/e2e）执行，汇�
 10. **前端提示文案**：工艺路线画布委外 switch 提示「委外工序将在工单下达后生成委外需求」（spec §6.3 原文「（spec 5）」为章节引用误入，去除）。
 11. **`receivedQty` 归一化**：无回收单时返回 `'0.00'` 与列表口径一致（E2E 触发发现）。
 12. **组件流水复用既有 source_type**：发料沿用 `outsourcing_out`、回收沿用 `outsourcing_in`（分量逐组件），仅新增 `outsourcing_return`——流水归属以 source_no（委外单号/退回单号）区分。
+13. **`received_qty` 不作列维护（评审波删列）**：`outsourcing_orders.received_qty` 列为评审波删除——全仓无写入点（spec §4 回收环节「received_qty 累计」落地为实时 `SUM(outsourcing_receipts)` 派生），避免与回收单双写漂移；index/show 输出同口径（index `withSum` / show `receivedQty()`，bcmath 归一），API 字段名 `received_qty` 不变。

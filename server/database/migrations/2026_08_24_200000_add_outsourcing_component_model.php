@@ -10,10 +10,11 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // 委外单：回收品=工序节点输出（半成品或成品）；status 3=已关闭（余料全部退回后自动）
+        // 委外单：回收品=工序节点输出（半成品或成品）；status 3=已关闭（余料全部退回后自动）。
+        // 已回收累计不落列——实时 SUM(outsourcing_receipts) 派生（index withSum / show receivedQty() 同口径，
+        // 避免 received_qty 与回收单双写漂移，见 spec 5 §13 偏离记录 13）
         Schema::table('outsourcing_orders', function (Blueprint $table) {
             $table->foreignId('output_product_id')->nullable()->comment('回收品（工序节点输出）')->constrained('products')->restrictOnDelete();
-            $table->decimal('received_qty', 12, 2)->default(0)->comment('累计回收量');
         });
 
         // 发料组件：应发=委外量×单位用量；实发=发出时全额扣减 issued_qty；同单同物料唯一
@@ -29,12 +30,13 @@ return new class extends Migration
             $table->unique(['outsourcing_id', 'material_id'], 'uniq_outsourcing_order_items');
         });
 
-        // 余料退回：创建即审核（status 恒 1）；item_id 可空=按物料整体退回；单号 osrt 类型前缀 ORT
+        // 余料退回：创建即审核（status 恒 1）；item_id 列可空仅历史兼容——V1 未开放按物料整体退回
+        // （载荷 item_id 必填）；单号 osrt 类型前缀 ORT
         Schema::create('outsourcing_returns', function (Blueprint $table) {
             $table->id();
             $table->string('no', 30)->unique()->comment('退回单号');
             $table->foreignId('outsourcing_id')->comment('所属委外单')->constrained('outsourcing_orders')->cascadeOnDelete();
-            $table->foreignId('item_id')->nullable()->comment('退回组件行（可空=按物料退回）')->constrained('outsourcing_order_items')->restrictOnDelete();
+            $table->foreignId('item_id')->nullable()->comment('退回组件行（列可空仅历史兼容：V1 未开放按物料整体退回，载荷 item_id 必填）')->constrained('outsourcing_order_items')->restrictOnDelete();
             $table->foreignId('material_id')->comment('退回物料')->constrained('products')->restrictOnDelete();
             $table->decimal('quantity', 12, 2)->comment('退回数量');
             $table->foreignId('warehouse_id')->comment('入库仓库')->constrained('warehouses')->restrictOnDelete();
@@ -55,7 +57,6 @@ return new class extends Migration
         Schema::dropIfExists('outsourcing_order_items');
         Schema::table('outsourcing_orders', function (Blueprint $table) {
             $table->dropConstrainedForeignId('output_product_id');
-            $table->dropColumn('received_qty');
         });
     }
 };

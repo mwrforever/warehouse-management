@@ -223,9 +223,9 @@ class ProductionStructureTest extends TestCase
     /** 委外组件模型：orders 扩列 + items/returns 两表结构 + 唯一约束（Task OS-1） */
     public function test_outsourcing_component_tables_structure(): void
     {
-        // 正常路径：委外单扩列（回收品/累计回收量）且发料组件/余料退回两表已建立
+        // 正常路径：委外单扩列（回收品=节点输出；已回收累计不落列，实时 SUM 派生——
+        // received_qty 列评审波已删，见 spec 5 §13 偏离记录 13）且发料组件/余料退回两表已建立
         $this->assertTrue(\Schema::hasColumn('outsourcing_orders', 'output_product_id'));
-        $this->assertTrue(\Schema::hasColumn('outsourcing_orders', 'received_qty'));
         $this->assertTrue(\Schema::hasTable('outsourcing_order_items'));
         $this->assertTrue(\Schema::hasTable('outsourcing_returns'));
     }

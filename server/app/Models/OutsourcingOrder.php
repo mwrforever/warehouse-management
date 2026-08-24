@@ -23,7 +23,6 @@ use Illuminate\Support\Carbon;
  * @property int $location_id
  * @property string $quantity
  * @property int|null $output_product_id
- * @property string $received_qty
  * @property Carbon|null $approved_at
  * @property string|null $operator
  * @property string|null $remark
@@ -46,20 +45,20 @@ class OutsourcingOrder extends Model
         self::STATUS_CLOSED => '已关闭',
     ];
 
-    protected $fillable = ['no', 'order_id', 'operation_id', 'supplier_id', 'status', 'warehouse_id', 'location_id', 'quantity', 'output_product_id', 'received_qty', 'approved_at', 'operator', 'remark'];
+    // 已回收累计不落列（实时 SUM outsourcing_receipts 派生，spec 5 §13.13）
+    protected $fillable = ['no', 'order_id', 'operation_id', 'supplier_id', 'status', 'warehouse_id', 'location_id', 'quantity', 'output_product_id', 'approved_at', 'operator', 'remark'];
 
     protected function casts(): array
     {
         return [
             'status' => 'integer',
             'quantity' => 'decimal:2',
-            'received_qty' => 'decimal:2',
             'approved_at' => 'datetime',
         ];
     }
 
     /** @return BelongsTo<ProductionOrder, $this> */
-    // 所属工单（委外加工归属的工单；发料组件与回收品均取工艺节点口径，spec §12.10）
+    // 所属工单（委外加工归属的工单；发料组件与回收品均取工艺节点口径，spec 5 §4 规则定义）
     public function order(): BelongsTo
     {
         return $this->belongsTo(ProductionOrder::class, 'order_id');

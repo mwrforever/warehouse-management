@@ -3,7 +3,7 @@
 // 委外加工控制器：from-operation 预填 + 草稿 CRUD（组件载荷校验，委外量 ≤ 节点剩余计划量 1520）+ 发出
 // （审核：按发料组件扣库存防超卖 1522）+ 回收（创建即审核回收单 + 工序联动，回收品=节点输出
 // output_product_id 一致性 1529）+ 余料退回（创建即审核，全退自动关闭）
-// 委外商品口径：仅 is_outsourced=1 的工艺路线节点可委外（spec §5），发料组件与回收品均取节点口径（spec §12.10）
+// 委外商品口径：仅 is_outsourced=1 的工艺路线节点可委外，发料组件与回收品均取节点口径（spec 5 §4 规则定义）
 
 namespace App\Http\Controllers\Api;
 
@@ -37,7 +37,7 @@ class OutsourcingController extends Controller
         private OutsourcingService $outsourcingService,
     ) {}
 
-    /** 分页列表：单号/工单/工序/供应商/状态 筛选；含工单单号/供应商名/工序名/节点号/回收品与已回收累计 */
+    /** 分页列表：关键词/工单/工序/状态 筛选；含工单单号/供应商名/工序名/节点号/回收品与已回收累计 */
     public function index(Request $request)
     {
         $query = OutsourcingOrder::query()
@@ -121,7 +121,7 @@ class OutsourcingController extends Controller
         if (! $op) {
             return $this->fail(422, '工序不属于该工单');
         }
-        // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec §5）：无路线/无 node_no → 422，
+        // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec 5 §4 规则定义）：无路线/无 node_no → 422，
         // 路由头/节点缺失等数据异常 422 由下方统一 catch 承接（修复轮 2 前在 try 外泄漏 500）
         try {
             $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
@@ -251,7 +251,7 @@ class OutsourcingController extends Controller
             if (! $op) {
                 return $this->fail(422, '工序不属于该工单');
             }
-            // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec §5）：无路线/无 node_no → 422
+            // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec 5 §4 规则定义）：无路线/无 node_no → 422
             $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
             if ((int) $op->is_outsourced !== 1) {
                 return $this->fail(422, '该工序不是委外工序');
@@ -323,10 +323,12 @@ class OutsourcingController extends Controller
     }
 
     /**
-     * 发出（审核）：事务内「锁单幂等 1523 → 锁工单行校验状态 [RELEASED, PRODUCING] 1523 →
-     * 剩余量复查（Σ同节点非草稿 + 本次 ≤ 工单计划量，1520）→ 按发料组件逐行扣（锁序：委外单 → 工单 →
-     * 组件余额行按 material_id 升序，不足 → 1522「商品[组件名]库存不足」整单回滚；每组件一条
-     * outsourcing_out 流水（source_no=委外单号、remark=委外发出）→ issued_qty 回写=应发 → 已发出）」任一步失败整体回滚
+     * 发出（审核）：事务内「锁单幂等 1523（已审核/已回收/已关闭三态拦截；已关闭=终态，防
+     * 全退关闭后再 approve 二次扣减组件库存）→ 零组件历史草稿防线 422 → 锁工单行校验状态
+     * [RELEASED, PRODUCING] 1523 → 剩余量复查（Σ同节点非草稿 + 本次 ≤ 工单计划量，1520）→
+     * 按发料组件逐行扣（锁序：委外单 → 工单 → 组件余额行按 material_id 升序，不足 →
+     * 1522「商品[组件名]库存不足」整单回滚；每组件一条 outsourcing_out 流水（source_no=委外单号、
+     * remark=委外发出）→ issued_qty 回写=应发 → 已发出）」任一步失败整体回滚
      */
     public function approve(OutsourcingOrder $outsourcing)
     {
@@ -335,13 +337,23 @@ class OutsourcingController extends Controller
             // 事务第 2 参数为死锁(1213)重试次数（并发发出/回收的余额行与工单行锁冲突，
             // 死锁败方整体回滚后重跑闭包重新锁行+重发库存流水，幂等安全）
             DB::transaction(function () use ($outsourcing, &$result) {
-                // 锁委外单行：同一单据重复审核在此判重（幂等 1523）
+                // 锁委外单行：同一单据重复审核在此判重（幂等 1523）；已关闭为状态机终态
+                // （余料全退自动），与已审核/已回收一并拦截——防「全退关闭后再 approve」二次
+                // 全额扣组件库存、状态被打回已审核（修复前 STATUS_CLOSED 未被拦截）
                 $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status === OutsourcingOrder::STATUS_APPROVED) {
                     throw new ProductionException('该委外单已审核', 1523);
                 }
                 if ($locked->status === OutsourcingOrder::STATUS_RECEIVED) {
                     throw new ProductionException('该委外单已回收', 1523);
+                }
+                if ($locked->status === OutsourcingOrder::STATUS_CLOSED) {
+                    throw new ProductionException('该委外单已关闭', 1523);
+                }
+                // 零组件历史草稿防线（迁移前建单可能无 outsourcing_order_items 行）：无发料组件不可
+                // 发出——防 $movements 为空时跳过扣减直接置已审核（历史脏数据兜底，同 1529 数据异常哲学）
+                if ($locked->items()->count() === 0) {
+                    throw new ProductionException('委外单缺少发料组件，不可发出', 422);
                 }
                 // 锁工单行：校验工单状态（草稿/关闭不可发出）——锁序「委外单 → 工单」与回收 storeReceipt 单调同向
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
@@ -359,7 +371,7 @@ class OutsourcingController extends Controller
                 if (bccomp($aggregate, (string) $order->quantity, 2) > 0) {
                     throw new ProductionException('委外数量超过节点剩余计划量', 1520);
                 }
-                // 按发料组件逐行扣（spec §12.10：委外商品=节点输入组件；仅 is_outsourced=1 节点可委外）
+                // 按发料组件逐行扣（spec 5 §4 规则定义：委外商品=节点输入组件；仅 is_outsourced=1 节点可委外）
                 // 组件预载（items + material 各一条查询，循环内不再触发 N+1 懒加载）
                 $locked->load('items.material');
                 // 组件预锁与校验：按 material_id 升序遍历（多组件锁序稳定，同仓同库位并发扣减串行化；
@@ -396,7 +408,7 @@ class OutsourcingController extends Controller
                     $this->inventoryService->apply($movements, auth()->id());
                 }
                 foreach ($locked->items as $item) {
-                    // 实发=应发：草稿期可调应发，发出时全额扣减（简化模型，spec §12 偏离记录⑦）
+                    // 实发=应发：草稿期可调应发，发出时全额扣减（简化模型，spec 5 偏离记录①）
                     $item->issued_qty = (string) $item->required_qty;
                     $item->save();
                 }
@@ -408,7 +420,7 @@ class OutsourcingController extends Controller
                 $result = ['no' => $locked->no];
             }, 2);
         } catch (ProductionException $e) {
-            // 1523 幂等/工单状态不符 / 1520 剩余量复查 / 1522 库存不足（事务整体回滚）
+            // 1523 幂等/工单状态不符 / 422 零组件脏数据防线 / 1520 剩余量复查 / 1522 库存不足（事务整体回滚）
             return $this->fail($e->getCode() ?: 1523, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）
@@ -588,7 +600,7 @@ class OutsourcingController extends Controller
      * （单语句获取，锁序 单据头 → 明细）→ 逐行校验组件归属与退回量 ≤ 已发−已退（bcmath，
      * 422「退回数量超过已发未退数量」）→ 按 material_id 升序写 outsourcing_return 流水(+qty，
      * source_no 空串占位后续回补——库存行锁序与发出 approve 同向) → 创建退回单（TYPE_OSRT 取号 ORT、创建即审核；
-     * 多行提交仅记首行——偏离记录⑨，明细以流水逐行留痕）→ 流水单号回补 → returned_qty 回写（bcadd 累计）→
+     * 多行提交仅记首行——偏离记录③，明细以流水逐行留痕）→ 流水单号回补 → returned_qty 回写（bcadd 累计）→
      * 全部组件 returned==issued → 委外单已关闭」任一步失败整体回滚
      */
     public function storeReturn(Request $request, OutsourcingOrder $outsourcing)
@@ -643,7 +655,7 @@ class OutsourcingController extends Controller
                 if ($movements !== []) {
                     $this->inventoryService->apply($movements, auth()->id());
                 }
-                // 创建退回单（创建即审核）：单号 ORT 占号后统一回补流水单号（多行提交仅记首行——偏离记录⑨）
+                // 创建退回单（创建即审核）：单号 ORT 占号后统一回补流水单号（多行提交仅记首行——偏离记录③）
                 $return = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_OSRT,
                     fn (string $no) => OutsourcingReturn::create([
