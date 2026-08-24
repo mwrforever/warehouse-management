@@ -21,6 +21,7 @@ use App\Models\SalesOutbound;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class DashboardService
 {
@@ -32,9 +33,6 @@ class DashboardService
 
     /** 预警列表条数上限（spec §3：低库存前 10 条） */
     public const MAX_ALERTS = 10;
-
-    // 成本价 map 走共享服务（含缓存，采购入库审核时失效）——口径与失效契约见 CostPriceService
-    public function __construct(private readonly CostPriceService $costPriceService) {}
 
     /**
      * 待审核数据统计：9 类草稿单据按审核权限过滤（rows 供列表 / count 供 KPI）
@@ -138,7 +136,8 @@ class DashboardService
     /**
      * KPI 汇总：库存总量/总值/今日出入库/待审核数/生产中工单数/预警数
      *
-     * 库存总量=全部余额行求和；总值=Σ(余额×最近一次采购入库单价)÷100 元（无任何已知成本价→null）；
+     * 库存总量/总值均为 SQL 聚合下推（D-18）：总量=SUM(quantity)；总值=Σ(余额×最近一次「已审核」
+     * 采购入库单价)÷100 元经一条 joinSub 聚合 SQL 求和（无任何已知成本价→null）；
      * 今日出入库=流水 created_at 当天闭区间按方向求和；待审核数=9 类草稿按审核权限过滤后计数；
      * 预警数=低库存条数（高库存不占仪表盘，spec §7）。
      *
@@ -146,22 +145,41 @@ class DashboardService
      */
     public function summary(User $user): array
     {
-        $balances = InventoryBalance::query()->select('product_id', 'quantity')->get();
+        // 库存总量：全表 SUM 下推（与「今日出入库」同模式），不再全量取行到 PHP 累加（D-18）；
+        // 空表 sum 归 0（Builder 底层 ?: 0）；跨库 SUM 形态经 bcmath 统一两位小数字符串口径
+        $totalQty = bcadd((string) InventoryBalance::query()->sum('quantity'), '0', 2);
 
-        // 成本价估算：每商品取最近一次「已审核」采购入库单价（created_at DESC, id DESC 首条生效——与报表模块同口径）；
-        // 全量 map 含缓存（采购入库审核时失效），消除每次仪表盘加载的历史明细扫描+filesort——口径与失效契约见 CostPriceService
-        $prices = $this->costPriceService->latestPriceMap();
+        // 每商品最新「已审核」采购入库单价子查询（与 CostPriceService::build 同口径：
+        // created_at DESC, id DESC 首条生效；草稿价被 status 过滤排除——bug #7 口径）。
+        // ROW_NUMBER 窗口序与复合索引 (product_id, created_at, id) 全序一致，MySQL 8 免 filesort；
+        // SQLite 3.25+ 同构支持窗口函数，测试/生产跨库一致
+        $latestPrices = DB::query()->fromSub(
+            DB::table('purchase_inbound_items as p')
+                ->join('purchase_inbounds as h', 'h.id', '=', 'p.inbound_id')
+                ->where('h.status', PurchaseInbound::STATUS_APPROVED)
+                ->select('p.product_id', 'p.price')
+                ->selectRaw(
+                    'ROW_NUMBER() OVER (PARTITION BY p.product_id ORDER BY p.created_at DESC, p.id DESC) as rn'
+                ),
+            'lp'
+        )->where('lp.rn', 1)->select('lp.product_id', 'lp.price');
 
-        $totalQty = '0';
+        // 库存总值下推（D-18）：余额行 join 最新价后单条聚合（join 天然排除无价商品——原 isset 语义）；
+        // SUM(quantity×price) 累计「数量×分」，再统一 ÷100 转元（聚合后单次取整，精度不低于逐行取整）；
+        // matched>0 即至少一行有已知成本价（原 valueKnown 语义：部分有价 → 总值非 null）
+        $valueRow = InventoryBalance::query()
+            ->joinSub(
+                $latestPrices,
+                'cp',
+                fn ($join) => $join->on('cp.product_id', '=', 'inventory_balances.product_id')
+            )
+            ->selectRaw('COUNT(*) as matched, SUM(inventory_balances.quantity * cp.price) as total_value')
+            ->first();
         $totalValue = '0';
-        $valueKnown = false;
-        foreach ($balances as $row) {
-            $totalQty = bcadd($totalQty, (string) $row->quantity, 2);
-            if (isset($prices[$row->product_id])) {
-                // 行金额 = 余额 × 单价（分）→ 元（2 位）；bcmath 全程无浮点
-                $totalValue = bcadd($totalValue, bcdiv(bcmul((string) $row->quantity, (string) $prices[$row->product_id], 2), '100', 2), 2);
-                $valueKnown = true;
-            }
+        $valueKnown = $valueRow !== null && (int) $valueRow->getAttribute('matched') > 0;
+        if ($valueKnown) {
+            // bcmath 归一跨库 SUM 形态（SQLite real / MySQL decimal 字符串）并转元
+            $totalValue = bcdiv(bcadd((string) $valueRow->getAttribute('total_value'), '0', 2), '100', 2);
         }
 
         // 今日出入库：流水 created_at 当天闭区间（Carbon 本地时区边界，方言无关）

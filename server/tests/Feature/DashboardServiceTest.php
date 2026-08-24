@@ -184,6 +184,41 @@ class DashboardServiceTest extends TestCase
         $this->assertNull($res['inventory_value']);
     }
 
+    public function test_summary_aggregates_multiple_balances_and_partial_priced_products(): void
+    {
+        // 数值等价守护（D-18 聚合下推回归）：多行余额 + 部分商品有成本价——
+        // 总量=全部余额行求和（多行 SQL SUM 口径）；总值=仅有价商品 Σ(余额×单价) 转元且非 null
+        // （无价商品不参与金额、不把总值置 null——valueKnown 语义）
+        $priced = $this->makeProduct('MAT-D', 'raw_material');
+        $unpriced = $this->makeProduct('MAT-E', 'raw_material');
+        // 同商品第二行余额须落不同库位（balance_unique 唯一索引：商品+仓库+库位）
+        $secondLoc = Location::create([
+            'warehouse_id' => $this->warehouse->id, 'name' => 'A-02', 'code' => 'T-'.uniqid(), 'status' => 1,
+        ]);
+        $this->makeBalance($priced, '3.00');
+        InventoryBalance::create([
+            'product_id' => $priced->id, 'warehouse_id' => $this->warehouse->id,
+            'location_id' => $secondLoc->id, 'quantity' => '7.00', 'safety_min' => 0, 'safety_max' => 0,
+        ]);
+        $this->makeBalance($unpriced, '5.00');
+        $sup = Supplier::create(['name' => '供应商D', 'code' => 'SUP-D', 'status' => 1]);
+        $inbound = PurchaseInbound::create([
+            'no' => 'PI20260813-003', 'supplier_id' => $sup->id,
+            'warehouse_id' => $this->warehouse->id, 'location_id' => $this->location->id,
+            'status' => 1, 'total_amount' => 0, 'inbound_at' => now()->toDateTimeString(),
+        ]);
+        PurchaseInboundItem::create([
+            'inbound_id' => $inbound->id, 'product_id' => $priced->id,
+            'quantity' => 1, 'price' => 150, 'amount' => 150,
+        ]);
+
+        $res = $this->service->summary($this->admin);
+
+        // 总量 = 3 + 7 + 5；总值 = (3+7) × 150 分 = 15.00 元（无价商品 5.00 只计入总量）
+        $this->assertSame('15.00', $res['inventory_total_qty']);
+        $this->assertSame('15.00', $res['inventory_value']);
+    }
+
     public function test_summary_cost_price_cache_invalidated_after_inbound_approve(): void
     {
         // 核心路径（P1-2b 回归）：成本价 map 缓存的失效契约——审核是价格集合唯一变化点，
