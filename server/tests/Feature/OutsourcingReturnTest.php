@@ -245,6 +245,37 @@ class OutsourcingReturnTest extends TestCase
             ->assertJsonPath('data.items.0.quantity', '12.00');
     }
 
+    // P-4 回归：全退判定复用事务早期已锁组件集合——修复早期锁定一次 + 全退判定 items()->get()
+    // 再查一次，修复后 outsourcing_order_items 全程仅 1 次查询；全退自动关闭行为不变
+    public function test_return_full_return_verdict_reuses_locked_items_single_query(): void
+    {
+        $dag = $this->dagOrder();
+        ['raw' => $raw, 'semiB' => $semiB] = $dag;
+        $os = $this->approvedOutsourcing($dag);
+        $rawItem = $os->items()->where('material_id', $raw->id)->firstOrFail();
+        $semiItem = $os->items()->where('material_id', $semiB->id)->firstOrFail();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/returns", [
+            'items' => [
+                ['item_id' => $rawItem->id, 'quantity' => 12],
+                ['item_id' => $semiItem->id, 'quantity' => 6],
+            ],
+            'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id, 'remark' => '全退',
+        ])->assertJsonPath('code', 0);
+        $itemsQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "outsourcing_order_items"')
+                // 排除载荷校验 exists 规则的 count(*) 探查（每行载荷一次，与本修复无关）
+                && ! str_contains($q['query'], 'count(*)'));
+        DB::disableQueryLog();
+        // 复用契约：组件行锁定（1 次）+ 全退判定复用已锁集合，items 表全程仅 1 次查询
+        $this->assertCount(1, $itemsQueries);
+        // 业务结果不变：全退后委外单自动关闭、returned_qty 回写
+        $this->assertSame('12.00', (string) $rawItem->fresh()->returned_qty);
+        $this->assertSame('6.00', (string) $semiItem->fresh()->returned_qty);
+        $this->assertSame(OutsourcingOrder::STATUS_CLOSED, (int) $os->fresh()->status);
+    }
+
     // OUT-05：超退拦截（422 已发未退）+ 草稿不可退回
     public function test_return_rejects_over_and_wrong_status(): void
     {

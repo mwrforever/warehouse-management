@@ -725,8 +725,10 @@ class OutsourcingController extends Controller
                     $l['item']->returned_qty = bcadd((string) $l['item']->returned_qty, $l['quantity'], 2);
                     $l['item']->save();
                 }
-                // 全部组件已退满（returned==issued，bcmath 权威）→ 委外单自动关闭（余料退回完成）
-                $allReturned = $locked->items()->get()
+                // 全部组件已退满（returned==issued，bcmath 权威）→ 委外单自动关闭（余料退回完成）；
+                // 判定复用事务早期已锁定的组件集合（P-4）：模型即本轮回写 returned_qty 的同一实例，
+                // 二次查询纯冗余；every 语义与原查询集合等价（同事务读同值，keyBy 不丢行）
+                $allReturned = $items
                     ->every(fn ($i) => bccomp((string) $i->returned_qty, (string) $i->issued_qty, 2) === 0);
                 if ($allReturned) {
                     $locked->status = OutsourcingOrder::STATUS_CLOSED;
