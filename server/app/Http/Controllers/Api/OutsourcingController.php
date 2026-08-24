@@ -805,6 +805,16 @@ class OutsourcingController extends Controller
             (array) $data['items'],
         );
 
+        // 组件行查重：同 item_id 只允许一行（422 格式层）——防「事务内同一内存模型逐行校验」下
+        // 两行提交各自 ≤ 剩余可退、累计退回却超已发的库存账实不一致（修复轮 1）
+        $seen = [];
+        foreach ($data['items'] as $item) {
+            if (isset($seen[$item['item_id']])) {
+                throw ValidationException::withMessages(['items' => '退回组件重复']);
+            }
+            $seen[$item['item_id']] = true;
+        }
+
         return $data;
     }
 }

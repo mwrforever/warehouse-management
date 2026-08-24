@@ -289,6 +289,32 @@ class OutsourcingReturnTest extends TestCase
         $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os->fresh()->status);
     }
 
+    // 修复轮 1：同一 item_id 提交两行 → 422「退回组件重复」（格式层查重，防逐行内存模型校验下
+    // 累计退回超已发：无流水、returned_qty/余额不变、委外单不关闭）
+    public function test_return_rejects_duplicate_item_lines(): void
+    {
+        $dag = $this->dagOrder();
+        ['raw' => $raw, 'semiB' => $semiB] = $dag;
+        $os = $this->approvedOutsourcing($dag);
+        $rawItem = $os->items()->where('material_id', $raw->id)->firstOrFail();
+        // 重复 item_id 两行各 12（已发 12）→ 422 整体拒绝（修复前两行各自 ≤ 剩余、累计 24 超已发）
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/returns", [
+            'items' => [
+                ['item_id' => $rawItem->id, 'quantity' => 12],
+                ['item_id' => $rawItem->id, 'quantity' => 12],
+            ],
+            'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '退回组件重复');
+        // 三连断言：余额不变 / 无退回单与流水 / returned_qty 未回写、委外单未关闭
+        $this->assertSame('0.00', $this->balanceOf($raw->id));
+        $this->assertSame('0.00', $this->balanceOf($semiB->id));
+        $this->assertDatabaseCount('outsourcing_returns', 0);
+        $this->assertDatabaseMissing('inventory_movements', ['source_type' => 'outsourcing_return']);
+        $this->assertSame('0.00', (string) $rawItem->fresh()->returned_qty);
+        $this->assertSame(OutsourcingOrder::STATUS_APPROVED, (int) $os->fresh()->status);
+    }
+
     // OUT-08：已关闭委外单禁止回收/退回（关闭=全退后自动；两入口均 422，库存不再变动）
     public function test_closed_order_blocks_receipt_and_return(): void
     {
