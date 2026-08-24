@@ -425,11 +425,21 @@ watch(editorNodes, () => {
   if (selectedNodeNo.value && !ids.has(selectedNodeNo.value)) selectedNodeNo.value = null
 })
 
+// 会话序号（评审竞态修复）：开窗/关窗递增作废在途加载，下拉预拉与图回显的迟到响应据此丢弃，
+// 防止"开 A→关→开 B"时 A 的慢响应覆盖 B 已 reset 的编辑态（与 useScanInbound BUG-02 同模式）
+let sessionSeq = 0
+
 // 弹窗打开：重置编辑态并拉取下拉数据；编辑/查看另拉完整图回显
 watch(
   () => props.visible,
   async (open) => {
-    if (!open) return
+    if (!open) {
+      // 关窗即作废在途：迟到的下拉/图响应禁止回写（弹窗已关，回写无意义且污染下次开窗的 reset）
+      sessionSeq++
+      return
+    }
+    // 记录本次会话序号：其后每个 await 落点写状态前校验，序号变了说明已关窗/重开，丢弃本次结果
+    const session = ++sessionSeq
     resetEditor()
     loadingGraph.value = true
     try {
@@ -439,18 +449,22 @@ watch(
         productApi.list({ page: 1, per_page: 100, type: 'semi_finished' }),
         productApi.list({ page: 1, per_page: 100, type: 'raw_material' }),
       ])
+      if (session !== sessionSeq) return
       processes.value = procs.items
       finishedProducts.value = fin.items
       // 输出产品：半成品 +（终点工序的）成品；材料：原料 + 半成品
       outputOptions.value = [...semi.items, ...fin.items]
       materialOptions.value = [...raw.items, ...semi.items]
-      if (props.routingId != null) await loadGraph(props.routingId)
+      if (props.routingId != null) await loadGraph(props.routingId, session)
     } catch (e) {
+      // 迟到守卫：会话已作废（关窗/重开）时丢弃失败提示与关窗动作，避免过期报错打扰新会话
+      if (session !== sessionSeq) return
       // 下拉或图数据加载失败：提示并关闭弹窗，避免半初始化编辑器
       ElMessage.error((e as Error).message)
       emit('update:visible', false)
     } finally {
-      loadingGraph.value = false
+      // 迟到守卫：旧会话不得清除新会话的 loading 态（只有当前会话才能复位）
+      if (session === sessionSeq) loadingGraph.value = false
     }
   },
 )
@@ -475,8 +489,10 @@ function resetEditor() {
 }
 
 /** 编辑回显：单头 + 节点/材料/边还原；历史商品名称入缓存供卡片展示 */
-async function loadGraph(id: number) {
+async function loadGraph(id: number, session: number) {
   const g = await routingApi.graph(id)
+  // 迟到守卫：会话已作废（关窗/重开）时丢弃过期图数据回写，防止覆盖新会话的编辑态
+  if (session !== sessionSeq) return
   routingCode.value = g.routing.code
   Object.assign(header, {
     product_id: g.routing.product_id,
@@ -664,8 +680,9 @@ function materialClosureWarnings(): string[] {
   return problems
 }
 
-/** 「校验 DAG」：本地环预检（1701 同口径文案）+ 材料闭环提示（不阻断） */
+/** 「校验 DAG」：空画布守卫（hasCycle 空集短路后此处兜底提示）+ 本地环预检（1701 同口径文案）+ 材料闭环提示（不阻断） */
 function validateDag() {
+  if (editorNodes.value.length === 0) return ElMessage.warning('请先添加工序节点')
   const ids = editorNodes.value.map((n) => n.node_no)
   if (hasCycle(ids, editorEdges.value)) {
     ElMessage.error('工艺路线存在工序环路')

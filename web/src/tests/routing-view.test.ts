@@ -99,7 +99,7 @@ vi.mock('../api/process', () => ({
     }),
   },
 }))
-import { routingApi } from '../api/routing'
+import { routingApi, type RoutingListItem } from '../api/routing'
 
 describe('工艺路线画布编辑器', () => {
   let pinia: ReturnType<typeof createPinia>
@@ -185,6 +185,25 @@ describe('工艺路线画布编辑器', () => {
     expect(btn, `按钮「${text}」应存在`).toBeTruthy()
     await btn!.trigger('click')
     await flushPromises()
+  }
+
+  // 可控 Promise：手动 resolve 模拟迟到的接口响应（竞态用例专用）
+  type GraphResp = Awaited<ReturnType<typeof routingApi.graph>>
+  function deferredGraph() {
+    let resolve!: (value: GraphResp) => void
+    const promise = new Promise<GraphResp>((res) => {
+      resolve = res
+    })
+    return { promise, resolve }
+  }
+
+  // 表头「版本」输入框当前值（按 label 定位，不受表头字段顺序调整影响）
+  function headerVersion(wrapper: VueWrapper): string {
+    const item = wrapper
+      .findAll('.rc-header .el-form-item')
+      .find((f) => f.find('.el-form-item__label').text() === '版本')
+    expect(item, '版本表单项应存在').toBeTruthy()
+    return (item!.find('input').element as HTMLInputElement).value
   }
 
   it('校验 DAG 拦截环路：A→B→A 提示 1701 同口径文案且不调保存接口', async () => {
@@ -292,6 +311,128 @@ describe('工艺路线画布编辑器', () => {
 
     await addNode(wrapper, '焊接')
     expect((wrapper.find('.panel-node-no input').element as HTMLInputElement).value).toBe('OP20')
+    wrapper.unmount()
+  })
+
+  it('重开会话迟到响应守卫：开 A 关 A 再开 B，A 的图数据后到被丢弃、编辑态为 B', async () => {
+    // 竞态路径：编辑 A 的图加载挂起期间关窗重开编辑 B，A 的图数据迟到返回时必须被会话序号守卫丢弃，
+    // 否则 A 的单头/节点会覆盖 B 已 reset 的编辑态（评审发现的时序竞态）
+    const rowA: RoutingListItem = {
+      id: 1,
+      code: 'RTG-001',
+      product_id: 9,
+      product_name: '成品桌',
+      version: 'v1',
+      quantity: 1,
+      status: 1,
+      status_label: '启用',
+      remark: null,
+    }
+    const rowB: RoutingListItem = {
+      id: 2,
+      code: 'RTG-002',
+      product_id: 9,
+      product_name: '成品桌',
+      version: 'v2',
+      quantity: 2,
+      status: 1,
+      status_label: '启用',
+      remark: null,
+    }
+    // A 的图：版本 v3（与 reset 默认 v1 区分，若被误写一眼可辨）+ 独有节点名
+    const graphA: GraphResp = {
+      routing: {
+        id: 1,
+        code: 'RTG-001',
+        product_id: 9,
+        product_name: '成品桌',
+        version: 'v3',
+        quantity: 3,
+        status: 1,
+        remark: null,
+      },
+      nodes: [
+        {
+          id: 11,
+          node_no: 'OP10',
+          process_id: 1,
+          process_name: '下料',
+          name: 'A工序',
+          output_product_id: 9,
+          output_product_name: '成品桌',
+          output_qty: 1,
+          is_outsourced: 0,
+          remark: null,
+          materials: [],
+        },
+      ],
+      edges: [],
+    }
+    const graphB: GraphResp = {
+      routing: {
+        id: 2,
+        code: 'RTG-002',
+        product_id: 9,
+        product_name: '成品桌',
+        version: 'v2',
+        quantity: 2,
+        status: 1,
+        remark: null,
+      },
+      nodes: [
+        {
+          id: 22,
+          node_no: 'OP10',
+          process_id: 2,
+          process_name: '焊接',
+          name: 'B工序',
+          output_product_id: 9,
+          output_product_name: '成品桌',
+          output_qty: 1,
+          is_outsourced: 0,
+          remark: null,
+          materials: [],
+        },
+      ],
+      edges: [],
+    }
+    vi.mocked(routingApi.list).mockResolvedValue({
+      items: [rowA, rowB],
+      total: 2,
+      page: 1,
+      per_page: 10,
+    })
+    const dfdA = deferredGraph()
+    const dfdB = deferredGraph()
+    const wrapper = mountView()
+    await flushPromises()
+    const editBtns = () => wrapper.findAll('button').filter((b) => b.text().trim() === '画布编辑')
+    expect(editBtns()).toHaveLength(2)
+
+    // 开 A（编辑 id=1）：图加载挂起（dfdA 未 resolve），此时关闭弹窗
+    vi.mocked(routingApi.graph).mockImplementation(() => dfdA.promise)
+    await editBtns()[0]!.trigger('click')
+    await flushPromises()
+    await clickFooterBtn(wrapper, '取 消')
+
+    // 重开 B（编辑 id=2）：图加载同样挂起（dfdB 未 resolve）
+    vi.mocked(routingApi.graph).mockImplementation(() => dfdB.promise)
+    await editBtns()[1]!.trigger('click')
+    await flushPromises()
+
+    // A 的图数据此刻才到：会话已作废，回写被丢弃——画布仍空、标题与版本均非 A 的（未守卫则此处必失败）
+    dfdA.resolve(graphA)
+    await flushPromises()
+    expect(document.querySelector('.canvas-empty')?.textContent).toContain('添加第一个节点')
+    expect(wrapper.find('.el-dialog__title').text()).toBe('编辑工艺路线')
+    expect(headerVersion(wrapper)).toBe('v1')
+
+    // B 的图数据到达：编辑态还原为 B 的版本 v2 与标题编码 RTG-002，空态消失
+    dfdB.resolve(graphB)
+    await flushPromises()
+    expect(wrapper.find('.el-dialog__title').text()).toBe('编辑工艺路线 - RTG-002')
+    expect(headerVersion(wrapper)).toBe('v2')
+    expect(document.querySelector('.canvas-empty')).toBeNull()
     wrapper.unmount()
   })
 })

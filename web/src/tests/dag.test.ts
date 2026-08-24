@@ -28,6 +28,11 @@ describe('dag 工具（工艺路线画布纯逻辑）', () => {
     expect(hasCycle(['A'], [{ from: 'A', to: 'A' }])).toBe(true)
   })
 
+  it('环路检测：空节点集不误判成环（空画布走空节点守卫提示）', () => {
+    expect(hasCycle([], [])).toBe(false)
+    expect(hasCycle([], [{ from: 'A', to: 'B' }])).toBe(false)
+  })
+
   it('拓扑分层：并行分支同层', () => {
     const layers = topoLayers(
       ['OP10', 'OP20', 'OP30', 'OP40', 'OP50'],

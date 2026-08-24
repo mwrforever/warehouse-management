@@ -40,6 +40,8 @@ export function topoLayers(nodeIds: string[], edges: { from: string; to: string 
 
 /** 环路检测（含自环）：与后端 1701 同判定语义 */
 export function hasCycle(nodeIds: string[], edges: { from: string; to: string }[]): boolean {
+  // 空图短路：空画布无环可言（Kahn 空集会误报成环），保存/校验应走空节点守卫提示而非"环路"
+  if (nodeIds.length === 0) return false
   if (edges.some((e) => e.from === e.to)) return true
   return topoLayers(nodeIds, edges).length === 0
 }
