@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Models\OperationReport;
 use App\Models\ProductionOrder;
 use App\Models\WorkOrderOperation;
+use App\Models\WorkOrderOperationEdge;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,12 +19,15 @@ class OperationReportController extends Controller
     use ApiResponse;
 
     /**
-     * 报工：仅工序进行中可报（1509）；累计校验防虚报——合格累计+本次 > 计划数 → 1510、
-     * 合格不良累计+本次 > 计划数 → 1511；工时负数 → 1512；合格/不良负数 → 422（值域）。
-     * 流转：累计合格 ≥ 计划数 → 本工序自动完成，下一工序（seq 升序）自动进行中。
-     * 事务内锁工序行：并发报工同一工序在此串行化，累计值判定一致。
-     * 锁序 op→next-op→order：与委外回收（outsourcing→op→order）在 op→order 段同序，
-     * 消除「报工流转 vs 末批回收」并发 ABBA 死锁环（下一工序行在持 order 锁之前先行锁定）。
+     * 报工：仅工序进行中可报（1509）；委外节点不可报工（1509，经委外单回收完成）；
+     * 累计校验防虚报——合格累计+本次 > 计划数 → 1510、合格不良累计+本次 > 计划数 → 1511；
+     * 工时负数 → 1512；合格/不良负数 → 422（值域）。
+     * 流转：累计合格 ≥ 计划数 → 本工序自动完成；DAG 工单（routing_id 非空）直接后继中
+     * 「全部前驱已完成」的待开工节点并行置进行中（并行分支独立推进），
+     * 无路线工单仍按 seq 升序单后继推进（旧逻辑行为不变）。
+     * 事务内锁定同单全部工序行：并发报工同一工单在此串行化，累计值与后继就绪判定一致。
+     * 锁序 op→其余工序→order：与委外回收（outsourcing→op→order）/完工（全工序→order）
+     * 在 op→order 段同序，消除「报工流转 vs 末批回收」并发 ABBA 死锁环。
      */
     public function store(Request $request, WorkOrderOperation $operation)
     {
@@ -47,14 +51,14 @@ class OperationReportController extends Controller
                 if ($op->status !== WorkOrderOperation::STATUS_RUNNING) {
                     throw new ProductionException('该工序当前不可报工', 1509);
                 }
-                // 锁下一工序行（锁 order 之前无条件获取）：锁序 op→next-op→order 与委外回收
-                // （outsourcing→op→order）在 op→order 段同序，消除「报工流转 vs 末批回收」并发 ABBA 死锁环。
-                // 锁幂等，未达标流转时提前持锁无害；末工序无下一行 → null 防御性跳过（流转分支兜底）
-                $next = WorkOrderOperation::where('order_id', $op->order_id)
-                    ->where('seq', '>', $op->seq)
-                    ->orderBy('seq')
-                    ->lockForUpdate()
-                    ->first();
+                if ((int) $op->is_outsourced === 1) {
+                    // 委外节点不可报工：进度只能经委外单回收回写（RTG-07 / OUT-06）
+                    throw new ProductionException('委外工序不可报工，经委外单回收完成', 1509);
+                }
+                // 锁全部同单其余工序行（升序，锁 order 之前）：DAG 后继就绪判定需读其它前驱状态，
+                // 与 complete()（全工序→order）同向，维持全局 op→工序→order 锁序
+                $siblings = WorkOrderOperation::where('order_id', $op->order_id)
+                    ->where('id', '!=', $op->id)->orderBy('id')->lockForUpdate()->get();
                 // 锁工单行：计划数快照（与工单状态流转并发一致）
                 $order = ProductionOrder::whereKey($op->order_id)->lockForUpdate()->firstOrFail();
                 // 累计语义：已报合格 + 本次合格 ≤ 计划数（防并发虚报）
@@ -75,12 +79,44 @@ class OperationReportController extends Controller
                 $op->defective_qty = $defectSum;
                 $op->hours = bcadd((string) $op->hours, (string) $hours, 2);
 
-                // 自动流转：累计合格 ≥ 计划数 → 本工序完成 + 下一工序进行中（下一行已先行锁定，直接更新不重复加锁）
+                // 自动流转：累计合格 ≥ 计划数 → 本节点完成；后继推进按 DAG/线性分流
                 if (bccomp($op->qualified_qty, (string) $order->quantity, 2) >= 0) {
                     $op->status = WorkOrderOperation::STATUS_DONE;
-                    if ($next && $next->status === WorkOrderOperation::STATUS_PENDING) {
-                        $next->status = WorkOrderOperation::STATUS_RUNNING;
-                        $next->save();
+
+                    if ($order->routing_id) {
+                        // DAG 推进：直接后继中「全部前驱已完成」的待开工节点置进行中（并行分支独立推进）。
+                        // 边一次取出内存建邻接、前驱状态用已锁定的 $siblings 判定（§4.2.2 禁循环内查询）
+                        $edges = WorkOrderOperationEdge::where('order_id', $order->id)->get();
+                        // 已完成集合：其余工序已 DONE 的行 + 本节点（本轮即将落 DONE，对后继就绪判定等效已完成）
+                        $doneIds = [$op->id => true];
+                        foreach ($siblings as $s) {
+                            if ($s->status === WorkOrderOperation::STATUS_DONE) {
+                                $doneIds[$s->id] = true;
+                            }
+                        }
+                        $byId = $siblings->keyBy('id');
+                        $predsByTo = $edges->groupBy('to_operation_id');
+                        foreach ($edges->where('from_operation_id', $op->id) as $edge) {
+                            $succ = $byId->get($edge->to_operation_id);
+                            if (! $succ || $succ->status !== WorkOrderOperation::STATUS_PENDING) {
+                                continue;
+                            }
+                            // 后继就绪判定：全部前驱均在已完成集合（空前驱不会出现——本节点即其前驱）
+                            $allPredsDone = ($predsByTo->get($edge->to_operation_id) ?? collect())
+                                ->every(fn (WorkOrderOperationEdge $e) => isset($doneIds[$e->from_operation_id]));
+                            if ($allPredsDone) {
+                                $succ->status = WorkOrderOperation::STATUS_RUNNING;
+                                $succ->save();
+                            }
+                        }
+                    } else {
+                        // 旧逻辑：下一工序（seq 升序单后继）进行中（行已随 siblings 锁定，直接更新不重复加锁）
+                        $next = $siblings->filter(fn (WorkOrderOperation $s) => $s->seq > $op->seq)
+                            ->sortBy('seq')->first();
+                        if ($next && $next->status === WorkOrderOperation::STATUS_PENDING) {
+                            $next->status = WorkOrderOperation::STATUS_RUNNING;
+                            $next->save();
+                        }
                     }
                 }
                 $op->save();

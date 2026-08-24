@@ -492,17 +492,28 @@ class ProductionOrderController extends Controller
     }
 
     /**
-     * 开工（已下达→生产中）：首工序（seq 最小）置进行中；重复/非已下达 1506。
-     * 锁序 op(seq1)→order：与委外回收（outsourcing→op→order）/报工（op→next-op→order）在 op→order 段同序，
-     * 消除「末批回收 vs 开工」并发 ABBA 死锁环（委外工序可为 seq1，系统无校验禁止）。
+     * 开工（已下达→生产中）：DAG 工单（routing_id 非空）全部入度 0（无入边）节点置进行中
+     * ——并行起点同时开工；无路线工单沿用首工序（seq 最小）置进行中。重复/非已下达 1506。
+     * 锁序 起点工序→order：与委外回收（outsourcing→op→order）/报工（op→其余工序→order）/
+     * 完工（全工序→order）在 op→order 段全局同序，消除「开工 vs 末批回收」并发 ABBA 死锁环
+     * （委外工序可为 seq1/入度 0，系统无校验禁止）。
      */
     public function start(ProductionOrder $order)
     {
         try {
             DB::transaction(function () use ($order) {
-                // 锁首工序行（锁 order 之前）：seq 最小工序；开工与报工/回收并发时按全局 op→order 锁序串行化
-                $first = WorkOrderOperation::where('order_id', $order->id)
-                    ->orderBy('seq')->lockForUpdate()->first();
+                // 先取工单判定模式再锁工序行：routing_id 为下达时快照锚定、此后不可变，无锁读无错判窗口
+                $isDag = ProductionOrder::whereKey($order->id)->value('routing_id') !== null;
+                if ($isDag) {
+                    // DAG：锁全部入度 0（无入边）工序行（升序）——开工即并行起点全部进行中
+                    $startOps = WorkOrderOperation::where('order_id', $order->id)
+                        ->whereNotIn('id', WorkOrderOperationEdge::select('to_operation_id')->where('order_id', $order->id))
+                        ->orderBy('id')->lockForUpdate()->get();
+                } else {
+                    // 旧逻辑：锁首工序（seq 最小；行可能不存在 → collect 包裹 null 由循环兜底）
+                    $startOps = collect([WorkOrderOperation::where('order_id', $order->id)
+                        ->orderBy('seq')->lockForUpdate()->first()]);
+                }
                 // 锁工单行复查状态（幂等 1506；失败回滚释放锁，行为与锁后校验等价）
                 $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== ProductionOrder::STATUS_RELEASED) {
@@ -510,10 +521,12 @@ class ProductionOrderController extends Controller
                 }
                 $locked->status = ProductionOrder::STATUS_PRODUCING;
                 $locked->save();
-                // 首工序置进行中（seq 最小；行已提前锁定，直接更新不重复加锁）
-                if ($first && $first->status === WorkOrderOperation::STATUS_PENDING) {
-                    $first->status = WorkOrderOperation::STATUS_RUNNING;
-                    $first->save();
+                // 起点工序置进行中（行已提前锁定，直接更新不重复加锁）
+                foreach ($startOps as $op) {
+                    if ($op && $op->status === WorkOrderOperation::STATUS_PENDING) {
+                        $op->status = WorkOrderOperation::STATUS_RUNNING;
+                        $op->save();
+                    }
                 }
             });
         } catch (ProductionException $e) {
@@ -526,7 +539,7 @@ class ProductionOrderController extends Controller
 
     /**
      * 完工（生产中→已完成）：双前置校验——所有工序已完成（1507）+ 至少一次成品入库 completed_qty>0（1508）
-     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（op→next-op→order）/开工（op(seq1)→order）
+     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（op→其余工序→order）/开工（起点工序→order）
      * 全局同序；若先锁 order 再锁工序行会引入 order→op 反序，与并发报工构成 ABBA 死锁环
      */
     public function complete(ProductionOrder $order)
