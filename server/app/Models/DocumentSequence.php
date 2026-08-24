@@ -20,7 +20,7 @@ use Illuminate\Support\Carbon;
  */
 class DocumentSequence extends Model
 {
-    /** 单据号段类型：盘点单 check（库存模块）/ BOM（迁移）/ 采购订单 po / 采购入库单 pi / 销售订单 so / 销售出库单 sout / 生产工单 mo / 生产领料单 pl / 生产退料单 rl / 委外加工单 os / 委外回收单 osr / 成品入库单 fi */
+    /** 单据号段类型：盘点单 check（库存模块）/ BOM（迁移）/ 采购订单 po / 采购入库单 pi / 销售订单 so / 销售出库单 sout / 生产工单 mo / 生产领料单 pl / 生产退料单 rl / 委外加工单 os / 委外回收单 osr / 成品入库单 fi / 工艺路线 rtg */
     public const TYPE_CHECK = 'check';
 
     public const TYPE_BOM = 'bom';
@@ -44,6 +44,8 @@ class DocumentSequence extends Model
     public const TYPE_OSR = 'osr';
 
     public const TYPE_FI = 'fi';
+
+    public const TYPE_RTG = 'rtg';
 
     /** 商品编码序列（全局自增、无日期段，条码默认=编码） */
     public const TYPE_PRD = 'prd';

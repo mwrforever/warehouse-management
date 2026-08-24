@@ -22,6 +22,7 @@ use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReturnListController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\RoutingController;
 use App\Http\Controllers\Api\SalesOrderController;
 use App\Http\Controllers\Api\SalesOutboundController;
 use App\Http\Controllers\Api\SupplierController;
@@ -171,6 +172,16 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:bom.delete')->delete('/boms/{bom}', [BomController::class, 'destroy']);
         Route::middleware('permission:bom.list')->get('/boms/{bom}/items', [BomController::class, 'items']);
         Route::middleware('permission:bom.update')->put('/boms/{bom}/toggle', [BomController::class, 'toggle']);
+    });
+
+    // 工艺路线：CRUD + DAG 图 + 启停（routing.*；DAG 校验 17xx 在 Service；graph 静态段先于 {routing} 注册）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:routing.list')->get('/routings', [RoutingController::class, 'index']);
+        Route::middleware('permission:routing.create')->post('/routings', [RoutingController::class, 'store']);
+        Route::middleware('permission:routing.list')->get('/routings/{routing}/graph', [RoutingController::class, 'graph']);
+        Route::middleware('permission:routing.update')->put('/routings/{routing}', [RoutingController::class, 'update']);
+        Route::middleware('permission:routing.delete')->delete('/routings/{routing}', [RoutingController::class, 'destroy']);
+        Route::middleware('permission:routing.update')->put('/routings/{routing}/toggle', [RoutingController::class, 'toggle']);
     });
 
     // 库存查询：余额/导出/流水/预警（inventory.list）

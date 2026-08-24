@@ -178,6 +178,12 @@ const router = createRouter({
           meta: { permission: 'bom.list' },
         },
         {
+          path: 'master/routings',
+          name: 'master-routings',
+          component: () => import('../views/master/RoutingsView.vue'),
+          meta: { permission: 'routing.list' },
+        },
+        {
           path: 'reports/inventory',
           name: 'reports-inventory',
           component: () => import('../views/reports/InventoryReportView.vue'),

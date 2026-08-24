@@ -19,7 +19,7 @@ class DocumentNumberConfigController extends Controller
         'check' => '盘点单', 'bom' => 'BOM', 'po' => '采购订单', 'pi' => '采购入库单',
         'so' => '销售订单', 'sout' => '销售出库单', 'mo' => '生产工单', 'pl' => '生产领料单',
         'rl' => '生产退料单', 'os' => '委外加工单', 'osr' => '委外回收单', 'fi' => '成品入库单',
-        'prd' => '商品编码',
+        'rtg' => '工艺路线', 'prd' => '商品编码',
     ];
 
     /** 分页列表：按类型排序，附类型中文标签 */

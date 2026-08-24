@@ -16,12 +16,15 @@ use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\ProductionOrderMaterial;
 use App\Models\ReturnList;
+use App\Models\RoutingHeader;
 use App\Models\WorkOrderOperation;
+use App\Models\WorkOrderOperationEdge;
 use App\Services\DocumentSequenceService;
 use App\Services\ProductionOrderService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ProductionOrderController extends Controller
 {
@@ -95,9 +98,11 @@ class ProductionOrderController extends Controller
         }
 
         try {
+            // 回退告警文案经引用带出事务闭包（无路线时响应携带，供前端提示）
+            $routingWarning = null;
             // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
             // 死锁败方整体回滚后重跑闭包重新取号+重新展开 BOM，幂等安全）
-            $order = DB::transaction(function () use ($data) {
+            $order = DB::transaction(function () use ($data, &$routingWarning) {
                 // 锁成品行：与 BOM 启用切换并发时串行化（1501 判定读一致）
                 $product = Product::whereKey($data['product_id'])->lockForUpdate()->firstOrFail();
                 // 启用版本唯一（BOM 模块不变式），按 id 倒序取最新启用版
@@ -107,6 +112,17 @@ class ProductionOrderController extends Controller
                 }
                 $expansion = $this->orderService->expandBom($product, (string) $data['quantity'], $bom);
 
+                // 取启用工艺路线（同成品启用唯一，同 BOM 口径）：有→DAG 展开；无→旧逻辑全量工序快照 + 告警（RTG-06）
+                $routing = RoutingHeader::where('product_id', $product->id)->where('status', 1)->orderByDesc('id')->first();
+                if ($routing) {
+                    $rex = $this->orderService->expandRouting($routing);
+                } else {
+                    // 无启用工艺路线：沿用旧逻辑（全量启用工序线性快照）并记告警日志
+                    Log::warning('工单创建：成品无启用工艺路线，回退全量工序快照', ['product_id' => $product->id]);
+                    $rex = null;
+                    $routingWarning = '该成品无启用工艺路线，已按全量启用工序展开';
+                }
+
                 $order = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_MO,
                     fn (string $no) => ProductionOrder::create([
@@ -115,6 +131,8 @@ class ProductionOrderController extends Controller
                         'quantity' => $data['quantity'],
                         'plan_date' => $data['plan_date'],
                         'bom_id' => $bom->id,
+                        // 路线快照锚定：null=旧逻辑展开（存量单不回写）
+                        'routing_id' => $routing?->id,
                         'status' => ProductionOrder::STATUS_DRAFT,
                         'completed_qty' => 0,
                         'created_by' => auth()->id(),
@@ -129,15 +147,42 @@ class ProductionOrderController extends Controller
                     'material_id' => $m['material_id'],
                     'required_qty' => $m['required_qty'],
                     'issued_qty' => 0,
+                    // 物料归属工序节点：仅唯一消费节点时落 node_no（多节点共用按总量领料；无路线恒 null）
+                    'node_no' => $rex['nodeOwners'][$m['material_id']] ?? null,
                 ], $expansion['materials']));
-                $order->operations()->createMany(array_map(fn ($op) => [
-                    'process_id' => $op['process_id'],
-                    'seq' => $op['seq'],
-                    'status' => WorkOrderOperation::STATUS_PENDING,
-                    'qualified_qty' => 0,
-                    'defective_qty' => 0,
-                    'hours' => 0,
-                ], $expansion['operations']));
+                if ($rex) {
+                    // DAG 工序快照：node_no/输出产品/委外标记随节点落到工序行
+                    $createdOps = $order->operations()->createMany(array_map(fn ($op) => [
+                        'process_id' => $op['process_id'],
+                        'seq' => $op['seq'],
+                        'node_no' => $op['node_no'],
+                        'output_product_id' => $op['output_product_id'],
+                        'is_outsourced' => $op['is_outsourced'],
+                        'status' => WorkOrderOperation::STATUS_PENDING,
+                        'qualified_qty' => 0,
+                        'defective_qty' => 0,
+                        'hours' => 0,
+                    ], $rex['operations']));
+                    // 边快照：node_no → 工序 id 映射后落边表（依赖边随快照固化，后续路线改版不影响本单）
+                    $opIdByNo = [];
+                    foreach ($createdOps as $i => $op) {
+                        $opIdByNo[$rex['operations'][$i]['node_no']] = $op->id;
+                    }
+                    $order->edges()->createMany(array_map(fn ($e) => [
+                        'from_operation_id' => $opIdByNo[$e['from']],
+                        'to_operation_id' => $opIdByNo[$e['to']],
+                    ], $rex['edges']));
+                } else {
+                    // 旧逻辑：全量启用工序线性快照（无 node_no/输出产品/委外标记）
+                    $order->operations()->createMany(array_map(fn ($op) => [
+                        'process_id' => $op['process_id'],
+                        'seq' => $op['seq'],
+                        'status' => WorkOrderOperation::STATUS_PENDING,
+                        'qualified_qty' => 0,
+                        'defective_qty' => 0,
+                        'hours' => 0,
+                    ], $expansion['operations']));
+                }
 
                 return $order;
             }, 2);
@@ -147,12 +192,46 @@ class ProductionOrderController extends Controller
         }
 
         // 响应含 id：前端新建成功后直接以 id 拉详情打开 BOM 展开弹窗，不依赖列表回查（防刷新失败误报创建失败）
-        return $this->ok(['no' => $order->no, 'id' => $order->id]);
+        // routing_warning 仅回退旧逻辑时携带（array_filter 剔除 null 键）
+        return $this->ok(array_filter([
+            'no' => $order->no,
+            'id' => $order->id,
+            'routing_warning' => $routingWarning,
+        ], fn ($v) => $v !== null));
     }
 
-    /** 详情：抬头 + 物料需求（需求/已领/剩余）+ 工序列表（状态与累计合格/不良/工时） */
+    /** 详情：抬头 + 物料需求（需求/已领/剩余）+ 工序列表（状态与累计合格/不良/工时）+ DAG 网络图（Task 8 前端画布） */
     public function show(ProductionOrder $order)
     {
+        // 工序一次取出：operations 与 graph.nodes 复用同一集合（§4.2.2 防重复查询）
+        $ops = $order->operations()->with(['process', 'outputProduct'])->orderBy('seq')->get();
+        // 边一次取出并预加载两端工序：operations.predecessors（按 to_operation_id 分组）与 graph.edges 复用（防 map 内懒加载 N+1）
+        $edges = $order->edges()->with(['fromOperation.process', 'toOperation'])->get();
+        $predsByTo = $edges->groupBy('to_operation_id');
+
+        $operationItems = $ops->map(fn (WorkOrderOperation $op) => [
+            'id' => $op->id,
+            'seq' => $op->seq,
+            'process_id' => $op->process_id,
+            'process_name' => $op->process?->name,
+            'process_code' => $op->process?->code,
+            'node_no' => $op->node_no,
+            'output_product_id' => $op->output_product_id,
+            'output_product_name' => $op->outputProduct?->name,
+            'is_outsourced' => (int) $op->is_outsourced,
+            'status' => (int) $op->status,
+            'status_label' => $this->orderService->operationStatusLabel((int) $op->status),
+            'qualified_qty' => $op->qualified_qty,
+            'defective_qty' => $op->defective_qty,
+            'hours' => $op->hours,
+            // 直接前驱（工序网络展示/前端推进判断；旧工单无边 → 空集合）
+            'predecessors' => ($predsByTo->get($op->id) ?? collect())->map(fn ($e) => [
+                'id' => $e->fromOperation->id,
+                'node_no' => $e->fromOperation->node_no,
+                'process_name' => $e->fromOperation?->process?->name,
+            ])->values(),
+        ]);
+
         return $this->ok([
             'id' => $order->id,
             'no' => $order->no,
@@ -163,6 +242,8 @@ class ProductionOrderController extends Controller
             'plan_date' => $order->plan_date,
             'bom_id' => $order->bom_id,
             'bom_code' => $order->bom?->code,
+            // 路线快照锚定：null=旧逻辑展开（前端隐藏工序网络 tab）
+            'routing_id' => $order->routing_id,
             'status' => (int) $order->status,
             'status_label' => ProductionOrder::STATUS_LABELS[$order->status] ?? '未知',
             'completed_qty' => $order->completed_qty,
@@ -182,19 +263,29 @@ class ProductionOrderController extends Controller
                     'issued_qty' => $m->issued_qty,
                     'remaining_qty' => bcsub((string) $m->required_qty, (string) $m->issued_qty, 2),
                 ]),
-            'operations' => $order->operations()->with('process')->orderBy('seq')->get()
-                ->map(fn (WorkOrderOperation $op) => [
+            'operations' => $operationItems,
+            // 工序网络图（Vue Flow 渲染）：仅 DAG 工单返回，旧工单 null（前端隐藏该 tab）
+            'graph' => $order->routing_id ? [
+                'nodes' => $ops->map(fn (WorkOrderOperation $op) => [
                     'id' => $op->id,
-                    'seq' => $op->seq,
-                    'process_id' => $op->process_id,
+                    'node_no' => $op->node_no,
                     'process_name' => $op->process?->name,
-                    'process_code' => $op->process?->code,
                     'status' => (int) $op->status,
                     'status_label' => $this->orderService->operationStatusLabel((int) $op->status),
+                    'is_outsourced' => (int) $op->is_outsourced,
                     'qualified_qty' => $op->qualified_qty,
                     'defective_qty' => $op->defective_qty,
                     'hours' => $op->hours,
                 ]),
+                'edges' => $edges->map(fn (WorkOrderOperationEdge $e) => [
+                    'from_operation_id' => $e->from_operation_id,
+                    'to_operation_id' => $e->to_operation_id,
+                    // 边模型 fromOperation/toOperation 未标泛型（返回 Model），节点号经 getAttribute 读
+                    // （同 index join 别列传读惯用法；phpstan 无法静态识别 Model 动态属性）
+                    'from_node_no' => $e->fromOperation?->getAttribute('node_no'),
+                    'to_node_no' => $e->toOperation?->getAttribute('node_no'),
+                ]),
+            ] : null,
         ], '', JSON_PRESERVE_ZERO_FRACTION);
     }
 
@@ -224,11 +315,23 @@ class ProductionOrderController extends Controller
                 }
                 $expansion = $this->orderService->expandBom($locked->product, (string) $data['quantity'], $bom);
 
+                // 取启用工艺路线（与 store 同口径，成品可改故随新成品重取）：有→DAG 展开重建；无→旧逻辑线性快照 + 告警
+                $routing = RoutingHeader::where('product_id', $data['product_id'])->where('status', 1)->orderByDesc('id')->first();
+                if ($routing) {
+                    $rex = $this->orderService->expandRouting($routing);
+                } else {
+                    // 无启用工艺路线：沿用旧逻辑重建并记告警日志（更新无响应文案，行为与 store 回退一致）
+                    Log::warning('工单更新：成品无启用工艺路线，回退全量工序快照', ['product_id' => $data['product_id'], 'order_id' => $locked->id]);
+                    $rex = null;
+                }
+
                 $locked->update([
                     'product_id' => $data['product_id'],
                     'quantity' => $data['quantity'],
                     'plan_date' => $data['plan_date'],
                     'bom_id' => $bom->id,
+                    // 路线快照随重建重挂（成品变更后锚定新成品的启用路线，无则回退 null）
+                    'routing_id' => $routing?->id,
                     'remark' => $data['remark'] ?? $locked->remark,
                 ]);
                 // 物料快照/工序序列全量重建（草稿工单无流水引用，直接重建）
@@ -242,16 +345,43 @@ class ProductionOrderController extends Controller
                     // 回填既有已领量（仅重算需求数量；该物料不再出现在新 BOM 时其已领记录随快照行一并移除）
                     // ?? 左值天然 null 安全（缺失时回退 0），nullsafe 显式多余故用 ->
                     'issued_qty' => (string) ($issuedByMaterial->get($m['material_id'])->issued_qty ?? '0'),
+                    // 物料归属工序节点（仅唯一消费节点时落 node_no；无路线恒 null）
+                    'node_no' => $rex['nodeOwners'][$m['material_id']] ?? null,
                 ], $expansion['materials']));
+                // 工序重建前先删旧行（边表 FK 级联随删，无需显式清）
                 $locked->operations()->delete();
-                $locked->operations()->createMany(array_map(fn ($op) => [
-                    'process_id' => $op['process_id'],
-                    'seq' => $op['seq'],
-                    'status' => WorkOrderOperation::STATUS_PENDING,
-                    'qualified_qty' => 0,
-                    'defective_qty' => 0,
-                    'hours' => 0,
-                ], $expansion['operations']));
+                if ($rex) {
+                    // DAG 工序快照 + 边快照重建（同 store）
+                    $createdOps = $locked->operations()->createMany(array_map(fn ($op) => [
+                        'process_id' => $op['process_id'],
+                        'seq' => $op['seq'],
+                        'node_no' => $op['node_no'],
+                        'output_product_id' => $op['output_product_id'],
+                        'is_outsourced' => $op['is_outsourced'],
+                        'status' => WorkOrderOperation::STATUS_PENDING,
+                        'qualified_qty' => 0,
+                        'defective_qty' => 0,
+                        'hours' => 0,
+                    ], $rex['operations']));
+                    $opIdByNo = [];
+                    foreach ($createdOps as $i => $op) {
+                        $opIdByNo[$rex['operations'][$i]['node_no']] = $op->id;
+                    }
+                    $locked->edges()->createMany(array_map(fn ($e) => [
+                        'from_operation_id' => $opIdByNo[$e['from']],
+                        'to_operation_id' => $opIdByNo[$e['to']],
+                    ], $rex['edges']));
+                } else {
+                    // 旧逻辑：全量启用工序线性快照
+                    $locked->operations()->createMany(array_map(fn ($op) => [
+                        'process_id' => $op['process_id'],
+                        'seq' => $op['seq'],
+                        'status' => WorkOrderOperation::STATUS_PENDING,
+                        'qualified_qty' => 0,
+                        'defective_qty' => 0,
+                        'hours' => 0,
+                    ], $expansion['operations']));
+                }
             });
         } catch (ProductionException $e) {
             // 1503 已下达（锁行复查与并发下达幂等拦截）/1501 BOM 变更（改成品后新成品无启用 BOM）
@@ -362,17 +492,28 @@ class ProductionOrderController extends Controller
     }
 
     /**
-     * 开工（已下达→生产中）：首工序（seq 最小）置进行中；重复/非已下达 1506。
-     * 锁序 op(seq1)→order：与委外回收（outsourcing→op→order）/报工（op→next-op→order）在 op→order 段同序，
-     * 消除「末批回收 vs 开工」并发 ABBA 死锁环（委外工序可为 seq1，系统无校验禁止）。
+     * 开工（已下达→生产中）：DAG 工单（routing_id 非空）全部入度 0（无入边）节点置进行中
+     * ——并行起点同时开工；无路线工单沿用首工序（seq 最小）置进行中。重复/非已下达 1506。
+     * 锁序 起点工序→order：与委外回收（outsourcing→op→order）/报工（全部工序 id 升序→order）/
+     * 完工（全工序→order）在 op→order 段全局同序，消除「开工 vs 末批回收」并发 ABBA 死锁环
+     * （委外工序可为 seq1/入度 0，系统无校验禁止）。
      */
     public function start(ProductionOrder $order)
     {
         try {
             DB::transaction(function () use ($order) {
-                // 锁首工序行（锁 order 之前）：seq 最小工序；开工与报工/回收并发时按全局 op→order 锁序串行化
-                $first = WorkOrderOperation::where('order_id', $order->id)
-                    ->orderBy('seq')->lockForUpdate()->first();
+                // 先取工单判定模式再锁工序行：routing_id 为下达时快照锚定、此后不可变，无锁读无错判窗口
+                $isDag = ProductionOrder::whereKey($order->id)->value('routing_id') !== null;
+                if ($isDag) {
+                    // DAG：锁全部入度 0（无入边）工序行（升序）——开工即并行起点全部进行中
+                    $startOps = WorkOrderOperation::where('order_id', $order->id)
+                        ->whereNotIn('id', WorkOrderOperationEdge::select('to_operation_id')->where('order_id', $order->id))
+                        ->orderBy('id')->lockForUpdate()->get();
+                } else {
+                    // 旧逻辑：锁首工序（seq 最小；行可能不存在 → collect 包裹 null 由循环兜底）
+                    $startOps = collect([WorkOrderOperation::where('order_id', $order->id)
+                        ->orderBy('seq')->lockForUpdate()->first()]);
+                }
                 // 锁工单行复查状态（幂等 1506；失败回滚释放锁，行为与锁后校验等价）
                 $locked = ProductionOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== ProductionOrder::STATUS_RELEASED) {
@@ -380,10 +521,12 @@ class ProductionOrderController extends Controller
                 }
                 $locked->status = ProductionOrder::STATUS_PRODUCING;
                 $locked->save();
-                // 首工序置进行中（seq 最小；行已提前锁定，直接更新不重复加锁）
-                if ($first && $first->status === WorkOrderOperation::STATUS_PENDING) {
-                    $first->status = WorkOrderOperation::STATUS_RUNNING;
-                    $first->save();
+                // 起点工序置进行中（行已提前锁定，直接更新不重复加锁）
+                foreach ($startOps as $op) {
+                    if ($op && $op->status === WorkOrderOperation::STATUS_PENDING) {
+                        $op->status = WorkOrderOperation::STATUS_RUNNING;
+                        $op->save();
+                    }
                 }
             });
         } catch (ProductionException $e) {
@@ -396,7 +539,7 @@ class ProductionOrderController extends Controller
 
     /**
      * 完工（生产中→已完成）：双前置校验——所有工序已完成（1507）+ 至少一次成品入库 completed_qty>0（1508）
-     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（op→next-op→order）/开工（op(seq1)→order）
+     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（全部工序 id 升序→order）/开工（起点工序→order）
      * 全局同序；若先锁 order 再锁工序行会引入 order→op 反序，与并发报工构成 ABBA 死锁环
      */
     public function complete(ProductionOrder $order)

@@ -4,9 +4,17 @@
 
 namespace Tests\Feature;
 
+use App\Models\Category;
 use App\Models\DocumentSequence;
 use App\Models\Permission;
+use App\Models\Process;
+use App\Models\Product;
 use App\Models\Role;
+use App\Models\RoutingHeader;
+use App\Models\RoutingNode;
+use App\Models\RoutingNodeMaterial;
+use App\Models\Unit;
+use Database\Seeders\RbacSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -162,5 +170,53 @@ class ProductionStructureTest extends TestCase
         $this->assertSame('os', DocumentSequence::TYPE_OS);
         $this->assertSame('osr', DocumentSequence::TYPE_OSR);
         $this->assertSame('fi', DocumentSequence::TYPE_FI);
+    }
+
+    /** 工艺路线四表结构：routing_headers/nodes/node_materials/edges 存在且唯一约束生效（Task Routing-1） */
+    public function test_routing_tables_structure(): void
+    {
+        $this->seed(RbacSeeder::class);
+        $category = Category::create(['name' => '分类', 'code' => 'CAT-RT']);
+        $unit = Unit::create(['name' => '个', 'code' => 'PCS-RT', 'status' => 1]);
+        $product = Product::create([
+            'name' => '成品RT', 'code' => 'FIN-RT', 'type' => 'finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $semi = Product::create([
+            'name' => '半成品RT', 'code' => 'SEMI-RT', 'type' => 'semi_finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $process = Process::create(['name' => '工序RT', 'code' => 'PROC-RT', 'sort' => 1, 'status' => 1]);
+        $routing = RoutingHeader::create([
+            'code' => 'RTG001', 'product_id' => $product->id, 'version' => 'v1',
+            'quantity' => 1, 'status' => 1, 'remark' => null,
+        ]);
+        $node = RoutingNode::create([
+            'routing_id' => $routing->id, 'node_no' => 'OP10', 'process_id' => $process->id,
+            'name' => '工序RT', 'output_product_id' => $semi->id, 'output_qty' => 1,
+            'is_outsourced' => 0, 'remark' => null,
+        ]);
+        RoutingNodeMaterial::create([
+            'node_id' => $node->id, 'material_id' => $semi->id, 'qty_per_unit' => 1, 'unit_id' => $unit->id,
+        ]);
+
+        // 唯一约束：同路线同 node_no 双插冲突
+        $this->expectException(QueryException::class);
+        RoutingNode::create([
+            'routing_id' => $routing->id, 'node_no' => 'OP10', 'process_id' => $process->id,
+            'name' => '重复节点', 'output_product_id' => $semi->id, 'output_qty' => 1,
+            'is_outsourced' => 0, 'remark' => null,
+        ]);
+    }
+
+    /** 工单工序 DAG 扩列与边表：node_no/output_product_id/is_outsourced + work_order_operation_edges（Task Routing-1） */
+    public function test_work_order_dag_columns_and_edges(): void
+    {
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'node_no'));
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'output_product_id'));
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'is_outsourced'));
+        $this->assertTrue(\Schema::hasColumn('production_order_materials', 'node_no'));
+        $this->assertTrue(\Schema::hasColumn('production_orders', 'routing_id'));
+        $this->assertTrue(\Schema::hasTable('work_order_operation_edges'));
     }
 }

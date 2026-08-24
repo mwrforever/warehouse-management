@@ -56,8 +56,8 @@ class MasterDataStructureTest extends TestCase
 
     public function test_master_permissions_seeded_for_admin(): void
     {
-        // 正常路径：基础资料 32 个权限已注册且 admin 角色全量持有
-        $this->assertSame(32, Permission::where('group', '基础资料')->count());
+        // 正常路径：基础资料 36 个权限已注册（8 资源+BOM+工艺路线 routing 各四动作）且 admin 角色全量持有
+        $this->assertSame(36, Permission::where('group', '基础资料')->count());
         $admin = Role::where('code', 'admin')->first();
         $this->assertSame(2, $admin->permissions()->whereIn('code', ['product.list', 'bom.delete'])->count());
     }

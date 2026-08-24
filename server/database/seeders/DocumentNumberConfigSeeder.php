@@ -1,6 +1,6 @@
 <?php
 
-// 编号规则默认配置种子：12 类单据 + 商品编码 prd；type 唯一幂等；osrt（委外退料）由委外重构 spec 追加
+// 编号规则默认配置种子：13 类单据 + 商品编码 prd；type 唯一幂等；osrt（委外退料）由委外重构 spec 追加
 
 namespace Database\Seeders;
 
@@ -23,6 +23,7 @@ class DocumentNumberConfigSeeder extends Seeder
         'os' => ['OS', 'YmdHi', 3],
         'osr' => ['OSR', 'YmdHi', 3],
         'fi' => ['FI', 'YmdHi', 3],
+        'rtg' => ['RTG', 'YmdHi', 3],
         'prd' => ['PRD', '', 6],
     ];
 

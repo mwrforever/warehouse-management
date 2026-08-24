@@ -37,6 +37,39 @@ export interface ProductionOperation {
   qualified_qty: number
   defective_qty: number
   hours: number
+  // 工艺路线联动字段（路由 DAG 下单快照；旧工单可能无值，均为可选）
+  node_no?: string | null
+  output_product_id?: number | null
+  output_product_name?: string | null
+  is_outsourced?: number
+  // 前置工序（DAG 前驱：完工校验与画布连线回显用）
+  predecessors?: { id: number; node_no: string | null; process_name: string | null }[]
+}
+
+// 工单工序图节点（详情接口 graph 字段；画布按 operation id 渲染节点、按 edges 连线）
+export interface OperationGraphNode {
+  id: number
+  node_no: string | null
+  process_name: string | null
+  status: number
+  status_label: string
+  is_outsourced: number
+  qualified_qty: number
+  defective_qty: number
+  hours: number
+}
+
+// 工单工序图连线（from/to 双端同时带 operation id 与节点号，便于画布定位与提示）
+export interface OperationGraphEdge {
+  from_operation_id: number
+  to_operation_id: number
+  from_node_no: string | null
+  to_node_no: string | null
+}
+
+export interface OperationGraphData {
+  nodes: OperationGraphNode[]
+  edges: OperationGraphEdge[]
 }
 
 export interface ProductionOrderDetail {
@@ -59,6 +92,9 @@ export interface ProductionOrderDetail {
   remark: string | null
   materials: ProductionMaterial[]
   operations: ProductionOperation[]
+  // 工艺路线联动字段（按路由下达的工单回传完整工序图）
+  routing_id?: number | null
+  graph?: OperationGraphData | null
 }
 
 export interface ReleaseWarning {
