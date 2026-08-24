@@ -22,7 +22,7 @@
         </div>
         <div class="card-wh">{{ a.warehouse_name }}</div>
         <div class="card-qty">
-          <span class="font-code">{{ a.quantity }}</span>
+          <span class="font-code">{{ formatThousand(a.quantity) }}</span>
           <span class="qty-unit">当前量</span>
         </div>
         <div class="card-limits">

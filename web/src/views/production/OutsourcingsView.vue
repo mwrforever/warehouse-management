@@ -648,13 +648,9 @@ onMounted(async () => {
         <template #default="{ row }">{{ row.output_product_name ?? '—' }}</template>
       </el-table-column>
       <el-table-column prop="supplier_name" label="供应商" min-width="140" />
-      <el-table-column
-        prop="quantity"
-        label="数量"
-        align="right"
-        width="100"
-        class-name="font-code"
-      />
+      <el-table-column label="数量" align="right" width="100" class-name="font-code">
+        <template #default="{ row }">{{ formatThousand(row.quantity) }}</template>
+      </el-table-column>
       <el-table-column label="已回收" align="right" width="100" class-name="font-code">
         <template #default="{ row }">{{ formatThousand(row.received_qty ?? 0) }}</template>
       </el-table-column>

@@ -35,7 +35,9 @@
       <el-table-column prop="code" label="路线编码" width="170" class-name="font-code" />
       <el-table-column prop="product_name" label="成品名称" min-width="140" />
       <el-table-column prop="version" label="版本" width="80" class-name="font-code" />
-      <el-table-column prop="quantity" label="基准数量" width="90" />
+      <el-table-column label="基准数量" width="90" align="right">
+        <template #default="{ row }">{{ formatThousand(row.quantity) }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
@@ -94,6 +96,7 @@ import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import RoutingCanvasDialog from '../../components/routing/RoutingCanvasDialog.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { formatThousand } from '../../utils/format'
 
 const auth = useAuthStore()
 // 列表查询状态（成品筛选为可空下拉，空值不参与过滤）
