@@ -100,25 +100,26 @@ class OutsourcingController extends Controller
         if (! $op) {
             return $this->fail(422, '工序不属于该工单');
         }
-        // 委外对象=工艺路线节点（无路线旧线性工单返回 null，走「委外=工单成品」兼容口径，Task 5 迁移后收敛）
-        $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
-        if ($node) {
-            if ((int) $op->is_outsourced !== 1) {
-                return $this->fail(422, '该工序不是委外工序');
-            }
-            if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
-                return $this->fail(422, '该工序已完成，不可委外');
-            }
-        }
-        // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
-        $order = ProductionOrder::find($data['order_id']);
-        $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
-            ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
-        if (! $order || bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
-            return $this->fail(1520, '委外数量超过工单计划数量');
-        }
-
+        // 委外对象=工艺路线节点（无路线旧线性工单返回 null，走「委外=工单成品」兼容口径，Task 5 迁移后收敛）；
+        // 纳入 try：有路线但路由头/节点缺失的数据异常 422 由下方统一 catch 承接（修复轮 2 前在 try 外泄漏 500）
         try {
+            $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
+            if ($node) {
+                if ((int) $op->is_outsourced !== 1) {
+                    return $this->fail(422, '该工序不是委外工序');
+                }
+                if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
+                    return $this->fail(422, '该工序已完成，不可委外');
+                }
+            }
+            // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
+            $order = ProductionOrder::find($data['order_id']);
+            $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
+                ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
+            if (! $order || bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+                return $this->fail(1520, '委外数量超过工单计划数量');
+            }
+
             // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
             // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
             $os = DB::transaction(function () use ($data, $node) {
@@ -150,7 +151,7 @@ class OutsourcingController extends Controller
                 return $os;
             }, 2);
         } catch (ProductionException $e) {
-            // 422 组件载荷不符（应发超上限/重复/非节点材料，事务整体回滚）
+            // 422 节点缺失（数据异常）/ 组件载荷不符（应发超上限/重复/非节点材料）——整体回滚
             return $this->fail($e->getCode() ?: 422, $e->getMessage());
         }
 

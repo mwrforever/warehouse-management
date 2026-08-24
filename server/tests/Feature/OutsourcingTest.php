@@ -14,6 +14,7 @@ use App\Models\Process;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\Role;
+use App\Models\RoutingNode;
 use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
@@ -455,5 +456,24 @@ class OutsourcingTest extends TestCase
             ],
         ])->assertJsonPath('code', 422)
             ->assertJsonPath('message', '发料组件重复');
+    }
+
+    // 修复轮 2（N1）：有路线但节点缺失（数据异常，如节点改名/删除）→ store 返回 422 而非 500，不落单据
+    public function test_store_rejects_missing_routing_node_with_422(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw] = $this->dagOrder();
+        // 模拟数据异常：路线节点 OP30 改名，工单工序快照 node_no 仍指向 OP30
+        RoutingNode::where('node_no', 'OP30')->update(['node_no' => 'OP30-OLD']);
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', [
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [['material_id' => $raw->id, 'required_qty' => 6, 'unit_id' => $raw->unit_id]],
+        ])->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '工艺路线节点不存在');
+        $this->assertDatabaseCount('outsourcing_orders', 0);
     }
 }
