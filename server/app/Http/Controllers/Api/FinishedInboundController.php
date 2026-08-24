@@ -36,7 +36,16 @@ class FinishedInboundController extends Controller
             ->join('production_orders', 'production_orders.id', '=', 'finished_inbounds.order_id')
             ->join('products', 'products.id', '=', 'production_orders.product_id')
             ->select(
-                'finished_inbounds.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'finished_inbounds.id',
+                'finished_inbounds.no',
+                'finished_inbounds.order_id',
+                'finished_inbounds.warehouse_id',
+                'finished_inbounds.location_id',
+                'finished_inbounds.status',
+                'finished_inbounds.approved_at',
+                'finished_inbounds.operator',
+                'finished_inbounds.created_at',
                 'production_orders.no as order_no',
                 'products.name as product_name',
                 'products.code as product_code',

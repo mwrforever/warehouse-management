@@ -40,7 +40,21 @@ class ProductionOrderController extends Controller
     {
         $query = ProductionOrder::query()
             ->join('products', 'products.id', '=', 'production_orders.product_id')
-            ->select('production_orders.*', 'products.name as product_name', 'products.code as product_code')
+            // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+            ->select(
+                'production_orders.id',
+                'production_orders.no',
+                'production_orders.product_id',
+                'production_orders.quantity',
+                'production_orders.completed_qty',
+                'production_orders.plan_date',
+                'production_orders.status',
+                'production_orders.created_by',
+                'production_orders.released_at',
+                'production_orders.completed_at',
+                'products.name as product_name',
+                'products.code as product_code',
+            )
             ->orderByDesc('production_orders.id');
 
         if ($keyword = $request->input('keyword')) {

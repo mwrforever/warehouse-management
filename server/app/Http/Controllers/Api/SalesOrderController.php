@@ -34,7 +34,16 @@ class SalesOrderController extends Controller
             ->join('customers', 'customers.id', '=', 'sales_orders.customer_id')
             ->leftJoin('users', 'users.id', '=', 'sales_orders.created_by')
             ->select(
-                'sales_orders.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'sales_orders.id',
+                'sales_orders.no',
+                'sales_orders.customer_id',
+                'sales_orders.order_date',
+                'sales_orders.expected_date',
+                'sales_orders.total_amount',
+                'sales_orders.status',
+                'sales_orders.created_by',
+                'sales_orders.approved_at',
                 'customers.name as customer_name',
                 'users.name as created_by_name',
             )

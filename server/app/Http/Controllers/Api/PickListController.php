@@ -38,7 +38,16 @@ class PickListController extends Controller
             ->join('production_orders', 'production_orders.id', '=', 'pick_lists.order_id')
             ->join('warehouses', 'warehouses.id', '=', 'pick_lists.warehouse_id')
             ->select(
-                'pick_lists.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'pick_lists.id',
+                'pick_lists.no',
+                'pick_lists.order_id',
+                'pick_lists.warehouse_id',
+                'pick_lists.status',
+                'pick_lists.issue_status',
+                'pick_lists.approved_at',
+                'pick_lists.operator',
+                'pick_lists.created_at',
                 'production_orders.no as order_no',
                 'warehouses.name as warehouse_name',
             )

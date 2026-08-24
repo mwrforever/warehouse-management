@@ -35,7 +35,19 @@ class ReturnListController extends Controller
     {
         $query = ReturnList::query()
             ->join('production_orders', 'production_orders.id', '=', 'return_lists.order_id')
-            ->select('return_lists.*', 'production_orders.no as order_no')
+            // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+            ->select(
+                'return_lists.id',
+                'return_lists.no',
+                'return_lists.order_id',
+                'return_lists.warehouse_id',
+                'return_lists.location_id',
+                'return_lists.status',
+                'return_lists.approved_at',
+                'return_lists.operator',
+                'return_lists.created_at',
+                'production_orders.no as order_no',
+            )
             ->orderByDesc('return_lists.id');
 
         if ($keyword = $request->input('keyword')) {

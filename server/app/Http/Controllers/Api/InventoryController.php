@@ -64,7 +64,15 @@ class InventoryController extends Controller
             ->join('locations', 'locations.id', '=', 'inventory_movements.location_id')
             ->leftJoin('users', 'users.id', '=', 'inventory_movements.operator_id')
             ->select(
-                'inventory_movements.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'inventory_movements.id',
+                'inventory_movements.direction',
+                'inventory_movements.quantity',
+                'inventory_movements.balance_after',
+                'inventory_movements.source_type',
+                'inventory_movements.source_id',
+                'inventory_movements.source_no',
+                'inventory_movements.created_at',
                 'products.name as product_name',
                 'products.code as product_code',
                 'warehouses.name as warehouse_name',

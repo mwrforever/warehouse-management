@@ -48,7 +48,17 @@ class OutsourcingController extends Controller
             // 回收品名称联查（output_product_id 可空=历史脏数据，leftJoin 保行）
             ->leftJoin('products', 'products.id', '=', 'outsourcing_orders.output_product_id')
             ->select(
-                'outsourcing_orders.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'outsourcing_orders.id',
+                'outsourcing_orders.no',
+                'outsourcing_orders.order_id',
+                'outsourcing_orders.operation_id',
+                'outsourcing_orders.supplier_id',
+                'outsourcing_orders.quantity',
+                'outsourcing_orders.status',
+                'outsourcing_orders.approved_at',
+                'outsourcing_orders.operator',
+                'outsourcing_orders.created_at',
                 'production_orders.no as order_no',
                 'suppliers.name as supplier_name',
                 'processes.name as process_name',

@@ -33,7 +33,16 @@ class PurchaseOrderController extends Controller
             ->join('suppliers', 'suppliers.id', '=', 'purchase_orders.supplier_id')
             ->leftJoin('users', 'users.id', '=', 'purchase_orders.created_by')
             ->select(
-                'purchase_orders.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'purchase_orders.id',
+                'purchase_orders.no',
+                'purchase_orders.supplier_id',
+                'purchase_orders.order_date',
+                'purchase_orders.expected_date',
+                'purchase_orders.total_amount',
+                'purchase_orders.status',
+                'purchase_orders.created_by',
+                'purchase_orders.approved_at',
                 'suppliers.name as supplier_name',
                 'users.name as created_by_name',
             )

@@ -254,7 +254,15 @@ class ReportService
         $truncated = false;
         $ordersQuery = (clone $window)
             ->join('products', 'products.id', '=', 'production_orders.product_id')
-            ->select('production_orders.*', 'products.name as product_name', 'products.code as product_code')
+            // 显式列出 items 装载端实际使用的工单列（id 同时供 lazy 分块），避免 select 通配拉取未列字段
+            ->select(
+                'production_orders.id',
+                'production_orders.no',
+                'production_orders.quantity',
+                'production_orders.completed_qty',
+                'products.name as product_name',
+                'products.code as product_code',
+            )
             ->orderBy('production_orders.plan_date')
             ->orderBy('production_orders.id');
         foreach ($ordersQuery->lazy() as $order) {

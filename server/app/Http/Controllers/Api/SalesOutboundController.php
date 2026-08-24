@@ -43,7 +43,18 @@ class SalesOutboundController extends Controller
             ->join('locations', 'locations.id', '=', 'sales_outbounds.location_id')
             ->leftJoin('sales_orders', 'sales_orders.id', '=', 'sales_outbounds.order_id')
             ->select(
-                'sales_outbounds.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'sales_outbounds.id',
+                'sales_outbounds.no',
+                'sales_outbounds.customer_id',
+                'sales_outbounds.warehouse_id',
+                'sales_outbounds.location_id',
+                'sales_outbounds.order_id',
+                'sales_outbounds.status',
+                'sales_outbounds.total_amount',
+                'sales_outbounds.outbound_at',
+                'sales_outbounds.operator',
+                'sales_outbounds.created_at',
                 'customers.name as customer_name',
                 'warehouses.name as warehouse_name',
                 'locations.name as location_name',

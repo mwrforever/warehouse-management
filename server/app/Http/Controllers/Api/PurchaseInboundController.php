@@ -42,7 +42,18 @@ class PurchaseInboundController extends Controller
             ->join('locations', 'locations.id', '=', 'purchase_inbounds.location_id')
             ->leftJoin('purchase_orders', 'purchase_orders.id', '=', 'purchase_inbounds.order_id')
             ->select(
-                'purchase_inbounds.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'purchase_inbounds.id',
+                'purchase_inbounds.no',
+                'purchase_inbounds.supplier_id',
+                'purchase_inbounds.warehouse_id',
+                'purchase_inbounds.location_id',
+                'purchase_inbounds.order_id',
+                'purchase_inbounds.status',
+                'purchase_inbounds.total_amount',
+                'purchase_inbounds.inbound_at',
+                'purchase_inbounds.operator',
+                'purchase_inbounds.created_at',
                 'suppliers.name as supplier_name',
                 'warehouses.name as warehouse_name',
                 'locations.name as location_name',
