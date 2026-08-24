@@ -4,9 +4,11 @@
 
 namespace App\Services;
 
+use App\Exceptions\RoutingException;
 use App\Models\BomHeader;
 use App\Models\Process;
 use App\Models\Product;
+use App\Models\RoutingHeader;
 use App\Models\WorkOrderOperation;
 
 class ProductionOrderService
@@ -43,6 +45,60 @@ class ProductionOrderService
             })->values()->all();
 
         return compact('materials', 'operations');
+    }
+
+    /**
+     * 工艺路线展开：工序 DAG 快照 + 物料节点归属（供工单创建/更新调用，替代无路线时的线性工序展开）
+     *
+     * 工序行按拓扑序分配 seq（展示序，前端步骤条与画布共用）；
+     * 物料归属规则：仅被唯一节点消耗的 BOM 材料落 node_no（领料定位到节点），
+     * 多节点共用材料不归属（null=按工单总量领料，防重复归属歧义）。
+     *
+     * @param  RoutingHeader  $routing  启用版本工艺路线（调用方已按成品锁定取用）
+     * @return array{operations: array<int, array{process_id:int, seq:int, node_no:string, output_product_id:?int, is_outsourced:int}>, edges: array<int, array{from:string, to:string}>, nodeOwners: array<int, string>}
+     *
+     * @throws RoutingException 1701（防御性：保存时已校验无环，此处拓扑复跑兜底存量脏数据）
+     */
+    public function expandRouting(RoutingHeader $routing): array
+    {
+        // 节点带材料预加载一次取出（归属统计在集合上完成，禁止循环内懒加载）
+        $nodes = $routing->nodes()->with('materials')->orderBy('id')->get();
+        $edges = $routing->edges()->get();
+
+        // 边 id 对转 node_no 对（拓扑排序入参形态）
+        $nodeArr = $nodes->map(fn ($n) => ['node_no' => $n->node_no])->all();
+        $edgeArr = $edges->map(fn ($e) => [
+            'from' => $nodes->firstWhere('id', $e->from_node_id)->node_no,
+            'to' => $nodes->firstWhere('id', $e->to_node_id)->node_no,
+        ])->all();
+        // RoutingService 经容器解析避免构造耦合；拓扑序确定性（队列按节点入表序）
+        $order = app(RoutingService::class)->topoSort($nodeArr, $edgeArr);
+
+        $seqByNo = array_flip($order); // node_no => 拓扑序（0 起）
+        $operations = $nodes->map(fn ($n) => [
+            'process_id' => $n->process_id,
+            'seq' => $seqByNo[$n->node_no] + 1,
+            'node_no' => $n->node_no,
+            'output_product_id' => $n->output_product_id,
+            'is_outsourced' => (int) $n->is_outsourced,
+        ])->all();
+
+        // 物料节点归属：计数被消耗的节点数，>1 的共用材料剔除（按总量领料）
+        $ownerCount = [];
+        $nodeOwners = [];
+        foreach ($nodes as $n) {
+            foreach ($n->materials as $m) {
+                $ownerCount[$m->material_id] = ($ownerCount[$m->material_id] ?? 0) + 1;
+                $nodeOwners[$m->material_id] = $n->node_no;
+            }
+        }
+        foreach ($ownerCount as $materialId => $count) {
+            if ($count > 1) {
+                unset($nodeOwners[$materialId]);
+            }
+        }
+
+        return ['operations' => $operations, 'edges' => $edgeArr, 'nodeOwners' => $nodeOwners];
     }
 
     /**

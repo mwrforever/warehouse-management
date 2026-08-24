@@ -18,6 +18,7 @@ use Illuminate\Support\Carbon;
  * @property string $quantity
  * @property string $plan_date
  * @property int $bom_id
+ * @property int|null $routing_id
  * @property int $status
  * @property string $completed_qty
  * @property int|null $created_by
@@ -94,5 +95,12 @@ class ProductionOrder extends Model
     public function operations(): HasMany
     {
         return $this->hasMany(WorkOrderOperation::class, 'order_id');
+    }
+
+    /** @return HasMany<WorkOrderOperationEdge, $this> */
+    // 工序依赖边快照（DAG 工单专用，随单/随工序级联删除）
+    public function edges(): HasMany
+    {
+        return $this->hasMany(WorkOrderOperationEdge::class, 'order_id');
     }
 }
