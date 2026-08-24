@@ -494,7 +494,7 @@ class ProductionOrderController extends Controller
     /**
      * 开工（已下达→生产中）：DAG 工单（routing_id 非空）全部入度 0（无入边）节点置进行中
      * ——并行起点同时开工；无路线工单沿用首工序（seq 最小）置进行中。重复/非已下达 1506。
-     * 锁序 起点工序→order：与委外回收（outsourcing→op→order）/报工（op→其余工序→order）/
+     * 锁序 起点工序→order：与委外回收（outsourcing→op→order）/报工（全部工序 id 升序→order）/
      * 完工（全工序→order）在 op→order 段全局同序，消除「开工 vs 末批回收」并发 ABBA 死锁环
      * （委外工序可为 seq1/入度 0，系统无校验禁止）。
      */
@@ -539,7 +539,7 @@ class ProductionOrderController extends Controller
 
     /**
      * 完工（生产中→已完成）：双前置校验——所有工序已完成（1507）+ 至少一次成品入库 completed_qty>0（1508）
-     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（op→其余工序→order）/开工（起点工序→order）
+     * 锁序 op→order：先锁全部工序行（升序），再锁工单行——与报工（全部工序 id 升序→order）/开工（起点工序→order）
      * 全局同序；若先锁 order 再锁工序行会引入 order→op 反序，与并发报工构成 ABBA 死锁环
      */
     public function complete(ProductionOrder $order)
