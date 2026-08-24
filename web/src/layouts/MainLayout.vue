@@ -191,7 +191,7 @@ interface MenuGroup {
   items: MenuItem[]
 }
 
-// 菜单 IA（8 组 30 项，与设计稿一致；权限码与旧版完全一致，仅视觉重设计）
+// 菜单 IA（8 组 31 项；权限码与旧版一致，工艺路线为路由 DAG 需求新增）
 const menu: MenuGroup[] = [
   {
     title: null,
@@ -401,6 +401,14 @@ const menu: MenuGroup[] = [
         perm: 'bom.list',
         tip: 'BOM 管理',
         desc: '物料清单维护',
+      },
+      {
+        to: '/master/routings',
+        label: '工艺路线',
+        icon: Connection,
+        perm: 'routing.list',
+        tip: '工序 DAG 网络',
+        desc: '成品工艺路线与工序编排',
       },
       {
         to: '/master/processes',
