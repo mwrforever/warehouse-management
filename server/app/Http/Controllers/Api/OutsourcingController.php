@@ -23,6 +23,7 @@ use App\Services\OutsourcingService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class OutsourcingController extends Controller
 {
@@ -546,6 +547,16 @@ class OutsourcingController extends Controller
             ],
             (array) $data['items'],
         );
+
+        // 组件查重：同物料只允许一行（422 格式层；DAG 路径 validateItems 同口径兜底）——
+        // 此处统一拦截，避免 legacy 分支重复物料直落撞唯一键 uniq_outsourcing_order_items 抛 500
+        $seen = [];
+        foreach ($data['items'] as $item) {
+            if (isset($seen[$item['material_id']])) {
+                throw ValidationException::withMessages(['items' => '发料组件重复']);
+            }
+            $seen[$item['material_id']] = true;
+        }
 
         return $data;
     }

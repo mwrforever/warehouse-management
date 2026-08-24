@@ -437,4 +437,23 @@ class OutsourcingTest extends TestCase
         ])->assertJsonPath('code', 422)
             ->assertJsonPath('message', '应发数量超过单位用量折算上限');
     }
+
+    // 载荷校验：组件物料重复 → 422（格式层拦截，防 legacy/DAG 直落撞唯一键 uniq_outsourcing_order_items 抛 500）
+    public function test_store_rejects_duplicate_items_with_422(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw] = $this->dagOrder();
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', [
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $raw->id, 'required_qty' => 6, 'unit_id' => $raw->unit_id],
+                ['material_id' => $raw->id, 'required_qty' => 6, 'unit_id' => $raw->unit_id],
+            ],
+        ])->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '发料组件重复');
+    }
 }

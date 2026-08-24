@@ -33,7 +33,7 @@ class OutsourcingService
         if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
             throw new ProductionException('该工序已完成，不可委外', 422);
         }
-        $routing = RoutingHeader::with('nodes.materials.material')->findOrFail($order->routing_id);
+        $routing = RoutingHeader::with('nodes.materials.material', 'nodes.materials.unit')->findOrFail($order->routing_id);
         $node = $routing->nodes->firstWhere('node_no', $op->node_no);
         if (! $node) {
             throw new ProductionException('工艺路线节点不存在', 422);
@@ -67,9 +67,10 @@ class OutsourcingService
 
     /**
      * 取工序对应的工艺路线节点（store/update 用，逻辑同 fromOperation 的取数段）
-     * 无路线/无 node_no 的旧线性工单返回 null——调用方回退「委外=工单成品」旧口径，兼容存量流程
+     * 无路线/无 node_no 的旧线性工单返回 null——调用方回退「委外=工单成品」旧口径，兼容存量流程；
+     * 有路线但路由头/节点缺失属数据异常：显式 422，禁止静默降级旧口径（与 fromOperation 语义一致）
      *
-     * @throws ProductionException 仅数据异常（工序/工单不存在或工序无工单）
+     * @throws ProductionException 422（有路线但路由头或节点缺失）/ 数据异常（工序/工单不存在）
      */
     public function routingNodeForOperation(int $operationId): ?RoutingNode
     {
@@ -78,11 +79,16 @@ class OutsourcingService
         if (! $order->routing_id || ! $op->node_no) {
             return null;
         }
-        $routing = RoutingHeader::with('nodes.materials.material')->find($order->routing_id);
-        $node = $routing?->nodes->firstWhere('node_no', $op->node_no);
+        $routing = RoutingHeader::with('nodes.materials.material', 'nodes.materials.unit')->find($order->routing_id);
+        if (! $routing) {
+            throw new ProductionException('工艺路线节点不存在', 422);
+        }
+        $node = $routing->nodes->firstWhere('node_no', $op->node_no);
+        if (! ($node instanceof RoutingNode)) {
+            throw new ProductionException('工艺路线节点不存在', 422);
+        }
 
-        // 节点缺失视为旧口径（同 fromOperation 的 422 语义由预填接口单独承担）
-        return $node instanceof RoutingNode ? $node : null;
+        return $node;
     }
 
     /**
