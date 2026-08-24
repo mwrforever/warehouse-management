@@ -381,8 +381,8 @@ class OutsourcingController extends Controller
      * 1529「回收商品与委外工序产出不一致」）→ 锁同单全部工序行（id 升序，含委外工序：DAG 后继就绪判定需读其它前驱状态，
      * 与报工/完工在行级全序上单调同向）→ 锁工单行校验状态 → InventoryService 写 outsourcing_in 流水(+qty，
      * 商品=output_product_id) → 创建回收单（创建即审核）→ 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成 +
-     * DAG 工单（routing_id 非空）推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，
-     * 与 OperationReportController::store 同口径；旧工单仅置 DONE 不推进）」任一步失败整体回滚；
+     * 推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，与 OperationReportController::store
+     * 同口径）」任一步失败整体回滚；
      * 锁序 outsourcing→全部工序(升序)→order 与报工（op 全集→order）/完工（全工序→order）行级单调同向，
      * 消除「末批回收 vs 工序报工」并发 ABBA 死锁环
      */
@@ -470,38 +470,36 @@ class OutsourcingController extends Controller
                     ->update(['source_no' => $receipt->no]);
 
                 // 累计回收 ≥ 委外量 → 委外单已回收 + 委外工序标记完成（spec §6；回收只对未完成工序生效）；
-                // DAG 工单（routing_id 非空）追加推进：直接后继中「全部前驱已完成」的待开工节点置进行中
-                // （并行分支独立推进，与报工控制器同口径）；旧工单（routing_id 为空）仅置 DONE 不推进
+                // 追加推进：直接后继中「全部前驱已完成」的待开工节点置进行中（并行分支独立推进，与报工控制器同口径；
+                // 无路线的历史脏单无 operation edges，推进循环自然空转——仅置 DONE）
                 $receivedNow = bcadd($received, (string) $data['quantity'], 2);
                 if (bccomp($receivedNow, (string) $locked->quantity, 2) >= 0) {
                     $locked->status = OutsourcingOrder::STATUS_RECEIVED;
                     $locked->save();
                     if ($op && $op->status !== WorkOrderOperation::STATUS_DONE) {
                         $op->status = WorkOrderOperation::STATUS_DONE;
-                        if ($order->routing_id) {
-                            // 边一次取出内存建邻接、前驱状态用已锁定的工序全集判定（§4.2.2 禁循环内查询）
-                            $edges = WorkOrderOperationEdge::where('order_id', $order->id)->get();
-                            // 已完成集合：全集中已 DONE 的行 + 本工序（本轮即将落 DONE，对后继就绪判定等效已完成）
-                            $doneIds = [$op->id => true];
-                            foreach ($allOps as $s) {
-                                if ($s->status === WorkOrderOperation::STATUS_DONE) {
-                                    $doneIds[$s->id] = true;
-                                }
+                        // 边一次取出内存建邻接、前驱状态用已锁定的工序全集判定（§4.2.2 禁循环内查询）
+                        $edges = WorkOrderOperationEdge::where('order_id', $order->id)->get();
+                        // 已完成集合：全集中已 DONE 的行 + 本工序（本轮即将落 DONE，对后继就绪判定等效已完成）
+                        $doneIds = [$op->id => true];
+                        foreach ($allOps as $s) {
+                            if ($s->status === WorkOrderOperation::STATUS_DONE) {
+                                $doneIds[$s->id] = true;
                             }
-                            $byId = $allOps->keyBy('id');
-                            $predsByTo = $edges->groupBy('to_operation_id');
-                            foreach ($edges->where('from_operation_id', $op->id) as $edge) {
-                                $succ = $byId->get($edge->to_operation_id);
-                                if (! $succ || $succ->status !== WorkOrderOperation::STATUS_PENDING) {
-                                    continue;
-                                }
-                                // 后继就绪判定：全部前驱均在已完成集合（空前驱不会出现——本节点即其前驱）
-                                $allPredsDone = ($predsByTo->get($edge->to_operation_id) ?? collect())
-                                    ->every(fn (WorkOrderOperationEdge $e) => isset($doneIds[$e->from_operation_id]));
-                                if ($allPredsDone) {
-                                    $succ->status = WorkOrderOperation::STATUS_RUNNING;
-                                    $succ->save();
-                                }
+                        }
+                        $byId = $allOps->keyBy('id');
+                        $predsByTo = $edges->groupBy('to_operation_id');
+                        foreach ($edges->where('from_operation_id', $op->id) as $edge) {
+                            $succ = $byId->get($edge->to_operation_id);
+                            if (! $succ || $succ->status !== WorkOrderOperation::STATUS_PENDING) {
+                                continue;
+                            }
+                            // 后继就绪判定：全部前驱均在已完成集合（空前驱不会出现——本节点即其前驱）
+                            $allPredsDone = ($predsByTo->get($edge->to_operation_id) ?? collect())
+                                ->every(fn (WorkOrderOperationEdge $e) => isset($doneIds[$e->from_operation_id]));
+                            if ($allPredsDone) {
+                                $succ->status = WorkOrderOperation::STATUS_RUNNING;
+                                $succ->save();
                             }
                         }
                         $op->save();

@@ -4,12 +4,15 @@
 
 namespace Tests\Feature;
 
+use App\Models\BomHeader;
+use App\Models\Category;
 use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\Location;
 use App\Models\OutsourcingOrder;
 use App\Models\OutsourcingReceipt;
 use App\Models\Process;
+use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\Role;
 use App\Models\RoutingNode;
@@ -498,6 +501,45 @@ class OutsourcingTest extends TestCase
             'items' => [['material_id' => $raw->id, 'required_qty' => 6, 'unit_id' => $raw->unit_id]],
         ])->assertJsonPath('code', 422)
             ->assertJsonPath('message', '工艺路线节点不存在');
+        $this->assertDatabaseCount('outsourcing_orders', 0);
+    }
+
+    // 修复轮 1（评审 I1）：仅 is_outsourced=1 节点可委外——无启用路线的工单 store/from-operation 均 422
+    // 「该工单没有工艺路线，不可委外」且不落单据（原 legacy 用例删除后该分支零覆盖，补测）
+    public function test_store_and_from_operation_reject_order_without_routing_with_422(): void
+    {
+        // 独立成品（无启用路线）：BOM 启用 + 全量工序线性快照（回退旧逻辑告警路径）
+        $cat = Category::create(['name' => '无路线物料']);
+        $unit = Unit::where('code', 'pc')->firstOrFail();
+        $fin = Product::create([
+            'name' => '成品无路线', 'code' => 'FIN-NOROUTE', 'type' => 'finished',
+            'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        BomHeader::create(['code' => 'BOM-NOROUTE-1', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $fin->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
+        ]);
+        $res->assertJsonPath('code', 0);
+        $order = ProductionOrder::where('no', $res->json('data.no'))->firstOrFail();
+        $this->assertNull($order->routing_id);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+        $op = $order->operations()->firstOrFail();
+        // from-operation 预填同口径 422
+        $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/from-operation/{$op->id}")
+            ->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '该工单没有工艺路线，不可委外');
+        // store 建单同口径 422 且不落单据
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', [
+            'order_id' => $order->id,
+            'operation_id' => $op->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 5,
+            'items' => [['material_id' => $fin->id, 'required_qty' => 5, 'unit_id' => $unit->id]],
+        ])->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '该工单没有工艺路线，不可委外');
         $this->assertDatabaseCount('outsourcing_orders', 0);
     }
 
