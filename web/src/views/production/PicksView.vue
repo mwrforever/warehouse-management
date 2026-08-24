@@ -1,6 +1,6 @@
 <!-- 领料单页：筛选列表 + 从工单生成新建弹窗（预填物料剩余 + on-blur 上限校验）+ 审核扣库存（1515 失败红色提示）+ 发料状态流转 + 详情弹窗 -->
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -53,6 +53,16 @@ const form = reactive({
 const detailVisible = ref(false)
 const detail = ref<PickDetail | null>(null)
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：选单预填/编辑回填为异步落点，
+// 快速切单/连点编辑/关窗重开时旧会话的慢响应必须丢弃——
+// 防 A 的迟到预填行覆盖 B 的明细、form.order_id 被拉回旧单（所见非所选）
+let sessionSeq = 0
+
+// 关窗即作废在途：弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+
 // 领料单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
@@ -66,10 +76,12 @@ function issueTagType(issueStatus: number) {
 }
 
 // 选工单 → 从工单生成预填物料行（剩余量默认全量领用，可改）
-async function onOrderChange(orderId: number | undefined) {
+async function onOrderChange(orderId: number | undefined, session: number = ++sessionSeq) {
   if (!orderId) return
   try {
     const data = await productionApi.fromOrderPicks(orderId)
+    // 迟到守卫：旧工单的慢预填丢弃，防覆盖新单明细与 order_id（快速切单 A→B 所见非所选）
+    if (session !== sessionSeq) return
     form.order_id = data.order_id
     fromOrderNo.value = data.order_no
     form.items = data.items.map((i) => ({
@@ -81,6 +93,8 @@ async function onOrderChange(orderId: number | undefined) {
       pick_qty: Number(i.remaining_qty),
     }))
   } catch (e) {
+    // 过期会话的失败不回写：旧工单报错/清空不得打扰新会话已回填的选择
+    if (session !== sessionSeq) return
     // 预填失败：清空工单选择，避免带无效工单保存
     ElMessage.error((e as Error).message)
     form.order_id = undefined
@@ -128,10 +142,14 @@ function openCreate(orderId?: number) {
 }
 
 // 编辑草稿：详情回填 + fromOrderPicks 取剩余量（pickDetail 不含剩余字段，按 product_id 合并）
+// 回填链（详情→预填→库位）共用同一会话号，快速连点两行编辑/关窗重开时慢响应不得覆盖新会话
 async function openEdit(row: PickItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.pickDetail(row.id)
+    if (session !== sessionSeq) return
     const pre = await productionApi.fromOrderPicks(d.order_id)
+    if (session !== sessionSeq) return
     editingId.value = row.id
     fromOrderNo.value = d.order_no
     form.order_id = d.order_id
@@ -149,9 +167,13 @@ async function openEdit(row: PickItem) {
         pick_qty: Number(cur?.pick_qty ?? i.remaining_qty),
       }
     })
-    locations.value = (await warehouseApi.locations(d.warehouse_id)).items
+    const locs = await warehouseApi.locations(d.warehouse_id)
+    if (session !== sessionSeq) return
+    locations.value = locs.items
     dialogVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前编辑
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

@@ -746,6 +746,94 @@ describe('委外页：工序节点预填 + 组件应发折算 + 余料退回', (
     })
   })
 
+  // BF-2：快速连点两行「退回余料」时（A 慢 B 快），A 的迟到详情不得覆盖 B 单的退回明细——
+  // 否则用户在「B 单语境」的弹窗里提交，实际回收/退回的是 A 单（所见非所选）
+  it('竞态：快速连点退回余料时慢详情不得覆盖新单退回明细（BF-2）', async () => {
+    // 两行已审核委外单均可退回余料
+    const rowShape = {
+      order_id: 1,
+      order_no: 'MO-001',
+      operation_id: 11,
+      node_no: 'OP10',
+      process_name: '下料',
+      output_product_name: '半成品B',
+      supplier_id: 1,
+      supplier_name: '测试供应商',
+      status: 1,
+      status_label: '已审核',
+      warehouse_id: 1,
+      warehouse_name: '主仓',
+      location_id: 2,
+      location_name: 'B-01',
+      quantity: '10.00',
+      received_qty: '0.00',
+      approved_at: null,
+      operator: null,
+      remark: null,
+    }
+    mocks.outsourcings.mockResolvedValue(
+      page([
+        { ...rowShape, id: 4, no: 'OS20260824-001' },
+        { ...rowShape, id: 5, no: 'OS20260824-002' },
+      ]),
+    )
+    // row1（单 4）详情受控慢（原料A 已发10已退4）；row2（单 5）立即返回（原料C 已发8已退2）
+    const detail1 = {
+      ...rowShape,
+      id: 4,
+      no: 'OS20260824-001',
+      items: [
+        {
+          id: 21,
+          material_id: 101,
+          material_name: '原料A',
+          required_qty: '10.00',
+          issued_qty: '10.00',
+          returned_qty: '4.00',
+          unit_name: '个',
+        },
+      ],
+    }
+    const detail2 = {
+      ...rowShape,
+      id: 5,
+      no: 'OS20260824-002',
+      items: [
+        {
+          id: 41,
+          material_id: 103,
+          material_name: '原料C',
+          required_qty: '8.00',
+          issued_qty: '8.00',
+          returned_qty: '2.00',
+          unit_name: '个',
+        },
+      ],
+    }
+    const d1 = deferred<typeof detail2>()
+    mocks.outsourcingDetail.mockImplementationOnce(() => d1.promise).mockResolvedValueOnce(detail2)
+    const wrapper = await mountView()
+
+    // 连点两行「退回余料」：row1（慢，在途）→ row2（快）→ 弹窗以 row2 明细打开（原料C 可退 6）
+    const returnBtns = () => wrapper.findAll('button').filter((b) => b.text().trim() === '退回余料')
+    await returnBtns()[0]!.trigger('click')
+    await flushPromises()
+    expect(mocks.outsourcingDetail).toHaveBeenCalledTimes(1)
+    await returnBtns()[1]!.trigger('click')
+    await flushPromises()
+    expect(mocks.outsourcingDetail).toHaveBeenCalledTimes(2)
+    const dialog = wrapper.find('.el-dialog')
+    expect(dialog.text()).toContain('余料退回')
+    expect(dialog.text()).toContain('原料C')
+    expect(dialog.text()).not.toContain('原料A')
+    // 迟到响应 row1 落点：会话守卫丢弃——明细仍是 row2 的原料C，且无过期错误提示
+    d1.resolve(detail1)
+    await flushPromises()
+    expect(dialog.text()).toContain('原料C')
+    expect(dialog.text()).not.toContain('原料A')
+    expect([...document.querySelectorAll('.el-message--error')]).toHaveLength(0)
+  })
+
   // BF-1 回归：工序网络「打开委外页」跳转携带 ?keyword=单号，委外页须消费该参数实现按单号定位
   it('keyword 跳转预填：携带单号进入时首查即带 keyword 出参且筛选框回显单号', async () => {
     routeQuery.value = { keyword: 'OS20260824-009' }

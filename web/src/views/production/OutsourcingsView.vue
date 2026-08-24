@@ -128,8 +128,15 @@ function statusTagType(status: number) {
 // 快速切换工序/关窗重开时旧会话的慢响应必须丢弃（防 A 的迟到响应覆盖 B 已回填的编辑态）
 let sessionSeq = 0
 
-// 关窗即作废在途：主弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+// 关窗即作废在途：任一弹窗关闭后迟到的预填/详情/流水响应禁止回写与重开弹窗
+//（弹窗已关，回写无意义且污染重开时的 reset）
 watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+watch(returnVisible, (open) => {
+  if (!open) sessionSeq++
+})
+watch(recordsVisible, (open) => {
   if (!open) sessionSeq++
 })
 
@@ -471,9 +478,13 @@ async function submitReceipt() {
 }
 
 // 退回余料弹窗打开：详情组件行 → 可退 = 已发 − 已退（已退满的行不展示）
+// 会话序号守卫（BF-2）：快速连点两行退回/关窗重开时旧单慢详情必须丢弃——
+// 防 A 的迟到明细覆盖 B 单语境，用户在「B 单语境」弹窗里提交实际退回 A 单
 async function openReturn(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.outsourcingDetail(row.id)
+    if (session !== sessionSeq) return
     if (!d.items?.length) {
       ElMessage.warning('该委外单无发料组件，不可退回')
       return
@@ -498,6 +509,8 @@ async function openReturn(row: OutsourcingItem) {
     returnLocations.value = []
     returnVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前操作
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -566,24 +579,32 @@ async function submitReturn() {
   }
 }
 
-// 回收记录弹窗：按委外单加载回收流水
+// 回收记录弹窗：按委外单加载回收流水（会话序号守卫 BF-2：快速连点两行时旧单慢流水丢弃）
 async function openReceipts(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
+    const d = await productionApi.outsourcingReceipts(row.id)
+    if (session !== sessionSeq) return
     recordsTitle.value = '回收记录'
-    receiptRecords.value = (await productionApi.outsourcingReceipts(row.id)).items
+    receiptRecords.value = d.items
     recordsVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
 
-// 退回记录弹窗：按委外单加载退回流水
+// 退回记录弹窗：按委外单加载退回流水（会话序号守卫同上）
 async function openReturns(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
+    const d = await productionApi.outsourcingReturns(row.id)
+    if (session !== sessionSeq) return
     recordsTitle.value = '退回记录'
-    returnRecords.value = (await productionApi.outsourcingReturns(row.id)).items
+    returnRecords.value = d.items
     recordsVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

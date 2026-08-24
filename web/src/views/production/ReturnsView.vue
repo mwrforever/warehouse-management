@@ -1,6 +1,6 @@
 <!-- 退料单页：筛选列表 + 从工单生成新建弹窗（预填已领数量 + on-blur 上限校验）+ 审核冲销已领（库存增加） -->
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { productionApi, type ProductionOrderItem, type ReturnItem } from '../../api/production'
@@ -42,16 +42,28 @@ const form = reactive({
   }[],
 })
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：选单预填/编辑回填为异步落点，
+// 快速切单/连点编辑/关窗重开时旧会话的慢响应必须丢弃——
+// 防 A 的迟到预填行覆盖 B 的明细、form.order_id 被拉回旧单（所见非所选）
+let sessionSeq = 0
+
+// 关窗即作废在途：弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+
 // 退料单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
 }
 
 // 选工单 → fromOrderPicks 预填物料行：取 issued_qty（已领）而非剩余，默认全退可改
-async function onOrderChange(orderId: number | undefined) {
+async function onOrderChange(orderId: number | undefined, session: number = ++sessionSeq) {
   if (!orderId) return
   try {
     const data = await productionApi.fromOrderPicks(orderId)
+    // 迟到守卫：旧工单的慢预填丢弃，防覆盖新单明细与 order_id（快速切单 A→B 所见非所选）
+    if (session !== sessionSeq) return
     form.order_id = data.order_id
     form.items = data.items.map((i) => ({
       product_id: i.product_id,
@@ -61,6 +73,8 @@ async function onOrderChange(orderId: number | undefined) {
       quantity: Number(i.issued_qty),
     }))
   } catch (e) {
+    // 过期会话的失败不回写：旧工单报错/清空不得打扰新会话已回填的选择
+    if (session !== sessionSeq) return
     // 预填失败：清空工单选择，避免带无效工单保存
     ElMessage.error((e as Error).message)
     form.order_id = undefined
@@ -108,10 +122,14 @@ function openCreate(orderId?: number) {
 }
 
 // 编辑草稿：详情回填 + fromOrderPicks 取已领量（退料详情接口不含已领字段，按 product_id 合并）
+// 回填链（详情→预填→库位）共用同一会话号，快速连点两行编辑/关窗重开时慢响应不得覆盖新会话
 async function openEdit(row: ReturnItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.returnsDetail(row.id)
+    if (session !== sessionSeq) return
     const pre = await productionApi.fromOrderPicks(d.order_id)
+    if (session !== sessionSeq) return
     editingId.value = row.id
     form.order_id = d.order_id
     // 关联领料单回填（编辑保真，保存时随载荷提交）
@@ -129,9 +147,13 @@ async function openEdit(row: ReturnItem) {
         quantity: Number(cur?.quantity ?? i.issued_qty),
       }
     })
-    locations.value = (await warehouseApi.locations(d.warehouse_id)).items
+    const locs = await warehouseApi.locations(d.warehouse_id)
+    if (session !== sessionSeq) return
+    locations.value = locs.items
     dialogVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前编辑
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

@@ -1,6 +1,6 @@
 <!-- 成品入库页：筛选列表 + 从工单生成新建弹窗（自动带成品行，默认剩余产量 + on-blur 上限校验）+ 审核加库存联动工单进度 -->
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -45,16 +45,28 @@ const form = reactive({
   }[],
 })
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：选单预填/编辑回填为异步落点，
+// 快速切单/连点编辑/关窗重开时旧会话的慢响应必须丢弃——
+// 防 A 的迟到成品行覆盖 B 的明细、form.order_id 被拉回旧单（所见非所选）
+let sessionSeq = 0
+
+// 关窗即作废在途：弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+})
+
 // 成品入库单状态标签语义色（production.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
 }
 
 // 选工单 → 自动带出成品行（数量默认=剩余产量，可改；剩余=计划数-已完工）
-async function onOrderChange(orderId: number | undefined) {
+async function onOrderChange(orderId: number | undefined, session: number = ++sessionSeq) {
   if (!orderId) return
   try {
     const d = await productionApi.orderDetail(orderId)
+    // 迟到守卫：旧工单的慢详情丢弃，防覆盖新单成品行与 order_id（快速切单 A→B 所见非所选）
+    if (session !== sessionSeq) return
     const remaining = Number(d.quantity) - Number(d.completed_qty)
     formRemaining.value = remaining
     form.order_id = d.id
@@ -66,6 +78,8 @@ async function onOrderChange(orderId: number | undefined) {
       },
     ]
   } catch (e) {
+    // 过期会话的失败不回写：旧工单报错/清空不得打扰新会话已回填的选择
+    if (session !== sessionSeq) return
     // 预填失败：清空工单选择，避免带无效工单保存
     ElMessage.error((e as Error).message)
     form.order_id = undefined
@@ -113,9 +127,12 @@ function openCreate(orderId?: number) {
 }
 
 // 编辑草稿：详情回填（含剩余产量与仓库/库位 id）
+// 回填链（详情→库位）共用同一会话号，快速连点两行编辑/关窗重开时慢响应不得覆盖新会话
 async function openEdit(row: FinishedInboundItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.finishedInboundDetail(row.id)
+    if (session !== sessionSeq) return
     editingId.value = row.id
     formRemaining.value = Number(d.remaining_qty)
     form.order_id = d.order_id
@@ -127,9 +144,13 @@ async function openEdit(row: FinishedInboundItem) {
       product_name: i.product_name,
       quantity: Number(i.quantity),
     }))
-    locations.value = (await warehouseApi.locations(d.warehouse_id)).items
+    const locs = await warehouseApi.locations(d.warehouse_id)
+    if (session !== sessionSeq) return
+    locations.value = locs.items
     dialogVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前编辑
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

@@ -99,16 +99,26 @@ function outsourceTagType(status: number) {
   return 'success'
 }
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：BOM 校验/编辑回填为异步落点，
+// 快速切换成品/连点编辑时旧会话的慢响应必须丢弃——
+// 防 A 的「无启用 BOM」迟到响应误清空 B 的选择并弹错、旧单详情覆盖新单回填
+let sessionSeq = 0
+
 // 选成品后即时校验启用 BOM（无启用版本 → 1501 文案并清空选择）
 async function onProductChange(pid: number | undefined) {
   if (!pid) return
+  const session = ++sessionSeq
   try {
     const res = await bomApi.list({ product_id: pid })
+    // 迟到守卫：旧成品的校验结果丢弃，防误清空新选择并弹错（快速切成品 A→B）
+    if (session !== sessionSeq) return
     if (!res.items.some((b) => b.status === 1)) {
       ElMessage.error('该成品没有启用版本的 BOM')
       form.product_id = undefined
     }
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -128,10 +138,12 @@ function openCreate() {
   nextTick(() => productSelect.value?.focus())
 }
 
-// 编辑草稿（仅草稿可编辑，详情回填）
+// 编辑草稿（仅草稿可编辑，详情回填）；快速连点两行编辑时旧单慢详情丢弃（BF-2 会话守卫）
 async function openEdit(row: ProductionOrderItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.orderDetail(row.id)
+    if (session !== sessionSeq) return
     editing.value = true
     editingId.value = row.id
     Object.assign(form, {
@@ -142,6 +154,8 @@ async function openEdit(row: ProductionOrderItem) {
     })
     dialogVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前编辑
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

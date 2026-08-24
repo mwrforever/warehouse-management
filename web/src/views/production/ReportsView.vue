@@ -46,9 +46,16 @@ function stepStatus(status: number) {
   return 'wait'
 }
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：快速切换工单 A→B 时，
+// A 的慢 detail 后到必须丢弃——否则步骤条/报工卡片被拉回 A 的工序，用户以为在给 B 报工，
+// 提交却取 currentOp（A 的工序），产量报错工序且无感知
+let loadSeq = 0
+
 // 加载工序（选单/报工成功后调用，步骤条随工序状态自动推进）
 async function loadOperations() {
   const orderId = selectedOrder.value
+  // 入口捕获会话序号：清空选择同样视为新会话，作废在途的旧工单请求
+  const seq = ++loadSeq
   if (!orderId) {
     // 清除工单选择：重置详情/工序/报工表单——防止旧工单残留数据被误提交（bug #3 回归）。
     // 操作人保留预填的当前登录用户（非工单相关字段，随工单切换不应被清空）
@@ -64,8 +71,11 @@ async function loadOperations() {
   }
   loading.value = true
   try {
-    detail.value = await productionApi.orderDetail(orderId)
-    operations.value = detail.value.operations
+    const d = await productionApi.orderDetail(orderId)
+    // 迟到守卫：旧工单的慢响应丢弃，防覆盖新工单已回填的工序状态（所见非所选）
+    if (seq !== loadSeq) return
+    detail.value = d
+    operations.value = d.operations
     // 切换工单后重置报工表单（新工序从零报工）；操作人保留预填的当前登录用户，不被切换清空
     Object.assign(reportForm, {
       qualified_qty: null,
@@ -74,9 +84,12 @@ async function loadOperations() {
       remark: '',
     })
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧工单的报错会打扰当前选择
+    if (seq !== loadSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    loading.value = false
+    // 只有当前会话才能复位 loading，防旧会话提前关掉新会话的加载态
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -105,8 +118,15 @@ function validateHours() {
 
 // 提交报工：校验链（已选工单且有进行中工序 → 合格数必填且 ≤ 计划数 → 工时 ≥0）→ report → 成功提示 → 重新加载工序（步骤条推进）
 async function submitReport() {
-  // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）
-  if (!selectedOrder.value || !detail.value || !currentOp.value) return
+  // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）；
+  // 详情 id 与选中工单不一致（切换在途窗口）同样拒绝——防产量报进旧工单的工序（BF-2）
+  if (
+    !selectedOrder.value ||
+    !detail.value ||
+    detail.value.id !== selectedOrder.value ||
+    !currentOp.value
+  )
+    return
   if (reportForm.qualified_qty == null || Number(reportForm.qualified_qty) < 0) {
     ElMessage.warning('请填写合格的合格数')
     return
