@@ -1,14 +1,12 @@
-// 生产管理模块 E2E：TC-PRD-01~10 完整生产闭环（建工单→下达→开工→领料→报工→委外→成品入库→退料→关闭）
+// 生产管理模块 E2E：TC-PRD-01~10 完整生产闭环（建工单→下达→开工→领料→报工→成品入库→退料→关闭）
 // + 边界拦截（超领/超收/虚报/库存不足）+ 幂等验证 + TC-MST-1113 工序删除保护补测
+// 委外全链路（节点组件口径）见 outsourcing.spec.ts（TC-OS-01~04）
 // 种子基线（InventorySeeder）：MAT-001=100@A-01、SEMI-001=30@A-01、FIN-002=20@B-01（主仓）
-// BOM/工序/供应商无种子 → TC-PRD-01 用 API 幂等自建（镜像销售客户自建模式）：
+// BOM/工序无种子 → TC-PRD-01 用 API 幂等自建（镜像销售客户自建模式）：
 //   BOM(FIN-002, 启用版, MAT-001×2)；工序 下料/组装/质检（sort 1/2/3，BOM 展开按 sort 生成工序序列）；
-//   供应商 SUP-001（委外用）；TC-PRD-10 清空/补回 MAT-001 与 TC-PRD-07 复原 FIN-002 均走库存盘点
+//   TC-PRD-10 清空/补回 MAT-001 与 TC-PRD-07 复原 FIN-002 均走库存盘点
 //   （原料禁售不可销售出库；采购入库会留已审核 PI 行，破坏后跑 purchase.spec 的单 PI 行假设）
 // 库存末态随库存/采购/前置用例变化 → 一律记录「当时余额」P₁/F₁ 按增量断言（balances 按 商品×仓库×库位 分行，汇总求和）
-// 委外发出仓库/库位为 主仓/B-01（FIN-002 种子所在库位）：文档 TC-PRD-06 原写 A-01，但 FIN-002 无 A-01 余额，
-// 且采购入库补库存会留下已审核 PI 行、破坏全量 E2E 中后跑的 purchase.spec（TC-PUR-03 假设「PI」行唯一），
-// 销售用例同样假设 FIN-002 单行余额 → 委外发出/回收均走 B-01（净变动为 0，见文档 §5 注）
 // 定位方式同 sales.spec：el-select 外壳点击 + getByRole('option') 唯一匹配
 import { expect, test, type Page } from '@playwright/test'
 import { loginByAPI } from './helpers'
@@ -82,18 +80,15 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
   let p1a = 0
   let f1 = 0
   let f1b = 0
-  // 单据单号：领料 PL / 退料 RL / 委外 OS / 委外回收 OSR / 成品入库 FI
+  // 单据单号：领料 PL / 退料 RL / 成品入库 FI
   let plNo = ''
   let rlNo = ''
-  let osNo = ''
-  let osrNo = ''
   let fiNo = ''
   // 主数据 id（TC-PRD-01 幂等准备）
   let matId = 0
   let finId = 0
   let semiId = 0
   let pcId = 0
-  let supId = 0
   let whId = 0
   let a01Id = 0
   let b01Id = 0
@@ -124,23 +119,6 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
         const created = await apiPost(page, '/api/v1/processes', p)
         expect(created.code).toBe(0)
       }
-    }
-    // 供应商 SUP-001（委外/补库存数据源；采购模块已建则复用）
-    const supList = await apiGet(page, '/api/v1/suppliers', { keyword: 'SUP-001', per_page: 100 })
-    if (supList.total > 0) {
-      supId = supList.items[0].id as number
-    } else {
-      const sup = await apiPost(page, '/api/v1/suppliers', {
-        name: '测试供应商',
-        code: 'SUP-001',
-        status: 1,
-      })
-      expect(sup.code).toBe(0)
-      const supAfter = await apiGet(page, '/api/v1/suppliers', {
-        keyword: 'SUP-001',
-        per_page: 100,
-      })
-      supId = supAfter.items[0].id as number
     }
     // 客户 CUS-001（销售模块后跑自建，本模块不用——MAT-001 为原料禁售，TC-PRD-10 清空库存走盘点而非销售出库）
     // BOM(FIN-002, 启用版)：MAT-001×2/成品（启用版本唯一，已存在则复用）
@@ -191,8 +169,9 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     await expect(expTables.nth(1).locator('.el-table__row')).toHaveCount(3)
     await expect(expTables.nth(1).locator('.el-table__row').nth(0)).toContainText('下料')
     await exp.getByRole('button', { name: /确\s*定/ }).click()
-    // 列表出现 MO 草稿
-    const row = page.locator('.el-table__row', { hasText: 'MO' })
+    // 列表出现 MO 草稿（列表按 id 倒序 → .first() 即刚建草稿；前置 outsourcing.spec 会留
+    // 生产中 OS2- 工单行，全量串行下不可假设 MO 行唯一）
+    const row = page.locator('.el-table__row', { hasText: 'MO' }).first()
     await expect(row).toContainText('草稿')
     mo1No = (await row.locator('td').first().textContent())?.trim() ?? ''
     expect(mo1No).toMatch(/^MO\d{12}\d{3}$/)
@@ -445,101 +424,6 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     await expect(page.locator('.el-message--warning').last()).toContainText(
       '合格数不能超过工单计划数量',
     )
-  })
-
-  test('TC-PRD-06 委外发出与回收', async ({ page }) => {
-    await loginByAPI(page, 'admin', 'admin123')
-    const mo2Detail = await apiGet(page, `/api/v1/production/orders/${mo2Id}`)
-    const op2 = mo2Detail.operations[1] as { id: number } // 组装（待开工）
-    // 委外量 > 工单计划数 → 1520（草稿期拦截）
-    const over = await apiPost(page, '/api/v1/production/outsourcings', {
-      order_id: mo2Id,
-      operation_id: op2.id,
-      supplier_id: supId,
-      warehouse_id: whId,
-      location_id: a01Id,
-      quantity: 6,
-    })
-    expect(over.code).toBe(1520)
-    expect(over.message).toBe('委外数量超过工单计划数量')
-    // UI 新建委外单：MO-002 / 委外工序=组装 / SUP-001 / 数量 5 / 主仓 B-01（FIN-002 种子库位，见文件头注）
-    await page.goto('/production/orders')
-    const row = page.locator('.el-table__row', { hasText: mo2No })
-    await row.getByRole('button', { name: /委\s*外/ }).click()
-    await expect(page).toHaveURL(/\/production\/outsourcings/)
-    const dialog = page.locator('.el-dialog')
-    await expect(dialog).toBeVisible()
-    await dialog.locator('.el-select', { hasText: '选择工序' }).click()
-    await pickOption(page, '2. 组装')
-    await dialog.locator('.el-select', { hasText: '选择供应商' }).click()
-    await pickOption(page, '测试供应商（SUP-001）')
-    await dialog.locator('.el-input-number input').fill('5')
-    await dialog.locator('.el-select', { hasText: '选择仓库' }).click()
-    await pickOption(page, '主仓')
-    await dialog.locator('.el-select', { hasText: '选择库位' }).click()
-    await pickOption(page, 'B-01')
-    await dialog.getByRole('button', { name: /保\s*存/ }).click()
-    await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    const osRow = page.locator('.el-table__row', { hasText: 'OS' })
-    await expect(osRow).toContainText('草稿')
-    osNo = (await osRow.locator('td').first().textContent())?.trim() ?? ''
-    expect(osNo).toMatch(/^OS\d{12}\d{3}$/)
-    // 审核（发出）：confirm「库存将减少」→ 成功；FIN-002 = F₁-5（outsourcing_out 流水）
-    await osRow.getByRole('button', { name: /审\s*核/ }).click()
-    await expect(page.locator('.el-message-box')).toContainText('库存将减少')
-    await page
-      .locator('.el-message-box')
-      .getByRole('button', { name: /确\s*定/ })
-      .click()
-    await expect(page.locator('.el-message--success').last()).toContainText('发出成功')
-    await expect(page.locator('.el-table__row', { hasText: osNo })).toContainText('已审核')
-    expect(await totalBalance(page, 'FIN-002')).toBe(f1 - 5)
-    const mvOut = await apiGet(page, '/api/v1/inventory/movements', {
-      source_type: 'outsourcing_out',
-      source_no: osNo,
-    })
-    expect(mvOut.total).toBe(1)
-    expect(mvOut.items[0].direction).toBe(-1)
-    expect(Number(mvOut.items[0].quantity)).toBe(5)
-    expect(Number(mvOut.items[0].balance_after)).toBe(f1b - 5)
-    // 回收：弹窗填 5 → 入库仓库主仓/B-01 → 已回收；FIN-002 回补 +5（outsourcing_in 流水，单号 OSR..）
-    // 注意：行内另有「回收记录」按钮，回 收 需 exact 匹配
-    await osRow.getByRole('button', { name: '回 收', exact: true }).click()
-    const rc = page.locator('.el-dialog', { hasText: '委外回收' })
-    await expect(rc).toBeVisible()
-    await expect(rc.locator('.remain-cell').first()).toContainText('5')
-    await rc.locator('.el-select', { hasText: '选择仓库' }).click()
-    await pickOption(page, '主仓')
-    await rc.locator('.el-select', { hasText: '选择库位' }).click()
-    await pickOption(page, 'B-01')
-    await rc.getByRole('button', { name: /提\s*交回收/ }).click()
-    await expect(page.locator('.el-message--success').last()).toContainText('回收成功')
-    await expect(page.locator('.el-table__row', { hasText: osNo })).toContainText('已回收')
-    expect(await totalBalance(page, 'FIN-002')).toBe(f1)
-    const osList = await apiGet(page, '/api/v1/production/outsourcings', { keyword: osNo })
-    const osId = osList.items[0].id as number
-    const receipts = await apiGet(page, `/api/v1/production/outsourcings/${osId}/receipts`)
-    osrNo = receipts.items[0].no as string
-    expect(osrNo).toMatch(/^OSR\d{12}\d{3}$/)
-    const mvIn = await apiGet(page, '/api/v1/inventory/movements', {
-      source_type: 'outsourcing_in',
-      source_no: osrNo,
-    })
-    expect(mvIn.total).toBe(1)
-    expect(mvIn.items[0].direction).toBe(1)
-    expect(Number(mvIn.items[0].quantity)).toBe(5)
-    expect(Number(mvIn.items[0].balance_after)).toBe(f1b)
-    // 超收：再回收 1 → 1524
-    const overRecv = await apiPost(page, `/api/v1/production/outsourcings/${osId}/receipts`, {
-      quantity: 1,
-      warehouse_id: whId,
-      location_id: b01Id,
-    })
-    expect(overRecv.code).toBe(1524)
-    expect(overRecv.message).toBe('回收数量超过委外数量')
-    // 幂等：已回收单重复审核 → 1523
-    const reApprove = await apiPost(page, `/api/v1/production/outsourcings/${osId}/approve`)
-    expect(reApprove.code).toBe(1523)
   })
 
   test('TC-PRD-07 成品入库与工单自动完成', async ({ page }) => {
