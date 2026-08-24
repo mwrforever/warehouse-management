@@ -781,6 +781,28 @@ class OutsourcingTest extends TestCase
         $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os2->fresh()->status);
     }
 
+    // B-104 回归：审核期组件余额行批量预锁——2 组件仅 1 次 in 批量锁查询（修复前循环内逐组件
+    // 各锁一次 = 2 次），与 PickList/PurchaseInbound/SalesOutbound 批量预锁模式对齐；扣减业务结果不变
+    public function test_approve_locks_component_balances_in_single_batch_query(): void
+    {
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        $batchLockQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "inventory_balances"')
+                && str_contains($q['query'], ' in ('));
+        DB::disableQueryLog();
+        // 批量预锁契约：防超卖校验前余额行 whereIn 一次锁定（引擎 apply 内重复加锁幂等，仍为 = 单行形态）
+        $this->assertCount(1, $batchLockQueries);
+        // 业务结果不变：两组件按应发扣减（原料 12→2、半成品B 6→1）
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
+        $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
+    }
+
     // 组件余额读取（该委外仓位的余额行；无行=0，decimal 归一字符串——测试断言口径与实现 bcmath 一致）
     private function balanceOf(int $productId): string
     {

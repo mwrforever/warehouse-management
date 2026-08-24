@@ -24,6 +24,7 @@ use App\Services\InventoryService;
 use App\Services\OutsourcingService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -396,14 +397,24 @@ class OutsourcingController extends Controller
                 // 按发料组件逐行扣（spec 5 §4 规则定义：委外商品=节点输入组件；仅 is_outsourced=1 节点可委外）
                 // 组件预载（items + material 各一条查询，循环内不再触发 N+1 懒加载）
                 $locked->load('items.material');
-                // 组件预锁与校验：按 material_id 升序遍历（多组件锁序稳定，同仓同库位并发扣减串行化；
-                // 余额行「锁+取值」合并单查——锁后从内存取 quantity，避免锁后重查）
+                // 组件余额批量预锁（B-104，宪法 §4.2.2 禁循环内锁查询；与 PickList/PurchaseInbound/
+                // SalesOutbound 批量预锁同款）：发出仓=单头 warehouse/location（同单全部组件同仓同位），
+                // 余额行按 balance_unique(product_id, warehouse_id, location_id) 最左前缀 in 一次锁定——
+                // N 组件 N 次锁查询降为 1 次；in 按 product_id 索引序获取行锁，与原「material_id 升序
+                // 逐行锁」等价单调（组件 material_id 即余额行 product_id，同索引序获取，无 ABBA 新方向）
+                /** @var Collection<int, InventoryBalance> $balanceMap 已锁定的余额行（防超卖校验复用，keyBy product_id） */
+                $balanceMap = InventoryBalance::query()
+                    ->whereIn('product_id', $locked->items->pluck('material_id'))
+                    ->where('warehouse_id', $locked->warehouse_id)
+                    ->where('location_id', $locked->location_id)
+                    ->lockForUpdate()
+                    ->get()
+                    ->keyBy('product_id');
+                // 按发料组件逐行校验（spec 5 §4 规则定义：委外商品=节点输入组件；sortBy material_id
+                // 与余额行锁序同向，多组件校验顺序稳定；余额值取自己锁定的内存模型，锁后不再查库）
                 $movements = [];
                 foreach ($locked->items->sortBy('material_id') as $item) {
-                    $balanceRow = InventoryBalance::where('product_id', $item->material_id)
-                        ->where('warehouse_id', $locked->warehouse_id)
-                        ->where('location_id', $locked->location_id)
-                        ->lockForUpdate()->first();
+                    $balanceRow = $balanceMap->get($item->material_id);
                     // 该仓该位余额（bcmath 归一；无余额行=0——?? 对空左操作数短路，无需 nullsafe）
                     $balance = bcadd((string) ($balanceRow->quantity ?? '0'), '0', 2);
                     if (bccomp($balance, (string) $item->required_qty, 2) < 0) {
