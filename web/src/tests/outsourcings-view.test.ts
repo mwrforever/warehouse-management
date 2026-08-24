@@ -51,7 +51,9 @@ vi.mock('../api/supplier', () => ({
   },
 }))
 vi.mock('../stores/auth', () => ({ useAuthStore: () => ({ has: () => true }) }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+// 路由查询可变载体：vi.hoisted 提升到 mock 工厂可用（keyword 跳转预填用例注入 ?keyword=单号，其余用例空查询）
+const routeQuery = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery.value }) }))
 
 // DAG 基线：OP10 下料（委外+待开工，可选）/ OP20 组装（非委外，不可选）/ OP30 质检（委外但已完成，不可选）
 // / OP40 冲压（委外+待开工，可选——竞态用例的「工序 B」）
@@ -223,6 +225,7 @@ describe('委外页：工序节点预填 + 组件应发折算 + 余料退回', (
     vi.clearAllMocks()
     setActivePinia(createPinia())
     wrapper = undefined
+    routeQuery.value = {}
     mocks.outsourcings.mockResolvedValue(page([]))
     mocks.orders.mockResolvedValue(
       page([
@@ -741,5 +744,20 @@ describe('委外页：工序节点预填 + 组件应发折算 + 余料退回', (
       location_id: 2,
       remark: '',
     })
+  })
+
+  // BF-1 回归：工序网络「打开委外页」跳转携带 ?keyword=单号，委外页须消费该参数实现按单号定位
+  it('keyword 跳转预填：携带单号进入时首查即带 keyword 出参且筛选框回显单号', async () => {
+    routeQuery.value = { keyword: 'OS20260824-009' }
+    const wrapper = await mountView()
+    // 首查（onMounted search）即携带单号出参，且全程仅此一次查询（setup 期预填不触发防抖链重复请求）
+    expect(mocks.outsourcings).toHaveBeenCalledTimes(1)
+    expect(mocks.outsourcings).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: 'OS20260824-009' }),
+    )
+    // 筛选框回显单号（ListFilterBar 以 props.keyword 为内部防抖源初始值）
+    expect((wrapper.find('.kw-input input').element as HTMLInputElement).value).toBe(
+      'OS20260824-009',
+    )
   })
 })

@@ -58,6 +58,12 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
   onError: (e) => ElMessage.error(e.message),
 })
 
+// 工序网络「打开委外页」跳转携带 ?keyword=单号：setup 期预填筛选实现按单号定位（BF-1）。
+// 必须在挂载前赋值——ListFilterBar 以 props.keyword 为内部防抖源初始值，挂载后再赋值会触发
+// 其 300ms 防抖链回发一次重复查询；onMounted 的 search() 即携带单号出参。重置仍回空串（defaultQuery）
+const routeKeyword = route.query.keyword
+if (routeKeyword) query.keyword = String(routeKeyword)
+
 // 新建/编辑弹窗状态
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null) // 当前编辑草稿 id（null 表示新建）

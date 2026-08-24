@@ -668,5 +668,7 @@ test.describe('委外加工模块 E2E（TC-OS-01~04）', () => {
     await expect(page).toHaveURL(/\/production\/outsourcings\?keyword=/)
     const listRow = page.locator('.el-table__row', { hasText: osNo })
     await expect(listRow).toContainText('已关闭')
+    // BF-1 回归：委外页消费 keyword 参数——按单号过滤后列表仅剩目标单（此前不消费参数展示全量列表，定位名存实亡）
+    await expect(page.locator('.el-table__row')).toHaveCount(1)
   })
 })
