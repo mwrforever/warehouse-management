@@ -257,10 +257,14 @@ class RoutingService
         });
     }
 
-    /** 完整 DAG 图（画布回显/查看） */
+    /** 完整 DAG 图（画布回显/查看），预加载消除关系懒加载 N+1 */
     public function graph(RoutingHeader $routing): array
     {
-        $routing->load(['product', 'nodes.materials.material', 'nodes.materials.unit', 'nodes.process', 'nodes.outputProduct']);
+        // 一次预加载全部被消费的关系（含边端点节点）；下方直接消费已加载集合，禁止再发起关系查询
+        $routing->load([
+            'product', 'nodes.materials.material', 'nodes.materials.unit',
+            'nodes.process', 'nodes.outputProduct', 'edges.fromNode', 'edges.toNode',
+        ]);
 
         return [
             'routing' => [
@@ -269,7 +273,8 @@ class RoutingService
                 'quantity' => (float) $routing->quantity, 'status' => (int) $routing->status,
                 'remark' => $routing->remark,
             ],
-            'nodes' => $routing->nodes()->orderBy('id')->get()->map(fn (RoutingNode $n) => [
+            // sortBy 为集合内存排序（等价原查询的 orderBy('id')），输出顺序不变
+            'nodes' => $routing->nodes->sortBy('id')->map(fn (RoutingNode $n) => [
                 'id' => $n->id, 'node_no' => $n->node_no, 'process_id' => $n->process_id,
                 'process_name' => $n->process?->name, 'name' => $n->name,
                 'output_product_id' => $n->output_product_id, 'output_product_name' => $n->outputProduct?->name,
@@ -280,7 +285,7 @@ class RoutingService
                     'qty_per_unit' => (float) $m->qty_per_unit, 'unit_id' => $m->unit_id, 'unit_name' => $m->unit?->name,
                 ])->all(),
             ]),
-            'edges' => $routing->edges()->orderBy('id')->get()->map(fn (RoutingEdge $e) => [
+            'edges' => $routing->edges->sortBy('id')->map(fn (RoutingEdge $e) => [
                 'id' => $e->id, 'from_node_no' => $e->fromNode?->node_no, 'to_node_no' => $e->toNode?->node_no,
             ]),
         ];
