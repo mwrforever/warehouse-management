@@ -22,10 +22,12 @@ use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Feature\Concerns\DagOrderFactory;
 use Tests\TestCase;
 
 class OutsourcingTest extends TestCase
 {
+    use DagOrderFactory;
     use RefreshDatabase;
 
     private string $token;
@@ -35,6 +37,8 @@ class OutsourcingTest extends TestCase
     private Warehouse $wh;
 
     private Location $b01;
+
+    private Unit $unit;
 
     private Product $mat;
 
@@ -61,11 +65,11 @@ class OutsourcingTest extends TestCase
         $this->supplier = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
         $rawCat = Category::create(['name' => '原材料', 'parent_id' => 0]);
         $cat = Category::create(['name' => '成品', 'parent_id' => 0]);
-        $unit = Unit::create(['name' => '个', 'code' => 'pc']);
-        $this->mat = Product::create(['name' => '测试铝材', 'code' => 'MAT-001', 'type' => 'raw_material', 'category_id' => $rawCat->id, 'unit_id' => $unit->id, 'status' => 1]);
-        $this->fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
+        $this->unit = Unit::create(['name' => '个', 'code' => 'pc']);
+        $this->mat = Product::create(['name' => '测试铝材', 'code' => 'MAT-001', 'type' => 'raw_material', 'category_id' => $rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        $this->fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
         $bom = BomHeader::create(['code' => 'BOM-001', 'product_id' => $this->fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
-        $bom->items()->create(['material_id' => $this->mat->id, 'quantity' => 2, 'unit_id' => $unit->id]);
+        $bom->items()->create(['material_id' => $this->mat->id, 'quantity' => 2, 'unit_id' => $this->unit->id]);
         foreach ([['下料', 'CUT', 1], ['组装', 'ASSY', 2], ['质检', 'QC', 3]] as [$name, $code, $sort]) {
             Process::create(['name' => $name, 'code' => $code, 'sort' => $sort, 'status' => 1]);
         }
@@ -90,7 +94,8 @@ class OutsourcingTest extends TestCase
         $this->assemblyOpId = $this->order->operations()->where('seq', 2)->first()->id;
     }
 
-    // 组装委外载荷（默认组装工序×5，发出仓 B-01——与基线库存同库位，审核扣减与回收入账落在同一余额行）
+    // 组装委外载荷（默认组装工序×5，发出仓 B-01——与基线库存同库位，审核扣减与回收入账落在同一余额行；
+    // items 为载荷必填（422 格式层），旧线性工单无路线节点直落一行默认组件，DAG 用例各自显式覆盖）
     private function payload(array $overrides = []): array
     {
         return array_merge([
@@ -100,6 +105,9 @@ class OutsourcingTest extends TestCase
             'warehouse_id' => $this->wh->id,
             'location_id' => $this->b01->id,
             'quantity' => 5,
+            'items' => [
+                ['material_id' => $this->mat->id, 'required_qty' => 10, 'unit_id' => $this->unit->id],
+            ],
         ], $overrides);
     }
 
@@ -364,5 +372,69 @@ class OutsourcingTest extends TestCase
         // 真实 HTTP 每次请求独立容器不受影响），故先重置 guard，再以普通用户 token 验证无权限被拒
         $this->app['auth']->forgetGuards();
         $this->withToken($token)->getJson('/api/v1/production/outsourcings')->assertStatus(403);
+    }
+
+    // OUT-01：从工序节点预填组件清单（应发基数=节点单位用量）+ 回收品 + 剩余可委外量（DAG 委外节点 OP30：
+    // 输入=原料×2/半成品B×1，产出=半成品B，工单计划 6）
+    public function test_from_operation_prefills_components(): void
+    {
+        ['ops' => $ops, 'raw' => $raw, 'semiB' => $semiB] = $this->dagOrder();
+        $res = $this->withToken($this->token)
+            ->getJson("/api/v1/production/outsourcings/from-operation/{$ops['OP30']->id}");
+        $res->assertJsonPath('code', 0)
+            ->assertJsonPath('data.output_product_id', $semiB->id)
+            ->assertJsonPath('data.plan_qty', '6.00')
+            ->assertJsonPath('data.outsourced_qty', '0.00')
+            ->assertJsonPath('data.remaining_qty', '6.00');
+        $items = collect($res->json('data.items'));
+        $this->assertSame('2.00', $items->firstWhere('material_id', $raw->id)['qty_per_unit']);
+        $this->assertSame('1.00', $items->firstWhere('material_id', $semiB->id)['qty_per_unit']);
+    }
+
+    // OUT-01：非委外节点不可预填（422 结构不符）
+    public function test_from_operation_rejects_non_outsourced_node(): void
+    {
+        ['ops' => $ops] = $this->dagOrder();
+        $this->withToken($this->token)
+            ->getJson("/api/v1/production/outsourcings/from-operation/{$ops['OP20']->id}")
+            ->assertJsonPath('code', 422);
+    }
+
+    // OUT-01：带组件新建草稿（items 落库 + output_product 快照自节点）
+    public function test_store_creates_draft_with_items(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw, 'semiB' => $semiB] = $this->dagOrder();
+        $no = $this->createOutsourcing([
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $raw->id, 'required_qty' => 12, 'unit_id' => $raw->unit_id],
+                ['material_id' => $semiB->id, 'required_qty' => 6, 'unit_id' => $semiB->unit_id],
+            ],
+        ]);
+        $this->assertDatabaseHas('outsourcing_order_items', [
+            'material_id' => $raw->id, 'required_qty' => '12.00', 'issued_qty' => '0.00',
+        ]);
+        $this->assertSame($semiB->id, OutsourcingOrder::where('no', $no)->first()->output_product_id);
+    }
+
+    // 载荷校验：应发超单位用量×数量 → 422（bcmath 后端权威）
+    public function test_store_rejects_items_over_required_cap(): void
+    {
+        ['order' => $order, 'ops' => $ops, 'raw' => $raw] = $this->dagOrder();
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', [
+            'order_id' => $order->id,
+            'operation_id' => $ops['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [['material_id' => $raw->id, 'required_qty' => 13, 'unit_id' => $raw->unit_id]],
+        ])->assertJsonPath('code', 422)
+            ->assertJsonPath('message', '应发数量超过单位用量折算上限');
     }
 }

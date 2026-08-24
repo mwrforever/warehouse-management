@@ -1,7 +1,8 @@
 <?php
 
-// 委外加工控制器：草稿 CRUD + 发出（审核：锁余额行防超卖 1522）+ 回收（创建即审核回收单 + 工序联动）
-// 委外商品 = 工单成品（spec 数据模型无 product_id，E2E TC-PRD-06 锁定）
+// 委外加工控制器：from-operation 预填 + 草稿 CRUD（组件载荷校验，委外量 ≤ 节点剩余计划量 1520）+ 发出
+// （审核：锁余额行防超卖 1522）+ 回收（创建即审核回收单 + 工序联动）
+// 委外商品 = 工单成品（spec 数据模型无 product_id，E2E TC-PRD-06 锁定——Task 3 起改组件口径）
 
 namespace App\Http\Controllers\Api;
 
@@ -18,6 +19,7 @@ use App\Models\WorkOrderOperation;
 use App\Models\WorkOrderOperationEdge;
 use App\Services\DocumentSequenceService;
 use App\Services\InventoryService;
+use App\Services\OutsourcingService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +31,7 @@ class OutsourcingController extends Controller
     public function __construct(
         private InventoryService $inventoryService,
         private DocumentSequenceService $sequenceService,
+        private OutsourcingService $outsourcingService,
     ) {}
 
     /** 分页列表：单号/供应商/状态 筛选；含工单单号/供应商名/工序名与状态标签 */
@@ -78,7 +81,7 @@ class OutsourcingController extends Controller
         ]);
     }
 
-    /** 新建草稿：委外量 ≤ 工单计划数（1520）；工序必须属于该工单（422） */
+    /** 新建草稿：委外量 ≤ 节点剩余计划量（1520）；工序必须属于该工单（422）；组件载荷检单元节点口径（422） */
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
@@ -91,42 +94,77 @@ class OutsourcingController extends Controller
         if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
             return $this->fail(422, '仓库与库位不能为空');
         }
-        // 草稿期校验：委外量 ≤ 工单计划数（1520）
-        $order = ProductionOrder::find($data['order_id']);
-        if (! $order || bccomp((string) $data['quantity'], (string) $order->quantity, 2) > 0) {
-            return $this->fail(1520, '委外数量超过工单计划数量');
-        }
         // 工序必须属于该工单（防跨单挂工序）
         $op = WorkOrderOperation::where('id', $data['operation_id'])->where('order_id', $data['order_id'])->first();
         if (! $op) {
             return $this->fail(422, '工序不属于该工单');
         }
+        // 委外对象=工艺路线节点（无路线旧线性工单返回 null，走「委外=工单成品」兼容口径，Task 5 迁移后收敛）
+        $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
+        if ($node) {
+            if ((int) $op->is_outsourced !== 1) {
+                return $this->fail(422, '该工序不是委外工序');
+            }
+            if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
+                return $this->fail(422, '该工序已完成，不可委外');
+            }
+        }
+        // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
+        $order = ProductionOrder::find($data['order_id']);
+        $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
+            ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
+        if (! $order || bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+            return $this->fail(1520, '委外数量超过工单计划数量');
+        }
 
-        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
-        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-        $os = DB::transaction(function () use ($data) {
-            $os = $this->sequenceService->nextNoByConfig(
-                DocumentSequence::TYPE_OS,
-                fn (string $no) => OutsourcingOrder::create([
-                    'no' => $no,
-                    'order_id' => $data['order_id'],
-                    'operation_id' => $data['operation_id'],
-                    'supplier_id' => $data['supplier_id'],
-                    'status' => OutsourcingOrder::STATUS_DRAFT,
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'quantity' => $data['quantity'],
-                    'remark' => $data['remark'] ?? null,
-                ]),
-                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn (string $prefix, string $dateKey) => ($no = OutsourcingOrder::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-            );
+        try {
+            // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+            // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
+            $os = DB::transaction(function () use ($data, $node) {
+                $os = $this->sequenceService->nextNoByConfig(
+                    DocumentSequence::TYPE_OS,
+                    fn (string $no) => OutsourcingOrder::create([
+                        'no' => $no,
+                        'order_id' => $data['order_id'],
+                        'operation_id' => $data['operation_id'],
+                        'supplier_id' => $data['supplier_id'],
+                        'status' => OutsourcingOrder::STATUS_DRAFT,
+                        'warehouse_id' => $data['warehouse_id'],
+                        'location_id' => $data['location_id'],
+                        'quantity' => $data['quantity'],
+                        // 回收品=节点输出产品快照（旧线性工单无节点保持空，废弃口径）
+                        'output_product_id' => $node?->output_product_id,
+                        'remark' => $data['remark'] ?? null,
+                    ]),
+                    // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                    fn (string $prefix, string $dateKey) => ($no = OutsourcingOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                        ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
+                );
+                // 组件行落库：DAG 节点逐行校验（应发 ≤ 单位用量×委外量，bcmath 权威）；旧线性工单直落兼容
+                $items = $node
+                    ? $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity'])
+                    : $data['items'];
+                $os->items()->createMany($items);
 
-            return $os;
-        }, 2);
+                return $os;
+            }, 2);
+        } catch (ProductionException $e) {
+            // 422 组件载荷不符（应发超上限/重复/非节点材料，事务整体回滚）
+            return $this->fail($e->getCode() ?: 422, $e->getMessage());
+        }
 
         return $this->ok(['no' => $os->no]);
+    }
+
+    /** from-operation 预填：节点输入材料清单×单位用量 + 回收品 + 计划/已委外/剩余量（结构不符 422） */
+    public function fromOperation(int $operationId)
+    {
+        try {
+            return $this->ok($this->outsourcingService->fromOperation($operationId));
+        } catch (ProductionException $e) {
+            // 422：工单无路线/节点非委外/节点已完成等结构不符（预填不可用）
+            return $this->fail($e->getCode() ?: 422, $e->getMessage());
+        }
     }
 
     /** 详情：头信息 + 回收记录摘要 */
@@ -156,7 +194,7 @@ class OutsourcingController extends Controller
         ]);
     }
 
-    /** 更新草稿：仅草稿（1521）；校验同 store；事务内锁行复查防并发 */
+    /** 更新草稿：仅草稿（1521）；校验同 store；items 全量替换；事务内锁行复查防并发 */
     public function update(Request $request, OutsourcingOrder $outsourcing)
     {
         try {
@@ -173,21 +211,39 @@ class OutsourcingController extends Controller
             if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
                 return $this->fail(422, '仓库与库位不能为空');
             }
-            $order = ProductionOrder::find($data['order_id']);
-            if (! $order || bccomp((string) $data['quantity'], (string) $order->quantity, 2) > 0) {
-                return $this->fail(1520, '委外数量超过工单计划数量');
-            }
             $op = WorkOrderOperation::where('id', $data['operation_id'])->where('order_id', $data['order_id'])->first();
             if (! $op) {
                 return $this->fail(422, '工序不属于该工单');
             }
+            // 委外对象=工艺路线节点（无路线旧线性工单返回 null，走「委外=工单成品」兼容口径，Task 5 迁移后收敛）
+            $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
+            if ($node) {
+                if ((int) $op->is_outsourced !== 1) {
+                    return $this->fail(422, '该工序不是委外工序');
+                }
+                if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
+                    return $this->fail(422, '该工序已完成，不可委外');
+                }
+            }
+            // 草稿期校验：委外量 ≤ 剩余可委外量（排除本次编辑自身——草稿本不在非草稿口径，双保险）
+            $order = ProductionOrder::find($data['order_id']);
+            $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
+                ->where('id', '!=', $outsourcing->id)
+                ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
+            if (! $order || bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+                return $this->fail(1520, '委外数量超过工单计划数量');
+            }
 
-            DB::transaction(function () use ($outsourcing, $data) {
+            DB::transaction(function () use ($outsourcing, $data, $node) {
                 // 锁委外单行复查状态（幂等 1521）
                 $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
                 if ($locked->status !== OutsourcingOrder::STATUS_DRAFT) {
                     throw new ProductionException('已审核单据不可修改', 1521);
                 }
+                // 组件载荷校验（DAG 节点口径；旧线性工单直落兼容）——校验失败整单回滚
+                $items = $node
+                    ? $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity'])
+                    : $data['items'];
                 $locked->update([
                     'order_id' => $data['order_id'],
                     'operation_id' => $data['operation_id'],
@@ -195,11 +251,16 @@ class OutsourcingController extends Controller
                     'warehouse_id' => $data['warehouse_id'],
                     'location_id' => $data['location_id'],
                     'quantity' => $data['quantity'],
+                    // 回收品=节点输出产品快照（旧线性工单无节点置空，废弃口径）
+                    'output_product_id' => $node?->output_product_id,
                     'remark' => $data['remark'] ?? $locked->remark,
                 ]);
+                // 组件全量替换（草稿单无流水引用，直接重建；唯一键防重复）
+                $locked->items()->delete();
+                $locked->items()->createMany($items);
             });
         } catch (ProductionException $e) {
-            // 1521 已审核（锁行复查与并发审核幂等拦截）
+            // 1521 已审核（锁行复查与并发审核幂等拦截）/ 422 组件载荷不符
             return $this->fail($e->getCode() ?: 1521, $e->getMessage());
         }
 
@@ -458,10 +519,10 @@ class OutsourcingController extends Controller
         return $total === null ? '0' : bcadd((string) $total, '0', 2);
     }
 
-    // 委外单载荷格式校验（422 仅格式层）；业务码在方法内检查
+    // 委外单载荷格式校验（422 仅格式层）；业务码在方法内检查；items 组件行归一化字符串供 bcmath 校验
     private function validatePayload(Request $request): array
     {
-        return $request->validate([
+        $data = $request->validate([
             'order_id' => 'required|integer|exists:production_orders,id',
             'operation_id' => 'required|integer|exists:work_order_operations,id',
             'supplier_id' => 'nullable|integer|exists:suppliers,id',
@@ -469,7 +530,24 @@ class OutsourcingController extends Controller
             'location_id' => 'nullable|integer|exists:locations,id',
             'quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
             'remark' => 'nullable|string|max:200',
+            // 发料组件必填（载荷重构后草稿必带组件）；数量限两位小数，正则按字符串形态校验拦 1e2 科学计数
+            'items' => 'required|array|min:1',
+            'items.*.material_id' => 'required|integer|exists:products,id',
+            'items.*.required_qty' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
+            'items.*.unit_id' => 'required|integer|exists:units,id',
         ]);
+
+        // 组件行类型归一：应发数量统一字符串（bcmath 权威比较），物料/单位回整型
+        $data['items'] = array_map(
+            fn (array $item) => [
+                'material_id' => (int) $item['material_id'],
+                'required_qty' => (string) $item['required_qty'],
+                'unit_id' => (int) $item['unit_id'],
+            ],
+            (array) $data['items'],
+        );
+
+        return $data;
     }
 
     // 回收载荷格式校验（422 仅格式层）
