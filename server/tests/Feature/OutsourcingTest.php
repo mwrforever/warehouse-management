@@ -803,6 +803,25 @@ class OutsourcingTest extends TestCase
         $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
     }
 
+    // P-3 回归：零组件防线判空与组件预载共用一次 items 查询——修复前 count() 判空 +
+    // load('items.material') 对 outsourcing_order_items 查 2 次，合并后 1 次；
+    // 零组件 422 防线行为由 OutsourcingReturnTest::test_approve_rejects_legacy_draft_without_items_422 守护
+    public function test_approve_items_guard_and_prefetch_share_single_query(): void
+    {
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        $itemsQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "outsourcing_order_items"'));
+        DB::disableQueryLog();
+        // 单查契约：判空防线与循环预载共用一次 items 查询（count + load 双查已合并）
+        $this->assertCount(1, $itemsQueries);
+    }
+
     // 组件余额读取（该委外仓位的余额行；无行=0，decimal 归一字符串——测试断言口径与实现 bcmath 一致）
     private function balanceOf(int $productId): string
     {

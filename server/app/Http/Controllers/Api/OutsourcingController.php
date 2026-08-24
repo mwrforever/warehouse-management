@@ -374,8 +374,11 @@ class OutsourcingController extends Controller
                     throw new ProductionException('该委外单已关闭', 1523);
                 }
                 // 零组件历史草稿防线（迁移前建单可能无 outsourcing_order_items 行）：无发料组件不可
-                // 发出——防 $movements 为空时跳过扣减直接置已审核（历史脏数据兜底，同 1529 数据异常哲学）
-                if ($locked->items()->count() === 0) {
+                // 发出——防 $movements 为空时跳过扣减直接置已审核（历史脏数据兜底，同 1529 数据异常哲学）；
+                // 判空与组件预载共用本次查询（P-3）：items+material 各一条查询供下方扣减循环复用
+                // （空集合时 material 预载短路不发查询），不再 count+load 双查 items 表
+                $locked->load('items.material');
+                if ($locked->items->isEmpty()) {
                     throw new ProductionException('委外单缺少发料组件，不可发出', 422);
                 }
                 // 锁工单行：校验工单状态（草稿/关闭不可发出）——锁序「委外单 → 工单」与回收 storeReceipt 单调同向
@@ -395,8 +398,6 @@ class OutsourcingController extends Controller
                     throw new ProductionException('委外数量超过节点剩余计划量', 1520);
                 }
                 // 按发料组件逐行扣（spec 5 §4 规则定义：委外商品=节点输入组件；仅 is_outsourced=1 节点可委外）
-                // 组件预载（items + material 各一条查询，循环内不再触发 N+1 懒加载）
-                $locked->load('items.material');
                 // 组件余额批量预锁（B-104，宪法 §4.2.2 禁循环内锁查询；与 PickList/PurchaseInbound/
                 // SalesOutbound 批量预锁同款）：发出仓=单头 warehouse/location（同单全部组件同仓同位），
                 // 余额行按 balance_unique(product_id, warehouse_id, location_id) 最左前缀 in 一次锁定——
