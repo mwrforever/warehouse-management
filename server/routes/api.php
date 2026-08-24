@@ -301,7 +301,7 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.return.update')->post('/production/returns/{return}/approve', [ReturnListController::class, 'approve']);
     });
 
-    // 委外加工：CRUD + from-operation 预填 + 发出（审核）+ 回收（production.outsource.*；审核/回收复用 update）
+    // 委外加工：CRUD + from-operation 预填 + 发出（审核）+ 回收 + 余料退回（production.outsource.*；审核/回收复用 update）
     Route::middleware('auth:sanctum')->group(function () {
         // from-operation 必须先于 {outsourcing} 注册（operationId 不被解析为委外单 ID）
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/from-operation/{operationId}', [OutsourcingController::class, 'fromOperation']);
@@ -313,6 +313,8 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/approve', [OutsourcingController::class, 'approve']);
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'storeReceipt']);
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'receipts']);
+        Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/returns', [OutsourcingController::class, 'storeReturn']);
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/returns', [OutsourcingController::class, 'returnList']);
     });
 
     // 成品入库单：CRUD + 审核（production.finished.*；审核复用 update）

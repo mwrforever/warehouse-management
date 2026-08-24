@@ -1,7 +1,8 @@
 <?php
 
 // 委外加工控制器：from-operation 预填 + 草稿 CRUD（组件载荷校验，委外量 ≤ 节点剩余计划量 1520）+ 发出
-// （审核：DAG 工单扣发料组件库存防超卖 1522，旧线性工单仍扣成品，Task 5 收敛）+ 回收（创建即审核回收单 + 工序联动）
+// （审核：DAG 工单扣发料组件库存防超卖 1522，旧线性工单仍扣成品，Task 5 收敛）+ 回收（创建即审核回收单 +
+// 工序联动，回收品=节点输出 output_product_id 一致性 1529）+ 余料退回（创建即审核，全退自动关闭）
 // 委外商品口径：DAG 工单 = 发料组件（Task 3 起，spec §12.10）；无路线旧工单 = 工单成品（legacy 兼容，Task 5 移除）
 
 namespace App\Http\Controllers\Api;
@@ -13,6 +14,7 @@ use App\Models\DocumentSequence;
 use App\Models\InventoryBalance;
 use App\Models\OutsourcingOrder;
 use App\Models\OutsourcingReceipt;
+use App\Models\OutsourcingReturn;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\WorkOrderOperation;
@@ -35,7 +37,7 @@ class OutsourcingController extends Controller
         private OutsourcingService $outsourcingService,
     ) {}
 
-    /** 分页列表：单号/供应商/状态 筛选；含工单单号/供应商名/工序名与状态标签 */
+    /** 分页列表：单号/工单/工序/供应商/状态 筛选；含工单单号/供应商名/工序名与状态标签 */
     public function index(Request $request)
     {
         $query = OutsourcingOrder::query()
@@ -56,6 +58,13 @@ class OutsourcingController extends Controller
         }
         if ($request->filled('status')) {
             $query->where('outsourcing_orders.status', (int) $request->input('status'));
+        }
+        // 工单/工序键控过滤（列表联动筛选入口）
+        if ($request->filled('order_id')) {
+            $query->where('outsourcing_orders.order_id', (int) $request->input('order_id'));
+        }
+        if ($request->filled('operation_id')) {
+            $query->where('outsourcing_orders.operation_id', (int) $request->input('operation_id'));
         }
 
         $rows = $query->paginate(max(1, min(100, (int) $request->input('per_page', 10))));
@@ -404,10 +413,12 @@ class OutsourcingController extends Controller
     }
 
     /**
-     * 回收：事务内「锁委外单（草稿不可回收 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）→ 锁同单全部工序行
-     * （id 升序，含委外工序：DAG 后继就绪判定需读其它前驱状态，与报工/完工在行级全序上单调同向）→ 锁工单行取成品 →
-     * InventoryService 写 outsourcing_in 流水(+qty) → 创建回收单（创建即审核）→ 累计 ≥ 委外量 → 委外单已回收 +
-     * 工序标记完成 + DAG 工单（routing_id 非空）推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，
+     * 回收：事务内「锁委外单（状态 ∈ [已发出,已回收]，草稿/已关闭 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）
+     * → 回收品一致性校验（回收商品=委外单 output_product_id 节点输出；为空数据异常或与请求 product_id 不符 →
+     * 1529「回收商品与委外工序产出不一致」）→ 锁同单全部工序行（id 升序，含委外工序：DAG 后继就绪判定需读其它前驱状态，
+     * 与报工/完工在行级全序上单调同向）→ 锁工单行校验状态 → InventoryService 写 outsourcing_in 流水(+qty，
+     * 商品=output_product_id) → 创建回收单（创建即审核）→ 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成 +
+     * DAG 工单（routing_id 非空）推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，
      * 与 OperationReportController::store 同口径；旧工单仅置 DONE 不推进）」任一步失败整体回滚；
      * 锁序 outsourcing→全部工序(升序)→order 与报工（op 全集→order）/完工（全工序→order）行级单调同向，
      * 消除「末批回收 vs 工序报工」并发 ABBA 死锁环
@@ -424,11 +435,22 @@ class OutsourcingController extends Controller
             // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：OSR 序列行首建
             // 间隙锁死锁败方整体回滚后重跑闭包重新取号+重发库存流水，幂等安全）
             DB::transaction(function () use ($outsourcing, $data, &$result) {
-                // 锁委外单行：回收并发串行化（累计回收判定一致）；仅草稿不可回收（422）——
-                // 已回收单放行到超收校验：再回收必然超收 → 1524（E2E TC-PRD-06 锁定）
+                // 锁委外单行：回收并发串行化（累计回收判定一致）；仅 [已发出, 已回收] 可回收——
+                // 草稿（422）与已关闭（422 防关闭后回灌库存）拦截；已回收单放行到超收校验：
+                // 再回收必然超收 → 1524（E2E TC-PRD-06 锁定）
                 $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === OutsourcingOrder::STATUS_DRAFT) {
+                if (! in_array($locked->status, [OutsourcingOrder::STATUS_APPROVED, OutsourcingOrder::STATUS_RECEIVED], true)) {
                     throw new ProductionException('当前委外单不可回收', 422);
+                }
+                // 回收商品=委外单回收品（节点输出），替代旧「工单成品」口径；
+                // output_product_id 为空属数据异常（无路线旧工单回收自此不可用，Task 5 收敛 legacy）、
+                // 请求显式 product_id 冒烟校验不符同样 1529
+                $outputProductId = (int) $locked->output_product_id;
+                if ($outputProductId <= 0) {
+                    throw new ProductionException('回收商品与委外工序产出不一致', 1529);
+                }
+                if (($data['product_id'] ?? null) !== null && (int) $data['product_id'] !== $outputProductId) {
+                    throw new ProductionException('回收商品与委外工序产出不一致', 1529);
                 }
                 // 累计回收 + 本次 ≤ 委外量（超收 1524 整体回滚）
                 $received = $this->receivedQty($locked->id);
@@ -442,15 +464,15 @@ class OutsourcingController extends Controller
                     ->orderBy('id')->lockForUpdate()->get();
                 // 委外工序行从已锁全集取（与报工控制器同构；行缺失防御性跳过）
                 $op = $allOps->find($locked->operation_id);
-                // 锁工单行取委外商品（= 工单成品）
+                // 锁工单行校验工单状态（回收商品取自已锁委外单 output_product_id，工单行仅承载状态语义）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
                 // 工单状态校验：与发出 approve 同口径 [RELEASED, PRODUCING]（spec §5.1 生产中→委外）
                 if (! in_array($order->status, [ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING], true)) {
                     throw new ProductionException('工单当前状态不可委外', 1523);
                 }
-                // 统一引擎写流水+加余额（同事务双写）
+                // 统一引擎写流水+加余额（同事务双写；商品=回收品节点输出）
                 $this->inventoryService->apply([[
-                    'product_id' => $order->product_id,
+                    'product_id' => $outputProductId,
                     'warehouse_id' => $data['warehouse_id'],
                     'location_id' => $data['location_id'],
                     'direction' => 1,
@@ -558,6 +580,146 @@ class OutsourcingController extends Controller
         ]);
     }
 
+    /**
+     * 余料退回：事务内「锁委外单（状态 ∈ [已发出,已回收]，草稿/已关闭 422「当前委外单不可退回」）→ 锁同单组件行
+     * （单语句获取，锁序 单据头 → 明细）→ 逐行校验组件归属与退回量 ≤ 已发−已退（bcmath，
+     * 422「退回数量超过已发未退数量」）→ 按 material_id 升序写 outsourcing_return 流水(+qty，
+     * source_no 空串占位后续回补——库存行锁序与发出 approve 同向) → 创建退回单（TYPE_OSRT 取号 ORT、创建即审核；
+     * 多行提交仅记首行——偏离记录⑨，明细以流水逐行留痕）→ 流水单号回补 → returned_qty 回写（bcadd 累计）→
+     * 全部组件 returned==issued → 委外单已关闭」任一步失败整体回滚
+     */
+    public function storeReturn(Request $request, OutsourcingOrder $outsourcing)
+    {
+        $data = $this->validatePayloadReturn($request);
+
+        try {
+            $result = null;
+            // 事务第 2 参数为死锁(1213)重试次数（机理同 storeReceipt：ORT 序列行首间隙锁死锁败方
+            // 整体回滚后重跑闭包重新取号+重发库存流水，幂等安全）
+            DB::transaction(function () use ($outsourcing, $data, &$result) {
+                // 锁委外单行：退回并发串行化（累计退回判定一致）；仅 [已发出, 已回收] 可退回（草稿/已关闭 422）
+                $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
+                if (! in_array($locked->status, [OutsourcingOrder::STATUS_APPROVED, OutsourcingOrder::STATUS_RECEIVED], true)) {
+                    throw new ProductionException('当前委外单不可退回', 422);
+                }
+                // 组件行锁定（单语句获取全部行，锁序 单据头 → 明细）：item 归属校验 + 退回量 ≤ 已发−已退
+                $items = $locked->items()->lockForUpdate()->get()->keyBy('id');
+                $lines = [];
+                foreach ($data['items'] as $line) {
+                    if (bccomp($line['quantity'], '0', 2) <= 0) {
+                        throw new ProductionException('退回数量必须大于 0', 422);
+                    }
+                    $item = $items->get($line['item_id']);
+                    if (! $item) {
+                        throw new ProductionException('退回组件不属于该委外单', 422);
+                    }
+                    // 剩余可退 = 已发 − 已退（bcmath 权威；已发 0 的组件剩余 0，天然防未发先退）
+                    $remaining = bcsub((string) $item->issued_qty, (string) $item->returned_qty, 2);
+                    if (bccomp($line['quantity'], $remaining, 2) > 0) {
+                        throw new ProductionException('退回数量超过已发未退数量', 422);
+                    }
+                    $lines[] = ['item' => $item, 'quantity' => $line['quantity']];
+                }
+                // 按 material_id 升序写流水（余额行锁序与发出 approve 同向，多组件并发退回串行化）
+                $movements = [];
+                foreach (collect($lines)->sortBy(fn (array $l) => $l['item']->material_id) as $l) {
+                    $movements[] = [
+                        'product_id' => $l['item']->material_id,
+                        'warehouse_id' => $data['warehouse_id'],
+                        'location_id' => $data['location_id'],
+                        'direction' => 1,
+                        // 引擎签名 quantity 为 float（历史契约单值传输，校验全走 bcmath 字符串，偏离记录⑤）
+                        'quantity' => (float) $l['quantity'],
+                        'source_type' => 'outsourcing_return',
+                        'source_id' => $locked->id,
+                        'source_no' => '',
+                        'remark' => '余料退回',
+                    ];
+                }
+                // 全部行校验通过后统一写流水（余额行升序加锁；初建无退货单号，先以空串占位后回补）
+                if ($movements !== []) {
+                    $this->inventoryService->apply($movements, auth()->id());
+                }
+                // 创建退回单（创建即审核）：单号 ORT 占号后统一回补流水单号（多行提交仅记首行——偏离记录⑨）
+                $return = $this->sequenceService->nextNoByConfig(
+                    DocumentSequence::TYPE_OSRT,
+                    fn (string $no) => OutsourcingReturn::create([
+                        'no' => $no,
+                        'outsourcing_id' => $locked->id,
+                        'item_id' => $lines[0]['item']->id,
+                        'material_id' => $lines[0]['item']->material_id,
+                        'quantity' => $lines[0]['quantity'],
+                        'warehouse_id' => $data['warehouse_id'],
+                        'location_id' => $data['location_id'],
+                        'status' => OutsourcingReturn::STATUS_APPROVED,
+                        'returned_at' => now(),
+                        'operator' => auth()->user()->name ?? '',
+                        'remark' => $data['remark'] ?? null,
+                    ]),
+                    // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                    fn (string $prefix, string $dateKey) => ($no = OutsourcingReturn::where('no', 'like', $prefix.date('Ymd').'%')
+                        ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
+                );
+                // 流水单号回补（流水创建时退回单号未定，空串占位后统一回补——审计链完整）
+                DB::table('inventory_movements')
+                    ->where('source_type', 'outsourcing_return')
+                    ->where('source_id', $locked->id)
+                    ->where('source_no', '')
+                    ->update(['source_no' => $return->no]);
+
+                // returned_qty 回写 = 已退累计（bcmath 累加，防覆盖历史退回）
+                foreach ($lines as $l) {
+                    $l['item']->returned_qty = bcadd((string) $l['item']->returned_qty, $l['quantity'], 2);
+                    $l['item']->save();
+                }
+                // 全部组件已退满（returned==issued，bcmath 权威）→ 委外单自动关闭（余料退回完成）
+                $allReturned = $locked->items()->get()
+                    ->every(fn ($i) => bccomp((string) $i->returned_qty, (string) $i->issued_qty, 2) === 0);
+                if ($allReturned) {
+                    $locked->status = OutsourcingOrder::STATUS_CLOSED;
+                    $locked->save();
+                }
+                $result = ['no' => $return->no];
+            }, 2);
+        } catch (ProductionException $e) {
+            // 422 状态不符/超退/组件归属不符（事务整体回滚）
+            return $this->fail($e->getCode() ?: 422, $e->getMessage());
+        } catch (InventoryException $e) {
+            // 余额引擎兜底（入库方向理论不触发，防御路径）
+            return $this->fail(422, '退回失败，请重试');
+        }
+
+        return $this->ok($result);
+    }
+
+    /** 退回记录列表：该委外单全部退回单（按退回时间倒序；预载物料/仓库/库位防 N+1） */
+    public function returnList(OutsourcingOrder $outsourcing)
+    {
+        $rows = $outsourcing->returns()
+            ->with(['material', 'warehouse', 'location'])
+            ->orderByDesc('returned_at')
+            ->paginate(max(1, min(100, (int) request('per_page', 10))));
+
+        return $this->ok([
+            'items' => $rows->map(fn (OutsourcingReturn $r) => [
+                'id' => $r->id,
+                'no' => $r->no,
+                'item_id' => $r->item_id,
+                'material_id' => $r->material_id,
+                'material_name' => $r->material?->name,
+                'quantity' => $r->quantity,
+                'warehouse_id' => $r->warehouse_id,
+                'warehouse_name' => $r->warehouse?->name,
+                'location_id' => $r->location_id,
+                'location_name' => $r->location?->name,
+                'returned_at' => $r->returned_at->toDateTimeString(),
+                'operator' => $r->operator,
+                'remark' => $r->remark,
+            ]),
+            'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
+        ]);
+    }
+
     // 已回收累计（Σ 回收单数量；SQL SUM 聚合——回收单创建即审核 status 恒 1，SUM 与逐行 bcadd 语义等价，
     // 跨库 SUM 返回形态不一（MySQL 字符串 / SQLite 数值）统一 bcmath 归一；P1-3）
     private function receivedQty(int $outsourcingId): string
@@ -610,14 +772,39 @@ class OutsourcingController extends Controller
         return $data;
     }
 
-    // 回收载荷格式校验（422 仅格式层）
+    // 回收载荷格式校验（422 仅格式层）；product_id 可空=冒烟校验（提供时须等于节点输出，业务码 1529 在事务内）
     private function validatePayloadReceipt(Request $request): array
     {
         return $request->validate([
             'quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
+            'product_id' => 'nullable|integer|exists:products,id',
             'warehouse_id' => 'required|integer|exists:warehouses,id',
             'location_id' => 'required|integer|exists:locations,id',
             'remark' => 'nullable|string|max:200',
         ]);
+    }
+
+    // 退回载荷格式校验（422 仅格式层）；业务码在事务内检查；items 组件行归一化字符串供 bcmath 校验
+    private function validatePayloadReturn(Request $request): array
+    {
+        $data = $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.item_id' => 'required|integer|exists:outsourcing_order_items,id',
+            'items.*.quantity' => 'required|numeric|regex:/^\d+(\.\d{1,2})?$/',
+            'warehouse_id' => 'required|integer|exists:warehouses,id',
+            'location_id' => 'required|integer|exists:locations,id',
+            'remark' => 'nullable|string|max:200',
+        ]);
+
+        // 组件行类型归一：退回数量统一字符串（bcmath 权威比较），组件行回整型
+        $data['items'] = array_map(
+            fn (array $item) => [
+                'item_id' => (int) $item['item_id'],
+                'quantity' => (string) $item['quantity'],
+            ],
+            (array) $data['items'],
+        );
+
+        return $data;
     }
 }

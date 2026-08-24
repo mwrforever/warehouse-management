@@ -1,6 +1,6 @@
 <?php
 
-// 委外加工接口测试：CRUD/发出扣成品/回收加成品/分批回收/超收/工序联动/幂等（核心路径 100%）
+// 委外加工接口测试：CRUD/发出扣组件/回收加回收品（节点输出）/分批回收/超收/工序联动/幂等（核心路径 100%）
 
 namespace Tests\Feature;
 
@@ -122,6 +122,37 @@ class OutsourcingTest extends TestCase
         return $res->json('data.no');
     }
 
+    // DAG 委外单辅助：建 OP30 委外单（数量 6，组件=节点输入原料 12/半成品B 6）并审核发出
+    // （组件基线注入后按应发全额扣减归零；回收品=节点输出半成品B——1529 一致性口径落地后回收断言以此为准）
+    private function approvedDagOutsourcing(array $dag): OutsourcingOrder
+    {
+        app(InventoryService::class)->apply([
+            ['product_id' => $dag['raw']->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 12, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+            ['product_id' => $dag['semiB']->id, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+                'direction' => 1, 'quantity' => 6, 'source_type' => 'purchase_inbound', 'source_id' => 0,
+                'source_no' => 'SEED', 'remark' => '测试基线'],
+        ]);
+        $no = $this->createOutsourcing([
+            'order_id' => $dag['order']->id,
+            'operation_id' => $dag['ops']['OP30']->id,
+            'supplier_id' => $this->supplier->id,
+            'warehouse_id' => $this->wh->id,
+            'location_id' => $this->b01->id,
+            'quantity' => 6,
+            'items' => [
+                ['material_id' => $dag['raw']->id, 'required_qty' => 12, 'unit_id' => $dag['unit']->id],
+                ['material_id' => $dag['semiB']->id, 'required_qty' => 6, 'unit_id' => $dag['unit']->id],
+            ],
+        ]);
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+
+        return $os;
+    }
+
     public function test_store_creates_draft_with_no(): void
     {
         // 正常路径：草稿创建成功，单号 OS{date}-001
@@ -231,57 +262,62 @@ class OutsourcingTest extends TestCase
 
     public function test_receipt_credits_inventory_and_marks_received(): void
     {
-        // 核心不变式（回收）：余额 45→50、outsourcing_in 流水(+1，单号 OSR..)、委外单已回收、工序标记完成
-        $no = $this->createOutsourcing($this->payload());
-        $os = OutsourcingOrder::where('no', $no)->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
+        // 核心不变式（回收，DAG 口径）：回收品=节点输出半成品B——发出扣光后回收回补（0→6）、
+        // outsourcing_in 流水(+6，单号 OSR..，商品=半成品B)、委外单已回收、工序标记完成
+        $dag = $this->dagOrder();
+        ['semiB' => $semiB] = $dag;
+        $os = $this->approvedDagOutsourcing($dag);
         $res = $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
-            'quantity' => 5, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id, 'remark' => '回收',
+            'quantity' => 6, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id, 'remark' => '回收',
         ]);
         $res->assertJsonPath('code', 0)
             ->assertJsonPath('data.no', 'OSR'.date('YmdHi').'001');
-        $this->assertSame('50.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertSame('6.00', $this->balanceOf($semiB->id));
         $this->assertDatabaseHas('inventory_movements', [
-            'product_id' => $this->fin->id, 'direction' => 1, 'quantity' => '5.00',
-            'balance_after' => '50.00', 'source_type' => 'outsourcing_in', 'source_no' => 'OSR'.date('YmdHi').'001',
+            'product_id' => $semiB->id, 'direction' => 1, 'quantity' => '6.00',
+            'balance_after' => '6.00', 'source_type' => 'outsourcing_in', 'source_no' => 'OSR'.date('YmdHi').'001',
         ]);
         $os->refresh();
         $this->assertSame(OutsourcingOrder::STATUS_RECEIVED, $os->status);
-        // 委外工序（组装）标记完成（spec §6：回收量≥委外量时）
-        $this->assertSame(WorkOrderOperation::STATUS_DONE, WorkOrderOperation::find($this->assemblyOpId)->status);
+        // 委外工序（焊接 OP30）标记完成（spec §6：回收量≥委外量时）
+        $this->assertSame(WorkOrderOperation::STATUS_DONE, WorkOrderOperation::find($os->operation_id)->status);
         // 回收单落库
         $this->assertDatabaseHas('outsourcing_receipts', [
-            'outsourcing_id' => $os->id, 'quantity' => '5.00', 'status' => OutsourcingReceipt::STATUS_APPROVED,
+            'outsourcing_id' => $os->id, 'quantity' => '6.00', 'status' => OutsourcingReceipt::STATUS_APPROVED,
         ]);
     }
 
     public function test_receipt_allows_partial_batches_and_rejects_over_with_1524(): void
     {
-        // 边界路径：分批回收（3+2）；累计超委外量（再收 1）→ 1524 拦截且不产生流水
-        $no = $this->createOutsourcing($this->payload());
-        $os = OutsourcingOrder::where('no', $no)->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
+        // 边界路径：分批回收（3+3，DAG 口径回收品=半成品B）；累计超委外量（再收 1）→ 1524 拦截且不产生流水
+        $dag = $this->dagOrder();
+        ['ops' => $ops, 'semiB' => $semiB] = $dag;
+        $os = $this->approvedDagOutsourcing($dag);
+        // 首工序（下料）报满 → 委外工序（焊接）置进行中（DAG 推进前置，与 E2E TC-PRD-06 流程一致）
+        $this->withToken($this->token)->postJson("/api/v1/production/operations/{$ops['OP10']->id}/reports", [
+            'qualified_qty' => 6,
+        ])->assertJsonPath('code', 0);
         // 第一批 3
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
             'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
         ])->assertJsonPath('code', 0);
-        $this->assertSame('48.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
-        // 状态未回收（累计 3 < 5），工序未完成
+        $this->assertSame('3.00', $this->balanceOf($semiB->id));
+        // 状态未回收（累计 3 < 6），工序未完成
         $this->assertSame(OutsourcingOrder::STATUS_APPROVED, $os->refresh()->status);
-        $this->assertSame(WorkOrderOperation::STATUS_RUNNING, WorkOrderOperation::find($this->assemblyOpId)->status);
-        // 第二批 2 → 已回收
+        $this->assertSame(WorkOrderOperation::STATUS_RUNNING, WorkOrderOperation::find($os->operation_id)->status);
+        // 第二批 3 → 已回收（累计 6 = 委外量 6）
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
-            'quantity' => 2, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+            'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
         ])->assertJsonPath('code', 0);
-        $this->assertSame('50.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertSame('6.00', $this->balanceOf($semiB->id));
         $this->assertSame(OutsourcingOrder::STATUS_RECEIVED, $os->refresh()->status);
-        // 超收（累计已 5，再收 1）→ 1524 整体回滚
+        // 超收（累计已 6，再收 1）→ 1524 整体回滚
         $res = $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
             'quantity' => 1, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
         ]);
         $res->assertJsonPath('code', 1524)
             ->assertJsonPath('message', '回收数量超过委外数量');
-        $this->assertSame('50.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertSame('6.00', $this->balanceOf($semiB->id));
         $this->assertDatabaseCount('outsourcing_receipts', 2);
     }
 
@@ -298,20 +334,20 @@ class OutsourcingTest extends TestCase
     public function test_receipt_rejects_order_not_released_or_producing_with_1523(): void
     {
         // 异常路径（bug #2 回归）：发出后工单被关闭 → 回收被拒 1523（与发出 approve 同口径），无流水无回收单
-        $no = $this->createOutsourcing($this->payload());
-        $os = OutsourcingOrder::where('no', $no)->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
-        // 发出已扣减：50 → 45
-        $this->assertSame('45.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
-        $this->order->status = ProductionOrder::STATUS_CLOSED;
-        $this->order->save();
+        $dag = $this->dagOrder();
+        $os = $this->approvedDagOutsourcing($dag);
+        // 发出已按组件扣减：原料 12→0、半成品B 6→0
+        $this->assertSame('0.00', $this->balanceOf($dag['raw']->id));
+        $this->assertSame('0.00', $this->balanceOf($dag['semiB']->id));
+        $dag['order']->status = ProductionOrder::STATUS_CLOSED;
+        $dag['order']->save();
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
-            'quantity' => 5, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+            'quantity' => 6, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
         ])
             ->assertJsonPath('code', 1523)
             ->assertJsonPath('message', '工单当前状态不可委外');
         // 被拒回收：库存不变、无回收单、委外单仍为已发出
-        $this->assertSame('45.00', InventoryBalance::where('product_id', $this->fin->id)->first()->quantity);
+        $this->assertSame('0.00', $this->balanceOf($dag['semiB']->id));
         $this->assertDatabaseCount('outsourcing_receipts', 0);
         $this->assertSame(OutsourcingOrder::STATUS_APPROVED, $os->refresh()->status);
     }
@@ -319,16 +355,15 @@ class OutsourcingTest extends TestCase
     public function test_receipts_index_lists_records(): void
     {
         // 正常路径：回收记录列表（单号/数量/时间）
-        $no = $this->createOutsourcing($this->payload());
-        $os = OutsourcingOrder::where('no', $no)->first();
-        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")->assertJsonPath('code', 0);
+        $dag = $this->dagOrder();
+        $os = $this->approvedDagOutsourcing($dag);
         $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
-            'quantity' => 5, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+            'quantity' => 6, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
         ])->assertJsonPath('code', 0);
         $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/{$os->id}/receipts")
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.total', 1)
-            ->assertJsonPath('data.items.0.quantity', '5.00')
+            ->assertJsonPath('data.items.0.quantity', '6.00')
             ->assertJsonPath('data.items.0.no', 'OSR'.date('YmdHi').'001');
     }
 
