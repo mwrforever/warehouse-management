@@ -760,4 +760,47 @@ describe('委外页：工序节点预填 + 组件应发折算 + 余料退回', (
       'OS20260824-009',
     )
   })
+
+  // PF-3 回归：回收弹窗所需三字段（数量/已回收/回收品）列表行全有，打开弹窗不得再拉委外详情
+  //（详情是委外域最重读路径：4 组关系预载 + SUM；列表行滞后仅致预填偏大，提交有后端 1524 超收校验兜底）
+  it('回收弹窗：直接消费列表行字段打开，不调详情接口且剩余=委外量−已回收（PF-3）', async () => {
+    mocks.outsourcings.mockResolvedValue(
+      page([
+        {
+          id: 7,
+          no: 'OS20260824-007',
+          order_id: 1,
+          order_no: 'MO-001',
+          operation_id: 11,
+          node_no: 'OP10',
+          process_name: '下料',
+          output_product_name: '半成品B',
+          supplier_id: 1,
+          supplier_name: '测试供应商',
+          quantity: '10.00',
+          received_qty: '4.00',
+          status: 1,
+          status_label: '已审核',
+          approved_at: '2026-08-24 10:00:00',
+          operator: null,
+          created_at: '2026-08-24 10:00:00',
+        },
+      ]),
+    )
+    const wrapper = await mountView()
+
+    // 已审核行「回 收」→ 弹窗立即以列表行字段打开（无详情请求）
+    const receiptBtn = wrapper.findAll('button').find((b) => b.text().trim() === '回 收')
+    expect(receiptBtn).toBeTruthy()
+    await receiptBtn!.trigger('click')
+    await flushPromises()
+    expect(mocks.outsourcingDetail).not.toHaveBeenCalled()
+    // 回收品与剩余可回收来自列表行：半成品B / 10−4=6，默认回收量 6
+    const dialog = wrapper.findAll('.el-dialog').find((d) => d.text().includes('委外回收'))
+    expect(dialog, '回收弹窗应打开').toBeTruthy()
+    expect(dialog!.find('.receipt-product').text().trim()).toBe('半成品B')
+    expect(dialog!.find('.remain-cell').text().trim()).toBe('6.00')
+    const qtyInput = dialog!.find('.el-input-number input')
+    expect((qtyInput.element as HTMLInputElement).value).toBe('6.00')
+  })
 })

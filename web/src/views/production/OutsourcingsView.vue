@@ -398,24 +398,22 @@ async function approveRow(row: OutsourcingItem) {
   }
 }
 
-// 回收弹窗打开：取已回收累计与回收品，剩余可回收 = 委外量 - 已回收，默认全量回收
-async function openReceipt(row: OutsourcingItem) {
-  try {
-    const d = await productionApi.outsourcingDetail(row.id)
-    receiptId.value = row.id
-    receiptRemaining.value = round2(Number(d.quantity) - Number(d.received_qty))
-    receiptOutput.value = d.output_product_name ?? '—'
-    Object.assign(receiptForm, {
-      quantity: receiptRemaining.value,
-      warehouse_id: undefined,
-      location_id: undefined,
-      remark: '',
-    })
-    receiptLocations.value = []
-    receiptVisible.value = true
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  }
+// 回收弹窗打开：直接消费列表行字段（数量/已回收/回收品三字段 index 均返回），省一次委外详情请求
+//（详情是委外域最重读路径：4 组关系预载 + SUM）。列表行滞后仅致预填偏大，提交有后端 1524 超收校验兜底；
+// 剩余可回收 = 委外量 - 已回收，默认全量回收
+function openReceipt(row: OutsourcingItem) {
+  receiptId.value = row.id
+  // received_qty 类型可选（历史行兜底 0），output_product_name 无路线历史单为空显示 —
+  receiptRemaining.value = round2(Number(row.quantity) - Number(row.received_qty ?? 0))
+  receiptOutput.value = row.output_product_name ?? '—'
+  Object.assign(receiptForm, {
+    quantity: receiptRemaining.value,
+    warehouse_id: undefined,
+    location_id: undefined,
+    remark: '',
+  })
+  receiptLocations.value = []
+  receiptVisible.value = true
 }
 
 // 回收入库仓库切换 → 联动库位下拉（与发出仓库独立选择）
