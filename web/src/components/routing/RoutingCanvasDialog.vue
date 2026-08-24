@@ -5,7 +5,7 @@
   <el-dialog
     :model-value="visible"
     :title="dialogTitle"
-    width="1200px"
+    width="min(1200px, 96vw)"
     top="4vh"
     :close-on-click-modal="false"
     @update:model-value="emit('update:visible', $event)"
