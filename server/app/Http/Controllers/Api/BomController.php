@@ -140,6 +140,9 @@ class BomController extends Controller
         $status = (int) $data['status'];
 
         DB::transaction(function () use ($bom, $status) {
+            // 先锁成品行串行化同成品并发启停（B-103）：与 store/update 写入路径同锁序，
+            // 否则 toggle 与新建/更新交错时各自的启用判断互看不到对方未提交的变更，可产生双启用版本
+            Product::whereKey($bom->product_id)->lockForUpdate()->first();
             // 启用新版本：同成品其他启用版本全部停用，保证启用唯一
             if ($status === 1) {
                 BomHeader::where('product_id', $bom->product_id)

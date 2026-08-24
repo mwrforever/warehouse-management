@@ -207,6 +207,19 @@ class RoutingTest extends TestCase
         $this->assertSame(1, RoutingHeader::where('product_id', $this->finished->id)->where('status', 1)->count());
     }
 
+    public function test_routing_toggle_enable_auto_disables_other_enabled_version(): void
+    {
+        // 正常路径：v1 仍启用时直接 toggle 启用 v2 → v1 被自动停用（同成品启用唯一不变式，B-103；
+        // 上一用例先手工停 v1 再启 v2，未覆盖「启用时自动停用其他启用版本」分支）
+        $id1 = $this->postRouting($this->routingPayload())->json('data.id');
+        $id2 = $this->postRouting($this->routingPayload(['version' => 'v2', 'status' => 0]))->json('data.id');
+        $this->withToken($this->token)->putJson("/api/v1/routings/{$id2}/toggle", ['status' => 1])->assertJsonPath('code', 0);
+        $this->assertSame(0, RoutingHeader::find($id1)->status);
+        $this->assertSame(1, RoutingHeader::find($id2)->status);
+        // 不变式收口断言：同成品启用版本恒为 1
+        $this->assertSame(1, RoutingHeader::where('product_id', $this->finished->id)->where('status', 1)->count());
+    }
+
     public function test_routing_deletion_guard(): void
     {
         $id = $this->postRouting($this->routingPayload(['status' => 0]))->json('data.id');

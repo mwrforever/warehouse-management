@@ -252,6 +252,9 @@ class RoutingService
     public function toggle(RoutingHeader $routing, int $status): void
     {
         DB::transaction(function () use ($routing, $status) {
+            // 先锁成品行串行化同成品并发启停（B-103）：与 persist 写入路径同锁序，
+            // 否则 toggle 与保存交错时各自的启用判断互看不到对方未提交的变更，可产生双启用版本
+            Product::whereKey($routing->product_id)->lockForUpdate()->first();
             if ($status === 1) {
                 RoutingHeader::where('product_id', $routing->product_id)->where('status', 1)
                     ->where('id', '!=', $routing->id)->update(['status' => 0]);
