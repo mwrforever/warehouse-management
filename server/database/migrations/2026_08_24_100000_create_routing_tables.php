@@ -30,10 +30,10 @@ return new class extends Migration
             // 外键列 comment 必须置于 constrained() 之前：链到 ForeignKeyDefinition 上的 comment 属性
             // 会被 Fluent __call 静默吞掉、MySQL 语法器不写进 DDL（同域旧迁移为滞后的无效写法，勿模仿）
             $table->foreignId('routing_id')->comment('所属工艺路线')->constrained('routing_headers')->cascadeOnDelete();
-            $table->foreignId('process_id')->constrained('processes')->restrictOnDelete()->comment('工序');
+            $table->foreignId('process_id')->comment('工序')->constrained('processes')->restrictOnDelete();
             $table->string('node_no', 20)->comment('节点号 OP10');
             $table->string('name', 50)->comment('工序名快照');
-            $table->foreignId('output_product_id')->constrained('products')->restrictOnDelete()->comment('输出产品');
+            $table->foreignId('output_product_id')->comment('输出产品')->constrained('products')->restrictOnDelete();
             $table->decimal('output_qty', 12, 2)->default(1)->comment('相对基准产出的产出数量');
             $table->tinyInteger('is_outsourced')->default(0)->comment('0自制 1委外');
             $table->string('remark', 200)->nullable()->comment('备注');

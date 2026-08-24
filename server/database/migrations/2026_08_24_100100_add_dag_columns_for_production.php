@@ -12,7 +12,7 @@ return new class extends Migration
     {
         // 工单锚定工艺路线快照：null=旧逻辑展开（存量单不回写）
         Schema::table('production_orders', function (Blueprint $table) {
-            $table->foreignId('routing_id')->nullable()->constrained('routing_headers')->restrictOnDelete()->comment('工艺路线快照');
+            $table->foreignId('routing_id')->nullable()->comment('工艺路线快照')->constrained('routing_headers')->restrictOnDelete();
         });
 
         // 物料归属工序节点：null=不归节点仅按总量领料（多节点共用物料时不归属）
@@ -23,7 +23,7 @@ return new class extends Migration
         // 工序节点三列：node_no 快照 / 输出产品 / 委外标记
         Schema::table('work_order_operations', function (Blueprint $table) {
             $table->string('node_no', 20)->nullable()->comment('工艺路线节点号');
-            $table->foreignId('output_product_id')->nullable()->constrained('products')->restrictOnDelete()->comment('节点输出产品');
+            $table->foreignId('output_product_id')->nullable()->comment('节点输出产品')->constrained('products')->restrictOnDelete();
             $table->tinyInteger('is_outsourced')->default(0)->comment('0自制 1委外');
         });
         // 节点号在工单内唯一（旧数据 node_no 为 null，唯一索引多 null 放行，MySQL/SQLite 均兼容）
