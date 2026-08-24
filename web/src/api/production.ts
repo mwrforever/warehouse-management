@@ -34,9 +34,9 @@ export interface ProductionOperation {
   process_code: string
   status: number
   status_label: string
-  qualified_qty: number
-  defective_qty: number
-  hours: number
+  qualified_qty: string // 后端 decimal:2 字符串
+  defective_qty: string // 后端 decimal:2 字符串
+  hours: string // 后端 decimal:2 字符串
   // 工艺路线联动字段（路由 DAG 下单快照；旧工单可能无值，均为可选）
   node_no?: string | null
   output_product_id?: number | null
@@ -54,9 +54,9 @@ export interface OperationGraphNode {
   status: number
   status_label: string
   is_outsourced: number
-  qualified_qty: number
-  defective_qty: number
-  hours: number
+  qualified_qty: string // 后端 decimal:2 字符串
+  defective_qty: string // 后端 decimal:2 字符串
+  hours: string // 后端 decimal:2 字符串
 }
 
 // 工单工序图连线（from/to 双端同时带 operation id 与节点号，便于画布定位与提示）
@@ -204,9 +204,9 @@ export interface OutsourcingItem {
   output_product_name?: string | null
   supplier_id: number
   supplier_name: string
-  quantity: number
-  // 已回收累计（回收进度）
-  received_qty?: number
+  quantity: string // 后端 decimal:2 字符串
+  // 已回收累计（回收进度；后端 decimal:2 字符串）
+  received_qty?: string
   status: number
   status_label: string
   approved_at: string | null
@@ -233,19 +233,19 @@ export interface OutsourcingDetail {
   warehouse_name: string
   location_id: number
   location_name: string
-  quantity: number
-  received_qty: number
+  quantity: string // 后端 decimal:2 字符串
+  received_qty: string // 后端 decimal:2 字符串
   approved_at: string | null
   operator: string | null
   remark: string | null
-  // 组件明细（余料退回数据源：可退=已发−已退；id 供退回载荷 item_id）
+  // 组件明细（余料退回数据源：可退=已发−已退；id 供退回载荷 item_id；数量均为后端 decimal:2 字符串）
   items?: {
     id: number
     material_id: number
     material_name: string
-    required_qty: number
-    issued_qty: number
-    returned_qty: number
+    required_qty: string
+    issued_qty: string
+    returned_qty: string
     unit_name: string
   }[]
 }

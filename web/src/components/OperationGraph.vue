@@ -90,8 +90,8 @@ function nodeById(id: unknown): OperationGraphNode | undefined {
   return props.graph.nodes.find((n) => String(n.id) === id)
 }
 
-/** 数值口径：后端 decimal 可能序列化为字符串，统一 Number 后展示 */
-function num(v: number | undefined): number {
+/** 数值口径：后端 decimal:2 字符串，统一 Number 后展示 */
+function num(v: string | undefined): number {
   return Number(v ?? 0)
 }
 
