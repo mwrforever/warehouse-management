@@ -315,21 +315,21 @@ class OperationReportTest extends TestCase
     {
         ['order' => $order, 'ops' => $ops] = $this->dagOrder();
         // 开工：仅入度 0 的 OP10 进行中，其余待开工
-        $this->assertSame(1, (int) $ops['OP10']->fresh()->status);
-        $this->assertSame(0, (int) $ops['OP20']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_RUNNING, $ops['OP10']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP20']->fresh()->status);
 
         // OP10 报满 → 三分支同时进行中（并行）
         $this->report($ops['OP10'], '6');
-        $this->assertSame(2, (int) $ops['OP10']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_DONE, $ops['OP10']->fresh()->status);
         foreach (['OP20', 'OP30', 'OP40'] as $no) {
-            $this->assertSame(1, (int) $ops[$no]->fresh()->status, "节点 {$no} 应进行中");
+            $this->assertSame(WorkOrderOperation::STATUS_RUNNING, $ops[$no]->fresh()->status, "节点 {$no} 应进行中");
         }
-        $this->assertSame(0, (int) $ops['OP50']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP50']->fresh()->status);
 
         // OP20/OP40 完成、OP30（委外）未完成 → 汇合点 OP50 仍待开工（前驱全完成才推进）
         $this->report($ops['OP20'], '6');
         $this->report($ops['OP40'], '6');
-        $this->assertSame(0, (int) $ops['OP50']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP50']->fresh()->status);
     }
 
     // RTG-07：委外节点不可报工（只能经委外单回收完成）
