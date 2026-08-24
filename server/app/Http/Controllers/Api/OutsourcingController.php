@@ -15,6 +15,7 @@ use App\Models\OutsourcingReceipt;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\WorkOrderOperation;
+use App\Models\WorkOrderOperationEdge;
 use App\Services\DocumentSequenceService;
 use App\Services\InventoryService;
 use App\Support\ApiResponse;
@@ -292,10 +293,13 @@ class OutsourcingController extends Controller
     }
 
     /**
-     * 回收：事务内「锁委外单（草稿不可回收 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）→ 锁委外工序行
-     * → 锁工单行取成品 → InventoryService 写 outsourcing_in 流水(+qty) → 创建回收单（创建即审核）
-     * → 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成」任一步失败整体回滚；
-     * 锁序 outsourcing→op→order 与报工（op→order）在 op→order 段同序，消除 ABBA 死锁环
+     * 回收：事务内「锁委外单（草稿不可回收 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）→ 锁同单全部工序行
+     * （id 升序，含委外工序：DAG 后继就绪判定需读其它前驱状态，与报工/完工在行级全序上单调同向）→ 锁工单行取成品 →
+     * InventoryService 写 outsourcing_in 流水(+qty) → 创建回收单（创建即审核）→ 累计 ≥ 委外量 → 委外单已回收 +
+     * 工序标记完成 + DAG 工单（routing_id 非空）推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，
+     * 与 OperationReportController::store 同口径；旧工单仅置 DONE 不推进）」任一步失败整体回滚；
+     * 锁序 outsourcing→全部工序(升序)→order 与报工（op 全集→order）/完工（全工序→order）行级单调同向，
+     * 消除「末批回收 vs 工序报工」并发 ABBA 死锁环
      */
     public function storeReceipt(Request $request, OutsourcingOrder $outsourcing)
     {
@@ -320,9 +324,13 @@ class OutsourcingController extends Controller
                 if (bccomp(bcadd($received, (string) $data['quantity'], 2), (string) $locked->quantity, 2) > 0) {
                     throw new ProductionException('回收数量超过委外数量', 1524);
                 }
-                // 锁委外工序行（锁 order 之前无条件获取）：锁序 outsourcing→op→order 与报工（op→order）
-                // 在 op→order 段同序，消除「末批回收 vs 工序报工」并发 ABBA 死锁环；工序行防御性存在检查
-                $op = WorkOrderOperation::whereKey($locked->operation_id)->lockForUpdate()->first();
+                // 锁同单全部工序行（id 升序，含委外工序，单条语句获取）：DAG 后继就绪判定需读其它前驱状态，
+                // 与报工（op 全集→order）/完工（全工序→order）在行级全序上单调同向——若仅锁委外工序行，
+                // 并发「末批回收 vs 分支报工」的获取序列非单调会构成 ABBA 死锁环（修复：RTG 委外推进）
+                $allOps = WorkOrderOperation::where('order_id', $locked->order_id)
+                    ->orderBy('id')->lockForUpdate()->get();
+                // 委外工序行从已锁全集取（与报工控制器同构；行缺失防御性跳过）
+                $op = $allOps->find($locked->operation_id);
                 // 锁工单行取委外商品（= 工单成品）
                 $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
                 // 工单状态校验：与发出 approve 同口径 [RELEASED, PRODUCING]（spec §5.1 生产中→委外）
@@ -366,14 +374,41 @@ class OutsourcingController extends Controller
                     ->where('source_no', '')
                     ->update(['source_no' => $receipt->no]);
 
-                // 累计回收 ≥ 委外量 → 委外单已回收 + 委外工序标记完成（spec §6；回收只对未完成工序生效）
+                // 累计回收 ≥ 委外量 → 委外单已回收 + 委外工序标记完成（spec §6；回收只对未完成工序生效）；
+                // DAG 工单（routing_id 非空）追加推进：直接后继中「全部前驱已完成」的待开工节点置进行中
+                // （并行分支独立推进，与报工控制器同口径）；旧工单（routing_id 为空）仅置 DONE 不推进
                 $receivedNow = bcadd($received, (string) $data['quantity'], 2);
                 if (bccomp($receivedNow, (string) $locked->quantity, 2) >= 0) {
                     $locked->status = OutsourcingOrder::STATUS_RECEIVED;
                     $locked->save();
-                    // 工序行已在事务内先行锁定（锁序 outsourcing→op→order），直接更新不重复加锁（缺失防御性跳过）
                     if ($op && $op->status !== WorkOrderOperation::STATUS_DONE) {
                         $op->status = WorkOrderOperation::STATUS_DONE;
+                        if ($order->routing_id) {
+                            // 边一次取出内存建邻接、前驱状态用已锁定的工序全集判定（§4.2.2 禁循环内查询）
+                            $edges = WorkOrderOperationEdge::where('order_id', $order->id)->get();
+                            // 已完成集合：全集中已 DONE 的行 + 本工序（本轮即将落 DONE，对后继就绪判定等效已完成）
+                            $doneIds = [$op->id => true];
+                            foreach ($allOps as $s) {
+                                if ($s->status === WorkOrderOperation::STATUS_DONE) {
+                                    $doneIds[$s->id] = true;
+                                }
+                            }
+                            $byId = $allOps->keyBy('id');
+                            $predsByTo = $edges->groupBy('to_operation_id');
+                            foreach ($edges->where('from_operation_id', $op->id) as $edge) {
+                                $succ = $byId->get($edge->to_operation_id);
+                                if (! $succ || $succ->status !== WorkOrderOperation::STATUS_PENDING) {
+                                    continue;
+                                }
+                                // 后继就绪判定：全部前驱均在已完成集合（空前驱不会出现——本节点即其前驱）
+                                $allPredsDone = ($predsByTo->get($edge->to_operation_id) ?? collect())
+                                    ->every(fn (WorkOrderOperationEdge $e) => isset($doneIds[$e->from_operation_id]));
+                                if ($allPredsDone) {
+                                    $succ->status = WorkOrderOperation::STATUS_RUNNING;
+                                    $succ->save();
+                                }
+                            }
+                        }
                         $op->save();
                     }
                 }
