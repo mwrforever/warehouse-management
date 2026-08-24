@@ -312,6 +312,9 @@ class PickListController extends Controller
                     ->lockForUpdate()
                     ->get()
                     ->keyBy('product_id');
+                /** @var Collection<int, Product> $productMap 商品编码映射（1515 错误消息取码用；
+                    循环前批量预取，错误分支不再 Product::find 循环内单查） */
+                $productMap = Product::query()->whereIn('id', $productIds)->get()->keyBy('id');
                 /** @var PickListItem $item */
                 foreach ($locked->items as $item) {
                     // 复核物料需求行：防并发超领（并发审核同一物料已在上方批量锁定串行化）
@@ -330,8 +333,8 @@ class PickListController extends Controller
                     $current = $balance ? (string) $balance->quantity : '0';
                     if (bccomp((string) $item->pick_qty, $current, 2) > 0) {
                         // 1515 消息契约不含库存快照，仅含商品编码（E2E 断言 MAT-001）
-                        // ?? 左值天然 null 安全（find 无结果时回退 #id 展示），nullsafe 显式多余故用 ->
-                        $code = Product::find($item->product_id)->code ?? ('#'.$item->product_id);
+                        // ?? 左值天然 null 安全（map 未命中时回退 #id 展示），nullsafe 显式多余故用 ->
+                        $code = $productMap->get($item->product_id)->code ?? ('#'.$item->product_id);
                         throw new ProductionException("商品[{$code}]库存不足", 1515);
                     }
                     $movements[] = [
