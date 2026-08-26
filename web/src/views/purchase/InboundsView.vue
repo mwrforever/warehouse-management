@@ -159,14 +159,19 @@ async function onOrderChange(orderId: number | undefined) {
   }
 }
 
-// 仓库切换 → 联动库位下拉
+// 仓库切换 → 联动库位下拉（序号令牌防响应乱序：快速切换 A→B 时 A 的迟到响应不得覆盖 B 的库位）
+let warehouseSeq = 0
 async function onWarehouseChange(whId: number | undefined) {
+  const session = ++warehouseSeq
   form.location_id = undefined
   locations.value = []
   if (!whId) return
   try {
-    locations.value = (await warehouseApi.locations(whId)).items
+    const data = await warehouseApi.locations(whId)
+    if (session !== warehouseSeq) return
+    locations.value = data.items
   } catch (e) {
+    if (session !== warehouseSeq) return
     ElMessage.error((e as Error).message)
   }
 }

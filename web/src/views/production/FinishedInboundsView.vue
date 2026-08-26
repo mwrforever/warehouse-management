@@ -131,13 +131,17 @@ async function onOrderChange(orderId: number | undefined, session: number = ++se
 }
 
 // 仓库切换 → 联动库位下拉
-async function onWarehouseChange(whId: number | undefined) {
+async function onWarehouseChange(whId: number | undefined, session: number = ++sessionSeq) {
   form.location_id = undefined
   locations.value = []
   if (!whId) return
   try {
-    locations.value = (await warehouseApi.locations(whId)).items
+    const data = await warehouseApi.locations(whId)
+    // 迟到守卫：旧仓库的慢响应丢弃，防快速切换 A→B 时 A 的库位覆盖 B 的选择
+    if (session !== sessionSeq) return
+    locations.value = data.items
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }

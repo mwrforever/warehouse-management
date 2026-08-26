@@ -318,11 +318,15 @@ async function issueRow(row: PickItem) {
   }
 }
 
-async function openDetail(row: PickItem) {
+async function openDetail(row: PickItem, session: number = ++sessionSeq) {
   try {
-    detail.value = await productionApi.pickDetail(row.id)
+    const data = await productionApi.pickDetail(row.id)
+    // 迟到守卫：旧行的慢响应丢弃，防快速连点时先点行的详情覆盖后点行（所见非所选）
+    if (session !== sessionSeq) return
+    detail.value = data
     detailVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
