@@ -204,7 +204,7 @@ onMounted(async () => {
   margin-bottom: var(--space-2xl);
 }
 .kpi-card {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: var(--space-xl);
@@ -216,7 +216,7 @@ onMounted(async () => {
 }
 .kpi-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--t3);
   margin-bottom: var(--space-md);
 }
 .kpi-value {
@@ -229,18 +229,18 @@ onMounted(async () => {
 }
 /* 达成率/良率分级：深绿/琥珀/红（深绿 tag-done 本地定义：既有 tag-done 为订单页 scoped 样式跨组件不生效，warn/danger 同款本地定义） */
 :deep(.tag-done) {
-  --el-tag-bg-color: #ecfdf5;
-  --el-tag-border-color: #047857;
-  --el-tag-text-color: #047857;
+  --el-tag-bg-color: var(--a-50);
+  --el-tag-border-color: var(--a-700);
+  --el-tag-text-color: var(--a-700);
 }
 :deep(.tag-warn) {
-  --el-tag-bg-color: #fef3c7;
-  --el-tag-border-color: #f59e0b;
-  --el-tag-text-color: #d97706;
+  --el-tag-bg-color: var(--warn-100);
+  --el-tag-border-color: var(--warn-400);
+  --el-tag-text-color: var(--warn);
 }
 :deep(.tag-danger) {
-  --el-tag-bg-color: #fee2e2;
-  --el-tag-border-color: #f87171;
-  --el-tag-text-color: #dc2626;
+  --el-tag-bg-color: var(--err-100);
+  --el-tag-border-color: var(--err-400);
+  --el-tag-text-color: var(--err);
 }
 </style>

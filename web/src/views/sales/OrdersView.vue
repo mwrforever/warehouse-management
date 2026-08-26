@@ -585,7 +585,7 @@ onMounted(async () => {
 <style scoped>
 /* 销售订单页样式（nexus-factory）：骨架与采购订单页一致，销售特有样式见 pages/sales.md */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -593,7 +593,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -617,9 +617,9 @@ onMounted(async () => {
 }
 /* 已完成深绿（与已审核绿同族但明度更低，防同态混淆） */
 .tag-done {
-  background: #ecfdf5 !important;
-  color: #047857 !important;
-  border-color: #047857 !important;
+  background: var(--a-50) !important;
+  color: var(--a-700) !important;
+  border-color: var(--a-700) !important;
 }
 .form-grid {
   display: grid;

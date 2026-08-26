@@ -81,18 +81,18 @@ onMounted(load)
 <style scoped>
 /* 汇总条 + 卡片网格（设计系统 inventory.md §5） */
 .summary-bar {
-  background: #f8fafc;
+  background: var(--p-50);
   border-radius: 8px;
   padding: var(--space-lg) var(--space-xl);
   margin-bottom: var(--space-xl);
   font-size: 14px;
 }
 .num-danger {
-  color: #dc2626;
+  color: var(--err);
   font-weight: 700;
 }
 .num-warn {
-  color: #d97706;
+  color: var(--warn);
   font-weight: 700;
 }
 .alert-grid {
@@ -102,17 +102,17 @@ onMounted(load)
   min-height: 120px;
 }
 .alert-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   padding: var(--space-xl);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
-  border-left: 4px solid #cbd5e1;
+  box-shadow: var(--sh-sm);
+  border-left: 4px solid var(--p-300);
 }
 .card-low {
-  border-left-color: #dc2626;
+  border-left-color: var(--err);
 }
 .card-high {
-  border-left-color: #d97706;
+  border-left-color: var(--warn);
 }
 .card-title {
   display: flex;
@@ -123,11 +123,11 @@ onMounted(load)
   font-weight: 600;
 }
 .product-code {
-  color: #64748b;
+  color: var(--t3);
   font-size: 12px;
 }
 .card-wh {
-  color: #64748b;
+  color: var(--t3);
   font-size: 13px;
   margin: var(--space-sm) 0 var(--space-md);
 }
@@ -140,13 +140,13 @@ onMounted(load)
 }
 .qty-unit {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--p-400);
   font-weight: 400;
 }
 .card-limits {
   display: flex;
   gap: var(--space-xl);
-  color: #64748b;
+  color: var(--t3);
   font-size: 13px;
   margin-top: var(--space-md);
 }
@@ -156,9 +156,9 @@ onMounted(load)
   font-weight: 600;
 }
 .gap-low {
-  color: #dc2626;
+  color: var(--err);
 }
 .gap-high {
-  color: #d97706;
+  color: var(--warn);
 }
 </style>

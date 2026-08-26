@@ -707,7 +707,7 @@ onMounted(async () => {
 <style scoped>
 /* 采购入库单页样式（nexus-factory）：与订单页同骨架；独立入库「来源订单」列灰字占位 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -715,7 +715,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -737,12 +737,12 @@ onMounted(async () => {
   font-weight: 600;
 }
 .muted {
-  color: var(--color-muted-text, #94a3b8);
+  color: var(--color-muted-text, var(--p-400));
 }
 .skip-hint {
   margin-top: 2px;
   font-size: 12px;
-  color: var(--color-muted-text, #94a3b8);
+  color: var(--color-muted-text, var(--p-400));
 }
 .form-grid {
   display: grid;

@@ -114,7 +114,7 @@ onMounted(load)
   margin-bottom: var(--space-2xl);
 }
 .kpi-card {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: var(--space-xl);
@@ -126,7 +126,7 @@ onMounted(load)
 }
 .kpi-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--t3);
   margin-bottom: var(--space-md);
 }
 .kpi-value {
@@ -139,14 +139,14 @@ onMounted(load)
 }
 .bar-track {
   position: relative;
-  background: #f2f3f4;
+  background: var(--p-100);
   border-radius: 4px;
   height: 20px;
   overflow: hidden;
 }
 .bar-fill {
   height: 100%;
-  background: #059669;
+  background: var(--a-600);
   transition: width 300ms ease;
 }
 .bar-text {

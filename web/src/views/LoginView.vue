@@ -153,8 +153,13 @@ async function submit() {
   position: relative;
   flex: 0 0 46%;
   overflow: hidden;
-  background: linear-gradient(160deg, #0b1220 0%, var(--p-800) 55%, #16283f 100%);
-  color: #fff;
+  background: linear-gradient(
+    160deg,
+    var(--brand-navy-900) 0%,
+    var(--p-800) 55%,
+    var(--brand-navy-800) 100%
+  );
+  color: var(--surface);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -168,12 +173,12 @@ async function submit() {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    linear-gradient(var(--dark-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dark-grid) 1px, transparent 1px);
   background-size: 44px 44px;
   /* -webkit- 前缀：Safari < 15.4 不支持无前缀 mask-image（旧版优雅降级为全铺纹理） */
-  -webkit-mask-image: radial-gradient(120% 90% at 30% 20%, #000 55%, transparent 100%);
-  mask-image: radial-gradient(120% 90% at 30% 20%, #000 55%, transparent 100%);
+  -webkit-mask-image: radial-gradient(120% 90% at 30% 20%, var(--black) 55%, transparent 100%);
+  mask-image: radial-gradient(120% 90% at 30% 20%, var(--black) 55%, transparent 100%);
 }
 .login-hero::after {
   content: '';
@@ -182,7 +187,7 @@ async function submit() {
   height: 560px;
   right: -180px;
   top: -160px;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.12) 0%, transparent 62%);
+  background: radial-gradient(circle, var(--a-500-12) 0%, transparent 62%);
   animation: hero-glow 14s ease-in-out infinite alternate;
 }
 @keyframes hero-glow {
@@ -208,8 +213,8 @@ async function submit() {
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--a-500), var(--a-700));
-  color: #fff;
-  box-shadow: 0 8px 20px rgba(5, 150, 105, 0.35);
+  color: var(--surface);
+  box-shadow: 0 8px 20px var(--a-600-30);
 }
 .brand-mark .el-icon {
   font-size: 22px;
@@ -230,7 +235,7 @@ async function submit() {
   display: block;
   margin-top: 2px;
   font-size: 11.5px;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--on-dark-3);
   letter-spacing: 1.6px;
   text-transform: uppercase;
 }
@@ -246,8 +251,8 @@ async function submit() {
   gap: 8px;
   font-size: 12px;
   color: var(--a-300);
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.28);
+  background: var(--a-500-12);
+  border: 1px solid var(--a-500-28);
   padding: 6px 14px;
   border-radius: var(--r-full);
   margin-bottom: 22px;
@@ -259,7 +264,7 @@ async function submit() {
   height: 6px;
   border-radius: 50%;
   background: var(--a-400);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+  box-shadow: 0 0 0 3px var(--a-500-25);
 }
 .hero-title {
   font-size: 38px;
@@ -275,7 +280,7 @@ async function submit() {
   margin-top: 14px;
   font-size: 15px;
   line-height: 1.8;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--on-dark-2);
 }
 .hero-feats {
   margin-top: 36px;
@@ -286,7 +291,7 @@ async function submit() {
   gap: 16px;
   align-items: flex-start;
   padding: 15px 4px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--dark-line);
   transition:
     background 0.25s,
     padding-left 0.25s;
@@ -295,7 +300,7 @@ async function submit() {
   border-bottom: none;
 }
 .hero-feat:hover {
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--dark-bg);
   padding-left: 12px;
   border-radius: 10px;
 }
@@ -315,7 +320,7 @@ async function submit() {
   margin-top: 4px;
   font-size: 12.5px;
   line-height: 1.65;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--on-dark-3);
 }
 .hero-foot {
   position: relative;
@@ -324,10 +329,10 @@ async function submit() {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--on-dark-4);
 }
 .hero-foot .num {
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--on-dark-2);
 }
 
 /* ===== 右：登录表单区 ===== */
@@ -337,7 +342,7 @@ async function submit() {
   align-items: center;
   justify-content: center;
   padding: 48px;
-  background: radial-gradient(60% 50% at 85% 8%, rgba(5, 150, 105, 0.05), transparent 60%);
+  background: radial-gradient(60% 50% at 85% 8%, var(--a-600-05), transparent 60%);
 }
 .login-panel {
   width: 100%;

@@ -206,7 +206,7 @@ onMounted(() => {
 <style scoped>
 /* 页面骨架与 BOM 管理页一致 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

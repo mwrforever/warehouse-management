@@ -412,7 +412,7 @@ onMounted(async () => {
 <style scoped>
 /* 页面骨架 + 明细动态行布局 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

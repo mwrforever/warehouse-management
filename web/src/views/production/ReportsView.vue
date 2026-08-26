@@ -302,7 +302,7 @@ onMounted(async () => {
 <style scoped>
 /* 工序报工页样式（nexus-factory）：步骤条三态联动 + 报工卡片表单，见 pages/production.md §3 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -323,7 +323,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -360,7 +360,7 @@ onMounted(async () => {
 /* 不良数旁注：返修/报废后续版本提供 */
 .hint {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--p-400);
   margin-top: 4px;
   line-height: 1.5;
 }

@@ -77,7 +77,7 @@
         </div>
         <template v-else-if="pending.data">
           <div v-if="pending.data.items.length === 0" class="empty-ok">
-            <el-icon class="ok-icon" color="#059669"><Check /></el-icon>
+            <el-icon class="ok-icon" color="var(--a-600)"><Check /></el-icon>
             <span>全部单据已审核 ✓</span>
           </div>
           <template v-else>
@@ -652,7 +652,7 @@ onMounted(() => {
   gap: 12px;
 }
 .alert-card {
-  border: 1px solid #fecaca;
+  border: 1px solid var(--err-300);
   border-left: 4px solid var(--err);
   background: var(--err-bg);
   border-radius: var(--r-md);

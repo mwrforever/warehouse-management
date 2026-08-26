@@ -341,7 +341,7 @@ onMounted(async () => {
 <style scoped>
 /* 页面骨架 + 类型标签语义色（master-data.md 页覆盖） */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -360,25 +360,25 @@ onMounted(async () => {
   color: var(--p-300);
 }
 .tag-raw {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: var(--info-12);
+  color: var(--info);
+  border: 1px solid var(--info-30);
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 12px;
 }
 .tag-semi {
-  background: rgba(217, 119, 6, 0.12);
-  color: #d97706;
-  border: 1px solid rgba(217, 119, 6, 0.3);
+  background: var(--warn-12);
+  color: var(--warn);
+  border: 1px solid var(--warn-30);
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 12px;
 }
 .tag-fin {
-  background: rgba(5, 150, 105, 0.12);
-  color: #059669;
-  border: 1px solid rgba(5, 150, 105, 0.3);
+  background: var(--a-600-12);
+  color: var(--a-600);
+  border: 1px solid var(--a-600-30);
   border-radius: 4px;
   padding: 2px 8px;
   font-size: 12px;

@@ -451,14 +451,14 @@ onMounted(async () => {
   margin-top: var(--space-lg);
 }
 .book-qty {
-  color: #64748b;
+  color: var(--t3);
 }
 .diff-in {
-  color: #059669;
+  color: var(--a-600);
   font-weight: 700;
 }
 .diff-out {
-  color: #dc2626;
+  color: var(--err);
   font-weight: 700;
 }
 .detail-head {

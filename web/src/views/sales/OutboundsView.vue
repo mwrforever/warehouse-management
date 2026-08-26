@@ -712,7 +712,7 @@ onMounted(async () => {
 <style scoped>
 /* 销售出库单页样式（nexus-factory）：与采购入库单页同骨架；顶部汇总行/独立出库「来源订单」列灰字占位 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -720,7 +720,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -740,8 +740,8 @@ onMounted(async () => {
   gap: var(--space-sm);
   margin-bottom: var(--space-lg);
   padding: var(--space-sm) var(--space-md);
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
+  background: var(--a-50);
+  border: 1px solid var(--a-200);
   border-radius: 6px;
   font-size: 13px;
 }
@@ -752,7 +752,7 @@ onMounted(async () => {
 .summary-chip {
   font-family: 'Fira Code', monospace;
   font-weight: 600;
-  color: #047857;
+  color: var(--a-700);
 }
 .pager {
   display: flex;
@@ -764,7 +764,7 @@ onMounted(async () => {
   font-weight: 600;
 }
 .muted {
-  color: var(--color-muted-text, #94a3b8);
+  color: var(--color-muted-text, var(--p-400));
 }
 .form-grid {
   display: grid;

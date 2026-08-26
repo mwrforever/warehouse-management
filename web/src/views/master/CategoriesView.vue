@@ -171,7 +171,7 @@ onMounted(load)
 <style scoped>
 /* 树节点行内操作：hover 显示，点击不冒泡到节点选中 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

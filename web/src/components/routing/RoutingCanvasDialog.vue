@@ -1051,7 +1051,7 @@ function closeDialog() {
   padding: 0 6px;
   border-radius: var(--r-full);
   background: var(--warn);
-  color: #fff;
+  color: var(--surface);
   font-size: 11px;
   line-height: 18px;
 }

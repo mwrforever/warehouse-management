@@ -879,7 +879,7 @@ onMounted(async () => {
 <style scoped>
 /* 生产工单页样式（nexus-factory）：骨架与销售订单页一致，生产特有样式见 pages/production.md */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -887,7 +887,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -905,7 +905,7 @@ onMounted(async () => {
 .section-title {
   font-family: 'Fira Code', monospace;
   font-size: 13px;
-  color: #334155;
+  color: var(--p-700);
   margin: 16px 0 8px;
 }
 /* 缺料警告条（琥珀色，不阻断下达；下方逐行明细） */
@@ -914,9 +914,9 @@ onMounted(async () => {
 }
 /* 已完成深绿（与已审核绿同族但明度更低，防同态混淆——销售模块同款） */
 .tag-done {
-  background: #ecfdf5 !important;
-  color: #047857 !important;
-  border-color: #047857 !important;
+  background: var(--a-50) !important;
+  color: var(--a-700) !important;
+  border-color: var(--a-700) !important;
 }
 .warning-line {
   display: flex;

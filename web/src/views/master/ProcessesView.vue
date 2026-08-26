@@ -166,7 +166,7 @@ onMounted(load)
 <style scoped>
 /* 页面骨架同上 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

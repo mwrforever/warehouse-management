@@ -453,7 +453,7 @@ onMounted(async () => {
 <style scoped>
 /* 成品入库页样式（nexus-factory）：骨架与领料单页一致；生产特有样式见 pages/production.md §7 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -461,7 +461,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;

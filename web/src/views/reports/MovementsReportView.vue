@@ -184,7 +184,7 @@ onMounted(load)
   margin-bottom: var(--space-2xl);
 }
 .kpi-card {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: var(--space-xl);
@@ -196,7 +196,7 @@ onMounted(load)
 }
 .kpi-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--t3);
   margin-bottom: var(--space-md);
 }
 .kpi-value {
@@ -205,7 +205,7 @@ onMounted(load)
   color: var(--color-foreground);
 }
 .kpi-value.negative {
-  color: #dc2626;
+  color: var(--err);
 }
 .chart-wrap {
   margin-bottom: var(--space-2xl);
@@ -218,6 +218,6 @@ onMounted(load)
   transition: background-color 200ms ease;
 }
 :deep(.drill-row:hover) {
-  background: #f8fafc;
+  background: var(--p-50);
 }
 </style>
