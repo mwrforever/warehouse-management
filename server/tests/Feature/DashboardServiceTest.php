@@ -143,7 +143,7 @@ class DashboardServiceTest extends TestCase
         $res = $this->service->summary($this->admin);
 
         $this->assertSame('10.00', $res['inventory_total_qty']);
-        $this->assertSame('15.00', $res['inventory_value']); // 10 × 150 分 = 15.00 元
+        $this->assertSame(1500, $res['inventory_value']); // 10 × 150 分 = 1500 分（R2：整数分口径）
         $this->assertSame('5.00', $res['today_inbound_qty']);
         $this->assertSame('3.00', $res['today_outbound_qty']);
     }
@@ -214,9 +214,9 @@ class DashboardServiceTest extends TestCase
 
         $res = $this->service->summary($this->admin);
 
-        // 总量 = 3 + 7 + 5；总值 = (3+7) × 150 分 = 15.00 元（无价商品 5.00 只计入总量）
+        // 总量 = 3 + 7 + 5；总值 = (3+7) × 150 分 = 1500 分（无价商品 5.00 只计入总量；元展示由前端负责）
         $this->assertSame('15.00', $res['inventory_total_qty']);
-        $this->assertSame('15.00', $res['inventory_value']);
+        $this->assertSame(1500, $res['inventory_value']);
     }
 
     public function test_summary_cost_price_cache_invalidated_after_inbound_approve(): void
@@ -239,9 +239,9 @@ class DashboardServiceTest extends TestCase
             'quantity' => 1, 'price' => 150, 'amount' => 150,
         ]);
 
-        // 第一次 summary：建立缓存（10 × 150 分 = 15.00 元）
+        // 第一次 summary：建立缓存（10 × 150 分 = 1500 分）
         $res1 = $this->service->summary($this->admin);
-        $this->assertSame('15.00', $res1['inventory_value']);
+        $this->assertSame(1500, $res1['inventory_value']);
 
         // 第二张：草稿、250 分、独立入库（无订单行引用，可直审）；审核成功路径执行缓存失效
         $second = PurchaseInbound::create([
@@ -258,10 +258,10 @@ class DashboardServiceTest extends TestCase
             ->assertOk()
             ->assertJsonPath('code', 0);
 
-        // 第二次 summary：审核后 250 分成为最新价，且审核入库使余额 +1（10+1=11）→ 11 × 250 分 = 27.50 元
+        // 第二次 summary：审核后 250 分成为最新价，且审核入库使余额 +1（10+1=11）→ 11 × 250 分 = 2750 分
         $res2 = $this->service->summary($this->admin);
         $this->assertSame('11.00', $res2['inventory_total_qty']);
-        $this->assertSame('27.50', $res2['inventory_value']);
+        $this->assertSame(2750, $res2['inventory_value']);
     }
 
     public function test_summary_pending_count_is_permission_filtered(): void

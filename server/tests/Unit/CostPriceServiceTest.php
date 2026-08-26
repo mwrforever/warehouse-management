@@ -1,6 +1,6 @@
 <?php
 
-// 成本价估算服务单测（D-20）：「每商品最近一次已审核采购入库单价」全项目唯一口径
+// 成本价估算服务单测（D-20 + R2）：「每商品最近一次已审核采购入库单价」全项目唯一口径（分单位整数）
 //
 // 可测性说明：build() 为 private 且无异常分支（无数据即空 map），无法也不应直调——
 // 经公有 latestPriceMap() 覆盖（缓存未命中路径即执行 build，测试环境 CACHE_STORE=array
@@ -69,11 +69,11 @@ class CostPriceServiceTest extends TestCase
         ]);
     }
 
-    /** 造入库明细辅助：单价（分）+ 可选明细行创建时间（成本价排序键：created_at/id） */
+    /** 造入库明细辅助：单价（分单位整数）+ 可选明细行创建时间（成本价排序键：created_at/id） */
     private function makeItem(
         PurchaseInbound $inbound,
         Product $product,
-        string $price,
+        int $price,
         ?string $createdAt = null
     ): PurchaseInboundItem {
         $item = PurchaseInboundItem::create([
@@ -93,7 +93,7 @@ class CostPriceServiceTest extends TestCase
     public function test_latest_price_map_keeps_latest_approved_price_per_product(): void
     {
         // 正常路径：商品 A 先后两张已审核入库单（昨日 150 分 → 今日 250 分）→ 取更晚的 250 分；
-        // 商品 B 仅一张 → 各自生效；sqlite 整数形态单价经 bcmath 归一为 2 位小数字符串
+        // 商品 B 仅一张 → 各自生效；price 列 bigint + integer cast，map 值为分单位整数
         $first = $this->makeInbound('PI-CP-001', PurchaseInbound::STATUS_APPROVED);
         $this->makeItem($first, $this->matA, '150', now()->subDay()->toDateTimeString());
         $second = $this->makeInbound('PI-CP-002', PurchaseInbound::STATUS_APPROVED);
@@ -102,8 +102,8 @@ class CostPriceServiceTest extends TestCase
 
         $map = $this->service->latestPriceMap();
 
-        $this->assertSame('250.00', $map[$this->matA->id]);
-        $this->assertSame('333.00', $map[$this->matB->id]);
+        $this->assertSame(250, $map[$this->matA->id]);
+        $this->assertSame(333, $map[$this->matB->id]);
     }
 
     #[Test]
@@ -118,7 +118,7 @@ class CostPriceServiceTest extends TestCase
 
         $map = $this->service->latestPriceMap();
 
-        $this->assertSame('150.00', $map[$this->matA->id]);
+        $this->assertSame(150, $map[$this->matA->id]);
     }
 
     #[Test]
@@ -134,7 +134,7 @@ class CostPriceServiceTest extends TestCase
 
         $map = $this->service->latestPriceMap();
 
-        $this->assertSame('250.00', $map[$this->matA->id]);
+        $this->assertSame(250, $map[$this->matA->id]);
     }
 
     #[Test]
@@ -159,16 +159,16 @@ class CostPriceServiceTest extends TestCase
         // 反映新价（真实链路：采购入库单 approve 成功路径调用 flush）
         $first = $this->makeInbound('PI-CP-001', PurchaseInbound::STATUS_APPROVED);
         $this->makeItem($first, $this->matA, '150', now()->subDay()->toDateTimeString());
-        $this->assertSame('150.00', $this->service->latestPriceMap()[$this->matA->id]);
+        $this->assertSame(150, $this->service->latestPriceMap()[$this->matA->id]);
 
         $second = $this->makeInbound('PI-CP-002', PurchaseInbound::STATUS_APPROVED);
         $this->makeItem($second, $this->matA, '250', now()->toDateTimeString());
 
         // 未失效：仍读缓存旧价（150 分）——证明缓存生效而非每次全量扫描
-        $this->assertSame('150.00', $this->service->latestPriceMap()[$this->matA->id]);
+        $this->assertSame(150, $this->service->latestPriceMap()[$this->matA->id]);
 
         // 失效后重建：250 分成为最新价
         $this->service->flush();
-        $this->assertSame('250.00', $this->service->latestPriceMap()[$this->matA->id]);
+        $this->assertSame(250, $this->service->latestPriceMap()[$this->matA->id]);
     }
 }

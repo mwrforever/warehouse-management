@@ -128,7 +128,7 @@ class SalesOrderController extends Controller
         ]);
     }
 
-    /** 新建草稿：单号持久序列；金额 bcmath；明细非空 1401 / 数量≤0 422 / 原料禁售 422 / 负价 1411 / 重复商品 1412 */
+    /** 新建草稿：单号持久序列；金额分单位整数（half-up 到整数分）；明细非空 1401 / 数量≤0 422 / 原料禁售 422 / 负价 1411 / 重复商品 1412 */
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
@@ -161,7 +161,7 @@ class SalesOrderController extends Controller
                 'quantity' => $i['quantity'],
                 'price' => $i['price'],
                 'shipped_qty' => 0,
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
             ], $data['items']));
 
             return $order;
@@ -235,7 +235,7 @@ class SalesOrderController extends Controller
                 'quantity' => $i['quantity'],
                 'price' => $i['price'],
                 'shipped_qty' => 0,
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
             ], $data['items']));
         });
 
@@ -340,9 +340,10 @@ class SalesOrderController extends Controller
             // 注意：items 不加 required——空数组 [] 走 1401 业务码（422 仅拦缺失字段与类型错误）
             'items' => 'array',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            // 数量/单价限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError；允许负号形态，负值由业务层拦截 422/1411）
+            // 数量限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError；允许负号形态，负值由业务层拦截 422）；
+            // 单价为分单位整数（R2：bigint 分列），integer 校验拦截小数分与科学计数法形态（负值仍由业务层拦截 1411）
             'items.*.quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
-            'items.*.price' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
+            'items.*.price' => 'required|integer',
         ]);
     }
 
@@ -370,11 +371,12 @@ class SalesOrderController extends Controller
         // 商品批量预取（B-105）：一次 whereIn 拉全明细商品，替代循环内逐行 Product::find 的 N+1 查询
         $products = Product::whereIn('id', collect($items)->pluck('product_id')->unique())->get()->keyBy('id');
         foreach ($items as $item) {
-            // 数量/价格正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）
+            // 数量正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）；
+            // 单价经 integer 校验后为整数分，直接整数比较（无浮点参与）
             if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
                 return $this->fail(422, '数量必须大于 0');
             }
-            if (bccomp((string) $item['price'], '0', 2) < 0) {
+            if ((int) $item['price'] < 0) {
                 return $this->fail(1411, '价格不能为负数');
             }
             // 原料禁售（SAL-10）：仅成品/半成品可销售（前端下拉已过滤，后端防御性兜底）

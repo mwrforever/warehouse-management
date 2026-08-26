@@ -1,36 +1,41 @@
 <?php
 
-// 采购订单服务：金额 bcmath 整数运算（分单位禁浮点）+ 入库后订单状态重算
+// 采购订单服务：金额分单位整数运算（R2：bigint 分列 + Cents 统一 half-up 舍入，禁浮点）+ 入库后订单状态重算
 
 namespace App\Services;
 
 use App\Models\PurchaseOrder;
+use App\Support\Cents;
 
 class PurchaseOrderService
 {
     /**
-     * 行金额 = 数量 × 单价（bcmath 2 位小数，整数分运算防浮点误差）
+     * 行金额 = 数量 × 单价（分），half-up 取整到整数分
      *
-     * @param  string  $quantity  数量（decimal(12,2) 字符串，可含小数）
-     * @param  string  $price  单价（分，整数）
-     * @return string 行金额（分，2 位小数字符串）
+     * 数量为 decimal(12,2)（2 位小数）、单价为 bigint 分整数，乘积可能产生小数分
+     * （如 1.55 × 123 分 = 190.65 分）——统一走 Cents::multiply 四舍五入到整数分落 bigint 列。
+     *
+     * @param  string  $quantity  数量（decimal(12,2) 字符串，来源前端入参/模型 cast，可含 2 位小数）
+     * @param  int|string  $priceCents  含税单价（分单位整数，来源前端 integer 校验入参或 bigint 列读取；允许 0，负数由控制器业务校验拦截）
+     * @return int 行金额（分单位整数，恒 >= 0，半分进位）
      */
-    public function lineAmount(string $quantity, string $price): string
+    public function lineAmount(string $quantity, int|string $priceCents): int
     {
-        return bcmul($quantity, $price, 2);
+        return Cents::multiply($quantity, $priceCents);
     }
 
     /**
-     * 明细金额合计 = Σ 行金额（bcadd 逐行累加，禁止浮点累加）
+     * 明细金额合计 = Σ 行金额（整数分逐行累加——行金额已 half-up 为整数分，无浮点参与）
      *
      * @param  array  $items  明细行数组，每行含 quantity/price
-     * @return string 合计金额（分，2 位小数字符串）
+     * @return int 合计金额（分单位整数）
      */
-    public function calculateTotal(array $items): string
+    public function calculateTotal(array $items): int
     {
-        $total = '0';
+        $total = 0;
         foreach ($items as $item) {
-            $total = bcadd($total, $this->lineAmount((string) $item['quantity'], (string) $item['price']), 2);
+            // 整数分累加（PHP int 精确，金额域远低于 int64 上限）
+            $total += $this->lineAmount((string) $item['quantity'], $item['price']);
         }
 
         return $total;

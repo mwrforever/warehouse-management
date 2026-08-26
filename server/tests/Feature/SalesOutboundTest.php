@@ -139,7 +139,7 @@ class SalesOutboundTest extends TestCase
         $outbound = SalesOutbound::where('no', $no)->first();
         $this->assertSame(SalesOutbound::STATUS_DRAFT, $outbound->status);
         // 6×10000 + 5×2000 = 70000 分
-        $this->assertSame('70000.00', $outbound->total_amount);
+        $this->assertSame(70000, $outbound->total_amount);
         $this->assertSame(2, $outbound->items()->count());
     }
 
@@ -230,7 +230,7 @@ class SalesOutboundTest extends TestCase
             ->assertJsonPath('data.items.0.product_code', 'FIN-002')
             ->assertJsonPath('data.items.0.quantity', '10.00')
             ->assertJsonPath('data.items.0.remaining_qty', '10.00')
-            ->assertJsonPath('data.items.0.price', '10000.00');
+            ->assertJsonPath('data.items.0.price', 10000);
     }
 
     public function test_from_order_rejects_completed_order(): void

@@ -1,6 +1,6 @@
 <?php
 
-// 采购订单服务单测（D-20）：金额 bcmath 精确到分 + 入库后订单状态重算语义
+// 采购订单服务单测（D-20 + R2）：金额分单位整数（Cents half-up 舍入）+ 入库后订单状态重算语义
 // lineAmount/calculateTotal 为纯计算直测；syncStatus 依赖 Eloquent 持久化
 // （firstOrFail/items/save），按 RoutingServiceTest 惯例用 RefreshDatabase + sqlite 内存库直测
 
@@ -51,11 +51,11 @@ class PurchaseOrderServiceTest extends TestCase
         ]);
     }
 
-    /** 造订单行辅助：订购数量/单价（分）/已入库累计，行金额按数量×单价保持数据自洽 */
+    /** 造订单行辅助：订购数量/单价（分整数）/已入库累计，行金额按数量×单价 half-up 保持数据自洽 */
     private function makeItem(
         PurchaseOrder $order,
         string $quantity,
-        string $price,
+        int $price,
         string $receivedQty
     ): PurchaseOrderItem {
         return PurchaseOrderItem::create([
@@ -68,37 +68,38 @@ class PurchaseOrderServiceTest extends TestCase
     #[Test]
     public function test_line_amount_multiplies_decimal_quantity_by_cent_price(): void
     {
-        // 正常路径：数量 10.50 × 单价 1234 分 = 12957.00 分（2 位小数字符串，分单位禁浮点）
-        $this->assertSame('12957.00', $this->service->lineAmount('10.50', '1234'));
+        // 正常路径：数量 10.50 × 单价 1234 分 = 12957 分（乘积为整数分，舍入不引入偏差）
+        $this->assertSame(12957, $this->service->lineAmount('10.50', '1234'));
     }
 
     #[Test]
-    public function test_line_amount_keeps_exact_cent_precision(): void
+    public function test_line_amount_rounds_fractional_cents_half_up(): void
     {
-        // 边界路径：最小分位不丢精度——0.01 × 1 分 = 0.01；合法域内（数量 2 位小数 × 整数分单价）
-        // 乘积至多 2 位小数，bcmul 截断与舍入无差异，金额精确到分无误差累积
-        $this->assertSame('0.01', $this->service->lineAmount('0.01', '1'));
-        $this->assertSame('382.50', $this->service->lineAmount('2.55', '150'));
+        // 边界路径：乘积产生小数分——统一 half-up 到整数分（R2 舍入口径）：
+        // 0.01 × 1 = 0.01 分 → 0；2.55 × 150 = 382.50 恰半分 → 进位 383
+        $this->assertSame(0, $this->service->lineAmount('0.01', '1'));
+        $this->assertSame(383, $this->service->lineAmount('2.55', '150'));
+        $this->assertSame(191, $this->service->lineAmount('1.55', '123'));
     }
 
     #[Test]
-    public function test_calculate_total_sums_lines_exact_to_cent(): void
+    public function test_calculate_total_sums_lines_in_integer_cents(): void
     {
-        // 正常路径：三行合计 12957.00 + 382.50 + 100.00 = 13439.50——bcadd 逐行累加，
-        // 0.10 类数值（浮点下会漂移）合计仍精确到分
+        // 正常路径：三行 half-up 后整数分累加 12957 + 383 + 100 = 13440（行金额先取整再求和，
+        // 与单据落库行金额口径一致；无浮点参与累加）
         $items = [
             ['quantity' => '10.50', 'price' => '1234'],
             ['quantity' => '2.55', 'price' => '150'],
             ['quantity' => '0.10', 'price' => '1000'],
         ];
-        $this->assertSame('13439.50', $this->service->calculateTotal($items));
+        $this->assertSame(13440, $this->service->calculateTotal($items));
     }
 
     #[Test]
     public function test_calculate_total_empty_items_returns_zero(): void
     {
-        // 边界路径：空明细合计为 '0'（初始累加值原样返回，对应无明细单据总额 0 的业务口径）
-        $this->assertSame('0', $this->service->calculateTotal([]));
+        // 边界路径：空明细合计为 0（初始累加值原样返回，对应无明细单据总额 0 分的业务口径）
+        $this->assertSame(0, $this->service->calculateTotal([]));
     }
 
     #[Test]

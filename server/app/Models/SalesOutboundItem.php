@@ -14,8 +14,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $outbound_id
  * @property int $product_id
  * @property string $quantity
- * @property string $price
- * @property string $amount
+ * @property int $price 单价（分单位整数）
+ * @property int $amount 行金额（分单位整数，half-up 取整）
  * @property int|null $order_item_id
  */
 class SalesOutboundItem extends Model
@@ -26,8 +26,8 @@ class SalesOutboundItem extends Model
     {
         return [
             'quantity' => 'decimal:2',
-            'price' => 'decimal:2',
-            'amount' => 'decimal:2',
+            'price' => 'integer',
+            'amount' => 'integer',
         ];
     }
 

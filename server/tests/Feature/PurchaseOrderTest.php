@@ -46,7 +46,7 @@ class PurchaseOrderTest extends TestCase
         $this->semi = Product::create(['name' => '半成品A', 'code' => 'SEMI-001', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
     }
 
-    // 组装订单载荷（默认 2 行：MAT-001×100@5元、SEMI-001×50@10元）
+    // 组装订单载荷（默认 2 行：MAT-001×100@500分、SEMI-001×50@1000分，单价分单位整数）
     private function payload(array $overrides = []): array
     {
         return array_merge([
@@ -85,19 +85,19 @@ class PurchaseOrderTest extends TestCase
         $this->assertMatchesRegularExpression('/^PO\d{12}001$/', $no);
         $order = PurchaseOrder::where('no', $no)->first();
         $this->assertSame(PurchaseOrder::STATUS_DRAFT, $order->status);
-        // 100×500 + 50×1000 = 100000 分
-        $this->assertSame('100000.00', $order->total_amount);
+        // 100×500 + 50×1000 = 100000 分（整数分口径）
+        $this->assertSame(100000, $order->total_amount);
         $this->assertSame(2, $order->items()->count());
     }
 
     public function test_store_amount_precise_with_decimal_quantity(): void
     {
-        // 边界路径：小数数量×单价 bcmath 精确（1.55×123=190.65 分，浮点会 190.6499...）
+        // 边界路径：小数数量×分单价产生小数分（1.55×123=190.65 分）——half-up 取整到 191 分落 bigint
         $no = $this->createOrder($this->payload(['items' => [
             ['product_id' => $this->mat->id, 'quantity' => 1.55, 'price' => 123],
         ]]));
         $order = PurchaseOrder::where('no', $no)->first();
-        $this->assertSame('190.65', $order->items()->first()->amount);
+        $this->assertSame(191, $order->items()->first()->amount);
     }
 
     public function test_store_rejects_empty_items_with_1301(): void
@@ -131,7 +131,7 @@ class PurchaseOrderTest extends TestCase
         $no = $this->createOrder($this->payload(['items' => [
             ['product_id' => $this->mat->id, 'quantity' => 10, 'price' => 0],
         ]]));
-        $this->assertSame('0.00', PurchaseOrder::where('no', $no)->first()->total_amount);
+        $this->assertSame(0, PurchaseOrder::where('no', $no)->first()->total_amount);
     }
 
     public function test_store_rejects_scientific_notation_quantity_with_422(): void
@@ -165,7 +165,7 @@ class PurchaseOrderTest extends TestCase
         $items[0]['quantity'] = 120;
         $this->withToken($this->token)->putJson("/api/v1/purchase/orders/{$order->id}", $this->payload(['items' => $items]))
             ->assertJsonPath('code', 0);
-        $this->assertSame('110000.00', PurchaseOrder::where('no', $no)->first()->total_amount);
+        $this->assertSame(110000, PurchaseOrder::where('no', $no)->first()->total_amount);
     }
 
     public function test_update_approved_rejected_with_1303(): void
@@ -246,7 +246,7 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('data.items.0.supplier_name', '测试供应商')
             ->assertJsonPath('data.items.0.status', 1)
             ->assertJsonPath('data.items.0.status_label', '已审核')
-            ->assertJsonPath('data.items.0.total_amount', '100000.00');
+            ->assertJsonPath('data.items.0.total_amount', 100000);
         $this->withToken($this->token)->getJson('/api/v1/purchase/orders?keyword=PO'.date('Ymd'))
             ->assertJsonPath('data.total', 1);
         $this->withToken($this->token)->getJson('/api/v1/purchase/orders?status=0')
@@ -263,7 +263,7 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('data.items.0.product_code', 'MAT-001')
             ->assertJsonPath('data.items.0.quantity', '100.00')
             ->assertJsonPath('data.items.0.received_qty', '0.00')
-            ->assertJsonPath('data.items.0.amount', '50000.00');
+            ->assertJsonPath('data.items.0.amount', 50000);
     }
 
     public function test_inbounds_returns_empty_items_for_draft_order(): void

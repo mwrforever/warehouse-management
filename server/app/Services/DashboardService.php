@@ -1,7 +1,8 @@
 <?php
 
 // 仪表盘聚合服务：4 类只读实时聚合（KPI/待审核/工单进度/预警），零迁移零新表
-// 全部口径与业务模块事实一致；数量/金额 bcmath 字符串运算；不落快照、无缓存；
+// 全部口径与业务模块事实一致；数量 bcmath 字符串运算、金额分单位整数（R2 纯分口径）；
+// 不落快照、无缓存；
 // 待审核单据按当前用户审核权限过滤（审核复用各模块 update 权限——安全语义所在）
 
 namespace App\Services;
@@ -19,6 +20,7 @@ use App\Models\ReturnList;
 use App\Models\SalesOrder;
 use App\Models\SalesOutbound;
 use App\Models\User;
+use App\Support\Cents;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -137,7 +139,8 @@ class DashboardService
      * KPI 汇总：库存总量/总值/今日出入库/待审核数/生产中工单数/预警数
      *
      * 库存总量/总值均为 SQL 聚合下推（D-18）：总量=SUM(quantity)；总值=Σ(余额×最近一次「已审核」
-     * 采购入库单价)÷100 元经一条 joinSub 聚合 SQL 求和（无任何已知成本价→null）；
+     * 采购入库单价)的整数分值（R2：后端纯分口径，聚合后 half-up 单次取整，元展示由前端负责；
+     * 无任何已知成本价→null）；
      * 今日出入库=流水 created_at 当天闭区间按方向求和；待审核数=9 类草稿按审核权限过滤后计数；
      * 预警数=低库存条数（高库存不占仪表盘，spec §7）。
      *
@@ -165,8 +168,8 @@ class DashboardService
         )->where('lp.rn', 1)->select('lp.product_id', 'lp.price');
 
         // 库存总值下推（D-18）：余额行 join 最新价后单条聚合（join 天然排除无价商品——原 isset 语义）；
-        // SUM(quantity×price) 累计「数量×分」，再统一 ÷100 转元（聚合后单次取整，精度不低于逐行取整）；
-        // matched>0 即至少一行有已知成本价（原 valueKnown 语义：部分有价 → 总值非 null）
+        // SUM(quantity×price) 累计「数量×分」，聚合后经 Cents::round 单次 half-up 到整数分
+        // （精度不低于逐行取整）；matched>0 即至少一行有已知成本价（原 valueKnown 语义：部分有价 → 总值非 null）
         $valueRow = InventoryBalance::query()
             ->joinSub(
                 $latestPrices,
@@ -175,11 +178,11 @@ class DashboardService
             )
             ->selectRaw('COUNT(*) as matched, SUM(inventory_balances.quantity * cp.price) as total_value')
             ->first();
-        $totalValue = '0';
+        $totalValue = 0;
         $valueKnown = $valueRow !== null && (int) $valueRow->getAttribute('matched') > 0;
         if ($valueKnown) {
-            // bcmath 归一跨库 SUM 形态（SQLite real / MySQL decimal 字符串）并转元
-            $totalValue = bcdiv(bcadd((string) $valueRow->getAttribute('total_value'), '0', 2), '100', 2);
+            // 跨库 SUM 形态归一（SQLite real / MySQL decimal 字符串）后 half-up 取整数分（R2：后端纯分口径，元换算由前端展示层负责）
+            $totalValue = Cents::round((string) $valueRow->getAttribute('total_value'));
         }
 
         // 今日出入库：流水 created_at 当天闭区间（Carbon 本地时区边界，方言无关）
