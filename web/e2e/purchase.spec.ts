@@ -5,28 +5,25 @@
 // 定位方式：el-select 占位符无 placeholder 属性且 filterable 的 input 拦截点击 → 点 .el-select 外壳；
 // 下拉项用 getByRole('option')，并先等唯一匹配（旧下拉淡出期间 aria-hidden 未翻转会产生重复匹配）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 // PUT 请求辅助：修改类接口（订单/入库单更新）走 PUT 方法
 async function apiPut(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.put(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -153,9 +150,7 @@ test.describe('采购管理模块', () => {
     })
     expect(put.code).toBe(1303)
     const del = await page.request.delete(`/api/v1/purchase/orders/${poId}`, {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
     })
     expect(((await del.json()) as { code: number }).code).toBe(1304)
   })

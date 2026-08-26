@@ -3,19 +3,17 @@
 // 期望值一律用 API 交叉核对计算（不硬编码）——报表纯读零数据变更，不破坏跨 spec 数据假设
 // 文件命名锁定 stats-report.spec.ts：字典序 sales < stats-report < system（TC-RPT-04 依赖 sales 数据）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI, loginByUI } from './helpers'
+import { loginByAPI, loginByUI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 production.spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 production.spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -365,9 +363,7 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
     expect(futProd.items).toEqual([])
     // 3. 倒置日期（API 直调）：业务码 1601 + 精确消息
     const inv = await page.request.get('/api/v1/reports/movements-summary', {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
       params: { date_from: '2099-01-31', date_to: '2099-01-01', granularity: 'day' },
     })
     const invBody = (await inv.json()) as { code: number; message: string }
@@ -375,16 +371,15 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
     expect(invBody.message).toBe('开始日期不能晚于结束日期')
     // 4. 区间跨度上限（P2-2）：日粒度 >366 天、月粒度 >36 个月 → 业务码 1601「日期区间过长」
     // （前端快捷项最大近 30 天不可触发，API 直调断言；防区间无上限导致流水全量遍历）
-    const token = await page.evaluate(() => localStorage.getItem('token'))
     const overDay = await page.request.get('/api/v1/reports/movements-summary', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: await sessionHeaders(page),
       params: { date_from: '2025-08-01', date_to: '2026-08-14', granularity: 'day' },
     })
     const overDayBody = (await overDay.json()) as { code: number; message: string }
     expect(overDayBody.code).toBe(1601)
     expect(overDayBody.message).toBe('日期区间过长')
     const overMonth = await page.request.get('/api/v1/reports/movements-summary', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: await sessionHeaders(page),
       params: { date_from: '2025-01-01', date_to: '2028-02-01', granularity: 'month' },
     })
     const overMonthBody = (await overMonth.json()) as { code: number; message: string }
@@ -418,15 +413,14 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
     await expect(page.locator('.sidebar')).not.toContainText('出入库汇总')
     await expect(page.locator('.sidebar')).not.toContainText('生产统计')
     await expect(page.locator('.sidebar')).not.toContainText('采购销售汇总')
-    // 3. 越权 API：operator 直调报表接口 → 403（后端拦截）
-    const token = await page.evaluate(() => localStorage.getItem('token'))
+    // 3. 越权 API：operator 会话直接调用报表接口 → 403（后端拦截）
     for (const url of [
       '/api/v1/reports/inventory-summary',
       '/api/v1/reports/movements-summary?date_from=2026-08-01&date_to=2026-08-31&granularity=day',
       '/api/v1/reports/production?date_from=2026-08-01&date_to=2026-08-31',
       '/api/v1/reports/purchase-sales?date_from=2026-08-01&date_to=2026-08-31&granularity=month',
     ]) {
-      const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await page.request.get(url, { headers: await sessionHeaders(page) })
       expect(res.status()).toBe(403)
       const body = (await res.json()) as { code: number }
       expect(body.code).toBe(403)

@@ -9,28 +9,25 @@
 // 库存末态随库存/采购/前置用例变化 → 一律记录「当时余额」P₁/F₁ 按增量断言（balances 按 商品×仓库×库位 分行，汇总求和）
 // 定位方式同 sales.spec：el-select 外壳点击 + getByRole('option') 唯一匹配
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 sales.spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 sales.spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 // PUT 请求辅助：草稿更新类接口（退料单等）走 PUT 方法
 async function apiPut(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.put(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
