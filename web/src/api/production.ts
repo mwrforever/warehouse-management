@@ -107,9 +107,9 @@ export interface ReleaseWarning {
 export interface OperationReportRecord {
   id: number
   operator: string | null
-  qualified_qty: number
-  defective_qty: number
-  hours: number
+  qualified_qty: string // 后端 decimal:2 序列化为字符串（与图节点字段同口径）
+  defective_qty: string // 后端 decimal:2 序列化为字符串
+  hours: string // 后端 decimal:2 序列化为字符串
   reported_at: string
   remark: string | null
 }

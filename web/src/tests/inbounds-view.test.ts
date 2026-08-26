@@ -47,6 +47,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import { purchaseApi } from '../api/purchase'
+import { warehouseApi, type LocationItem } from '../api/warehouse'
 
 describe('采购入库「从订单生成」订单下拉远程搜索（BF-3/B-106）', () => {
   let pinia: ReturnType<typeof createPinia>
@@ -94,6 +95,53 @@ describe('采购入库「从订单生成」订单下拉远程搜索（BF-3/B-106
     expect(purchaseApi.availableOrders).toHaveBeenCalledWith(
       expect.objectContaining({ keyword: 'PO2026' }),
     )
+    wrapper.unmount()
+  })
+
+  it('快速切换仓库时旧仓库的迟到库位响应被丢弃（防所见非所选）', async () => {
+    // 异常路径：仓库 A→B 快速切换时 A 的库位响应后到，序号令牌守卫必须丢弃，不得覆盖 B 的库位
+    const wrapper = mountView()
+    await flushPromises()
+
+    // 打开独立新建弹窗
+    const createBtn = wrapper.findAll('button').find((b) => b.text().replace(/\s+/g, '') === '新建')
+    expect(createBtn, '独立新建入口应存在').toBeTruthy()
+    await createBtn!.trigger('click')
+    await flushPromises()
+
+    // 两次可手动控制的延迟响应：仓库 A 先发请求但后返回，仓库 B 后发请求先返回
+    let resolveA!: (v: { items: LocationItem[]; total: number }) => void
+    let resolveB!: (v: { items: LocationItem[]; total: number }) => void
+    const locationsMock = vi.mocked(warehouseApi.locations)
+    locationsMock
+      .mockImplementationOnce(() => new Promise((r) => (resolveA = r)))
+      .mockImplementationOnce(() => new Promise((r) => (resolveB = r)))
+
+    const dialog = wrapper.find('.el-dialog')
+    const selects = dialog.findAllComponents({ name: 'ElSelect' })
+    // 独立新建弹窗内 select 顺序：供应商 → 仓库 → 库位（来源订单 select 在独立模式被 v-if 隐藏）
+    const warehouseSelect = selects[1]
+    const locationSelect = selects[2]
+
+    // 快速切换 A → B：两次 change 之间不等待响应返回
+    await warehouseSelect.vm.$emit('change', 1)
+    await warehouseSelect.vm.$emit('change', 2)
+
+    // B 响应先到：库位下拉填充 B 的库位
+    resolveB({ items: [{ id: 21, name: 'B 库位', code: 'B-01', status: 1 }], total: 1 })
+    await flushPromises()
+    // A 响应迟到：必须被守卫丢弃，不得覆盖已填充的 B 库位
+    resolveA({ items: [{ id: 11, name: 'A 库位', code: 'A-01', status: 1 }], total: 1 })
+    await flushPromises()
+
+    // 打开库位下拉，选项应只有 B 的库位（A 的迟到响应未生效）
+    await locationSelect.trigger('click')
+    await flushPromises()
+    const optionTexts = Array.from(document.body.querySelectorAll('.el-select-dropdown__item')).map(
+      (n) => n.textContent?.trim(),
+    )
+    expect(optionTexts).toContain('B 库位')
+    expect(optionTexts).not.toContain('A 库位')
     wrapper.unmount()
   })
 })

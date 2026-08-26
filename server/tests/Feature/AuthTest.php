@@ -6,7 +6,9 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Testing\TestResponse;
+use Laravel\Sanctum\PersonalAccessToken;
 use Symfony\Component\HttpFoundation\Cookie;
 use Tests\TestCase;
 
@@ -94,6 +96,16 @@ class AuthTest extends TestCase
         $this->getJson('/api/v1/auth/me')->assertStatus(401);
     }
 
+    public function test_me_without_token_non_json_accept_returns_401_not_500(): void
+    {
+        // 异常路径：Accept 非 JSON（监控探测/curl/浏览器直访）的未认证 API 请求必须 401 而非 500
+        // （框架默认 redirectGuestsTo(route('login')) 在本项目无 login 命名路由时抛
+        // RouteNotFoundException 变 500；已覆盖为 null 统一走 401 渲染）
+        $this->withHeaders(['Accept' => '*/*'])->get('/api/v1/auth/me')
+            ->assertStatus(401)
+            ->assertJsonPath('code', 401);
+    }
+
     public function test_logout_revokes_token(): void
     {
         // 正常路径：登出后 token 失效
@@ -104,6 +116,32 @@ class AuthTest extends TestCase
         // 故先重置 guard，再验证被撤销的 token 无法访问 me
         $this->app['auth']->forgetGuards();
         $this->withToken($token)->getJson('/api/v1/auth/me')->assertStatus(401);
+    }
+
+    public function test_token_default_expires_at_is_null(): void
+    {
+        // 边界路径（默认行为保持）：未配置 SANCTUM_EXPIRATION 时 token 永不过期（本地开发现状）
+        $token = $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->json('data.token');
+        $this->assertNull(PersonalAccessToken::findToken($token)?->expires_at);
+    }
+
+    public function test_token_expiration_config_rejects_expired_token(): void
+    {
+        // 正常路径（生产加固）：Sanctum 4 的过期判定在请求时按 created_at + 配置分钟数执行
+        // （Guard::isValidAccessToken，官方文档机制），不写库 expires_at 列；此处验证配置生效
+        config(['sanctum.expiration' => 1]);
+        $token = $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->json('data.token');
+        // 有效期内：token 正常访问 me
+        $this->withToken($token)->getJson('/api/v1/auth/me')->assertOk()->assertJsonPath('code', 0);
+        // 越过有效期：同 token 立即 401（Guard 按签发时刻 + 配置分钟数判定，无需写库 expires_at）。
+        // 测试框架在同一 app 实例内缓存 guard 的已认证用户（真实 HTTP 每次请求独立容器不受影响），
+        // 故先重置 guard，让下一次请求按新时间重新走完整鉴权
+        Carbon::setTestNow(now()->addMinutes(5));
+        $this->app['auth']->forgetGuards();
+        $this->withToken($token)->getJson('/api/v1/auth/me')->assertStatus(401);
+        Carbon::setTestNow();
     }
 
     public function test_spa_login_establishes_cookie_session_for_api(): void
