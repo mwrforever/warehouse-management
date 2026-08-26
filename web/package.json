@@ -13,6 +13,7 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "test:unit": "vitest run",
+    "pretest:e2e": "node scripts/kill-ports.mjs 7000 4000",
     "test:e2e": "playwright test",
     "prepare": "husky"
   },
