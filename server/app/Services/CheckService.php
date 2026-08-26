@@ -225,7 +225,7 @@ class CheckService
             }
             $locked->status = InventoryCheck::STATUS_APPROVED;
             $locked->checker = auth()->user()->name ?? '';
-            $locked->check_time = now();
+            $locked->checked_at = now();
             $locked->save();
             $result = [
                 'changed_items' => $changed,

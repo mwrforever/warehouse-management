@@ -43,7 +43,7 @@ class CheckController extends Controller
                 'warehouse_name' => $c->warehouse?->name,
                 'status' => $c->status,
                 'checker' => $c->checker,
-                'check_time' => $c->check_time?->toDateTimeString(),
+                'checked_at' => $c->checked_at?->toDateTimeString(),
                 'remark' => $c->remark,
                 'created_at' => $c->created_at?->toDateTimeString(),
             ]),
@@ -101,7 +101,7 @@ class CheckController extends Controller
             'warehouse_name' => $check->warehouse?->name,
             'status' => $check->status,
             'checker' => $check->checker,
-            'check_time' => $check->check_time?->toDateTimeString(),
+            'checked_at' => $check->checked_at?->toDateTimeString(),
             'remark' => $check->remark,
             'created_at' => $check->created_at?->toDateTimeString(),
             'items' => $check->items()->with(['product', 'location'])->get()->map(fn (InventoryCheckItem $i) => [

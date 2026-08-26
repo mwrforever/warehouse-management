@@ -609,7 +609,7 @@ class ProductionOrderService
                 'qualified_qty' => $data['qualified_qty'],
                 'defective_qty' => $defective,
                 'hours' => $hours,
-                'report_time' => now(),
+                'reported_at' => now(),
                 'remark' => $data['remark'] ?? null,
             ]);
         });

@@ -64,7 +64,7 @@ class DocumentNumberConfigController extends Controller
         return [
             'id' => $c->id, 'type' => $c->type, 'type_label' => self::TYPE_LABELS[$c->type] ?? $c->type,
             'prefix' => $c->prefix, 'date_format' => $c->date_format, 'seq_length' => $c->seq_length,
-            'enabled' => (bool) $c->enabled, 'remark' => $c->remark,
+            'is_enabled' => (bool) $c->is_enabled, 'remark' => $c->remark,
         ];
     }
 }

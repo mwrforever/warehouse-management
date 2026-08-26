@@ -35,7 +35,7 @@ class DocumentNumberConfigSeeder extends Seeder
                 'prefix' => $prefix,
                 'date_format' => $dateFormat,
                 'seq_length' => $seqLength,
-                'enabled' => true,
+                'is_enabled' => true,
                 'remark' => null,
             ]);
         }

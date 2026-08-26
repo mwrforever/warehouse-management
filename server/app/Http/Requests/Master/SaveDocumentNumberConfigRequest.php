@@ -29,7 +29,7 @@ class SaveDocumentNumberConfigRequest extends FormRequest
             // date_format 允许空字符串（无日期段，如商品编码全局自增）：present 保证键存在但空串合法（required 会误拒）
             'date_format' => ['present', Rule::in(['', 'Ymd', 'YmdHi', 'YmdHis'])],
             'seq_length' => 'required|integer|between:1,10',
-            'enabled' => 'required|boolean',
+            'is_enabled' => 'required|boolean',
             'remark' => 'nullable|string|max:255',
         ];
     }

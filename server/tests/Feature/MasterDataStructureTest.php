@@ -64,13 +64,13 @@ class MasterDataStructureTest extends TestCase
 
     public function test_document_number_configs_table_structure(): void
     {
-        // 结构契约：type 唯一、seq_length 1~10、enabled 布尔（配置驱动编号的核心约束）
+        // 结构契约：type 唯一、seq_length 1~10、is_enabled 布尔（配置驱动编号的核心约束）
         $cols = Schema::getColumnListing('document_number_configs');
         $this->assertContains('type', $cols);
         $this->assertContains('prefix', $cols);
         $this->assertContains('date_format', $cols);
         $this->assertContains('seq_length', $cols);
-        $this->assertContains('enabled', $cols);
+        $this->assertContains('is_enabled', $cols);
         $this->assertContains('remark', $cols);
     }
 

@@ -301,7 +301,7 @@ class CheckTest extends TestCase
             'status' => InventoryCheck::STATUS_APPROVED,
             'checker' => '管理员',
         ]);
-        $this->assertNotNull(InventoryCheck::find($check->id)->check_time);
+        $this->assertNotNull(InventoryCheck::find($check->id)->checked_at);
     }
 
     public function test_approve_loss_creates_check_out_movement(): void

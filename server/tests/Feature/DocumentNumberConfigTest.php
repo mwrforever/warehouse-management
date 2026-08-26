@@ -40,7 +40,7 @@ class DocumentNumberConfigTest extends TestCase
         // 正常路径：改 po 的 seq_length=4 → 数据库更新；预览接口按新值出 4 位示例
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 4, 'enabled' => true, 'remark' => '改宽',
+            'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 4, 'is_enabled' => true, 'remark' => '改宽',
         ])->assertJsonPath('code', 0);
         $this->assertSame(4, $cfg->refresh()->seq_length);
         $res = $this->withToken($this->token)->postJson('/api/v1/document-number-configs/preview', [
@@ -55,7 +55,7 @@ class DocumentNumberConfigTest extends TestCase
         // 正常路径（spec §3 边界）：date_format 空串=无日期段（商品编码场景），required 会误拒、present 放行
         $cfg = DocumentNumberConfig::where('type', 'prd')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'enabled' => true, 'remark' => null,
+            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'is_enabled' => true, 'remark' => null,
         ])->assertJsonPath('code', 0);
         $this->assertSame('', $cfg->refresh()->date_format);
         $res = $this->withToken($this->token)->postJson('/api/v1/document-number-configs/preview', [
@@ -70,7 +70,7 @@ class DocumentNumberConfigTest extends TestCase
         // 异常路径：seq_length 越界/前缀含小写/date_format 非法 → 422
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'po', 'date_format' => 'YmdHi', 'seq_length' => 0, 'enabled' => true,
+            'prefix' => 'po', 'date_format' => 'YmdHi', 'seq_length' => 0, 'is_enabled' => true,
         ])->assertStatus(422);
     }
 
@@ -82,7 +82,7 @@ class DocumentNumberConfigTest extends TestCase
         $u->roles()->sync([$role->id]);
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($u->createToken('api')->plainTextToken)
-            ->putJson("/api/v1/document-number-configs/{$cfg->id}", ['prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true])
+            ->putJson("/api/v1/document-number-configs/{$cfg->id}", ['prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'is_enabled' => true])
             ->assertStatus(403);
     }
 }

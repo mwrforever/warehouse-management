@@ -424,7 +424,7 @@ class ReportServiceTest extends TestCase
         OperationReport::create([
             'operation_id' => $op->id, 'order_id' => $o->id,
             'qualified_qty' => $qualified, 'defective_qty' => $defective,
-            'hours' => $hours, 'report_time' => now()->toDateTimeString(),
+            'hours' => $hours, 'reported_at' => now()->toDateTimeString(),
         ]);
     }
 

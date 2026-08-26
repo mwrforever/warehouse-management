@@ -34,7 +34,7 @@ class OperationReportController extends Controller
         // 经模型查询构建器分页（EloquentBuilder 泛型保留，供 map 闭包参数类型解析；
         // 关系分页 larastan 无法解析闭包类型）
         $rows = OperationReport::where('operation_id', $operation->id)
-            ->orderByDesc('report_time')
+            ->orderByDesc('reported_at')
             ->paginate(max(1, min(100, (int) request('per_page', 10))));
 
         return $this->ok([
@@ -44,8 +44,8 @@ class OperationReportController extends Controller
                 'qualified_qty' => $r->qualified_qty,
                 'defective_qty' => $r->defective_qty,
                 'hours' => $r->hours,
-                // report_time 为非空 datetime 列（cast 后为 Carbon，直接取字符串）
-                'report_time' => $r->report_time->toDateTimeString(),
+                // reported_at 为非空 datetime 列（cast 后为 Carbon，直接取字符串）
+                'reported_at' => $r->reported_at->toDateTimeString(),
                 'remark' => $r->remark,
             ]),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
