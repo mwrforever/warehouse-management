@@ -22,6 +22,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // 权限中间件别名：permission:user.list
         $middleware->alias(['permission' => EnsurePermission::class]);
+
+        // Sanctum SPA 会话鉴权（R4-3）：对来自 SANCTUM_STATEFUL_DOMAINS 前端源的请求，
+        // 动态注入 cookie 加密/StartSession/CSRF 校验/会话认证中间件链（服务端注入，非手写 token 刷新）；
+        // 无 Referer/Origin 的纯 API 客户端（token 通道）不受影响，保持既有行为
+        $middleware->statefulApi();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

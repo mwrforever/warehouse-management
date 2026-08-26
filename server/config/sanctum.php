@@ -16,6 +16,12 @@ return [
     | authentication cookies. Typically, these should include your local
     | and production domains which access your API via a frontend SPA.
     |
+    | R4-3 说明：本列表按请求的 Referer/Origin（前端 SPA 所在源）做通配匹配
+    | （EnsureFrontendRequestsAreStateful::fromFrontend），命中则走 cookie 会话鉴权链路，
+    | 故列表项为「前端源」而非后端地址。开发面端口：4000=Vite 前端服务器、
+    | 7000=本地后端直连、8000=artisan serve（APP_URL）；生产按实际前端域名
+    | 覆盖 SANCTUM_STATEFUL_DOMAINS 环境变量。
+    |
     */
 
     'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
