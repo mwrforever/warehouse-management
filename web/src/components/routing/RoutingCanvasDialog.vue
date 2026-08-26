@@ -423,6 +423,25 @@ interface CanvasProduct {
 /** 商品下拉单页容量：初载与关键字搜索共用（后端 per_page 硬钳制上限 100） */
 const PRODUCT_PAGE_SIZE = 100
 
+// 会话内商品请求合并（PJ-1）：同一 (type, keyword) 的并发请求共享同一 Promise——
+// 成品/半成品分别被两个下拉引用（finished 在成品+输出下拉、semi_finished 在输出+材料下拉），
+// 合并后每次开窗商品请求从 5 个降为 3 个（fin/semi/raw 各 1）；reset 时清空合并表，
+// 每次开窗仍重新拉取，保持「主数据取新鲜值」语义，未引入跨页缓存
+const pendingProduct = new Map<string, Promise<CanvasProduct[]>>()
+
+function fetchProductOnce(type: ProductType, kw = ''): Promise<CanvasProduct[]> {
+  const key = `${type}:${kw}`
+  let p = pendingProduct.get(key)
+  if (!p) {
+    // 同参请求只发一次，其余调用方复用同一在途 Promise
+    p = productApi
+      .list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type, keyword: kw })
+      .then((r) => r.items)
+    pendingProduct.set(key, p)
+  }
+  return p
+}
+
 // 成品下拉（单路 finished）：remote 服务端搜索，初载取前 100 条
 const {
   options: finishedOptions,
@@ -432,10 +451,7 @@ const {
   pin: pinFinished,
   reset: resetFinished,
 } = useRemoteOptions<CanvasProduct>({
-  fetch: (kw) =>
-    productApi
-      .list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'finished', keyword: kw })
-      .then((r) => r.items),
+  fetch: (kw) => fetchProductOnce('finished', kw),
   keyOf: (p) => p.id,
   onError: (e) => ElMessage.error(e.message),
 })
@@ -449,11 +465,11 @@ const {
   pin: pinOutput,
   reset: resetOutput,
 } = useRemoteOptions<CanvasProduct>({
+  // 双路经会话内请求合并：半成品与成品下拉共享的 finished 请求不再重复发出
   fetch: (kw) =>
-    Promise.all([
-      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'semi_finished', keyword: kw }),
-      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'finished', keyword: kw }),
-    ]).then(([semi, fin]) => [...semi.items, ...fin.items]),
+    Promise.all([fetchProductOnce('semi_finished', kw), fetchProductOnce('finished', kw)]).then(
+      ([semi, fin]) => [...semi, ...fin],
+    ),
   keyOf: (p) => p.id,
   onError: (e) => ElMessage.error(e.message),
 })
@@ -467,11 +483,11 @@ const {
   pin: pinMaterial,
   reset: resetMaterial,
 } = useRemoteOptions<CanvasProduct>({
+  // 双路经会话内请求合并：半成品与输出下拉共享的 semi_finished 请求不再重复发出
   fetch: (kw) =>
-    Promise.all([
-      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'raw_material', keyword: kw }),
-      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'semi_finished', keyword: kw }),
-    ]).then(([raw, semi]) => [...raw.items, ...semi.items]),
+    Promise.all([fetchProductOnce('raw_material', kw), fetchProductOnce('semi_finished', kw)]).then(
+      ([raw, semi]) => [...raw, ...semi],
+    ),
   keyOf: (p) => p.id,
   onError: (e) => ElMessage.error(e.message),
 })
@@ -588,6 +604,8 @@ function resetEditor() {
   resetFinished()
   resetOutput()
   resetMaterial()
+  // 会话内请求合并表一并作废：下一会话重新拉取，避免跨开窗命中旧会话的在途/已决 Promise（新鲜语义保持）
+  pendingProduct.clear()
 }
 
 /** 编辑回显：单头 + 节点/材料/边还原；历史商品名称入缓存供卡片展示 */
