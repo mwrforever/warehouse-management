@@ -4,7 +4,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Exceptions\RoutingException;
 use App\Http\Controllers\Controller;
 use App\Models\RoutingHeader;
 use App\Services\DocumentSequenceService;
@@ -53,11 +52,7 @@ class RoutingController extends Controller
     public function store(Request $request)
     {
         $data = $this->validatePayload($request);
-        try {
-            $routing = $this->routingService->persist($data, null, $this->sequenceService);
-        } catch (RoutingException $e) {
-            return $this->fail($e->getCode() ?: 1700, $e->getMessage());
-        }
+        $routing = $this->routingService->persist($data, null, $this->sequenceService);
 
         return $this->ok(['id' => $routing->id, 'code' => $routing->code]);
     }
@@ -69,11 +64,7 @@ class RoutingController extends Controller
             return $this->fail(1705, '工艺路线已被生产工单使用，仅可启用/停用');
         }
         $data = $this->validatePayload($request);
-        try {
-            $this->routingService->persist($data, $routing, $this->sequenceService);
-        } catch (RoutingException $e) {
-            return $this->fail($e->getCode() ?: 1700, $e->getMessage());
-        }
+        $this->routingService->persist($data, $routing, $this->sequenceService);
 
         return $this->ok();
     }

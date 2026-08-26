@@ -179,54 +179,49 @@ class CheckController extends Controller
     /** 更新草稿：仅 status=草稿 可改（1202）；items 全量替换；事务内锁行复查防并发 */
     public function update(Request $request, InventoryCheck $check)
     {
-        try {
-            $data = $this->validatePayload($request);
-            $items = [];
-            // 明细查重：同商品×库位 只允许一行（防扫码/粘贴误加重复行）
-            $seen = [];
-            foreach ($data['items'] as $item) {
-                $key = $item['product_id'].'-'.$item['location_id'];
-                if (isset($seen[$key])) {
-                    return $this->fail(422, '盘点明细存在重复商品与库位');
-                }
-                $seen[$key] = true;
-                // 实盘数不能为负（bccomp 判负，与 store 同口径）
-                if (bccomp((string) $item['actual_qty'], '0', 2) < 0) {
-                    return $this->fail(1201, '实盘数量不能为负数');
-                }
-                // 无余额商品不可录盘（1205）：与 store 同口径
-                // 账外盘盈暂不做，裁决与实施改动点见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md
-                $balance = InventoryBalance::where('product_id', $item['product_id'])
-                    ->where('warehouse_id', $data['warehouse_id'])
-                    ->where('location_id', $item['location_id'])
-                    ->first();
-                if (! $balance) {
-                    return $this->fail(1205, '商品在该仓库无库存，无需盘点');
-                }
-                $items[] = [
-                    'product_id' => $item['product_id'],
-                    'location_id' => $item['location_id'],
-                    'book_qty' => $balance->quantity,
-                    'actual_qty' => $item['actual_qty'],
-                ];
+        $data = $this->validatePayload($request);
+        $items = [];
+        // 明细查重：同商品×库位 只允许一行（防扫码/粘贴误加重复行）
+        $seen = [];
+        foreach ($data['items'] as $item) {
+            $key = $item['product_id'].'-'.$item['location_id'];
+            if (isset($seen[$key])) {
+                return $this->fail(422, '盘点明细存在重复商品与库位');
             }
-            DB::transaction(function () use ($check, $data, $items) {
-                // 锁盘点单行复查状态：与审核并发时防止改到正在审核的单（幂等 1202）
-                $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === InventoryCheck::STATUS_APPROVED) {
-                    throw new InventoryException('已审核单据不可修改', 1202);
-                }
-                $locked->update(['warehouse_id' => $data['warehouse_id'], 'remark' => $data['remark'] ?? $locked->remark]);
-                // 明细全量替换（旧行随头级联或先删后插）
-                $locked->items()->delete();
-                foreach ($items as $i) {
-                    InventoryCheckItem::create(['check_id' => $locked->id] + $i);
-                }
-            });
-        } catch (InventoryException $e) {
-            // 1202 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1202, $e->getMessage());
+            $seen[$key] = true;
+            // 实盘数不能为负（bccomp 判负，与 store 同口径）
+            if (bccomp((string) $item['actual_qty'], '0', 2) < 0) {
+                return $this->fail(1201, '实盘数量不能为负数');
+            }
+            // 无余额商品不可录盘（1205）：与 store 同口径
+            // 账外盘盈暂不做，裁决与实施改动点见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md
+            $balance = InventoryBalance::where('product_id', $item['product_id'])
+                ->where('warehouse_id', $data['warehouse_id'])
+                ->where('location_id', $item['location_id'])
+                ->first();
+            if (! $balance) {
+                return $this->fail(1205, '商品在该仓库无库存，无需盘点');
+            }
+            $items[] = [
+                'product_id' => $item['product_id'],
+                'location_id' => $item['location_id'],
+                'book_qty' => $balance->quantity,
+                'actual_qty' => $item['actual_qty'],
+            ];
         }
+        DB::transaction(function () use ($check, $data, $items) {
+            // 锁盘点单行复查状态：与审核并发时防止改到正在审核的单（幂等 1202）
+            $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status === InventoryCheck::STATUS_APPROVED) {
+                throw new InventoryException('已审核单据不可修改', 1202);
+            }
+            $locked->update(['warehouse_id' => $data['warehouse_id'], 'remark' => $data['remark'] ?? $locked->remark]);
+            // 明细全量替换（旧行随头级联或先删后插）
+            $locked->items()->delete();
+            foreach ($items as $i) {
+                InventoryCheckItem::create(['check_id' => $locked->id] + $i);
+            }
+        });
 
         return $this->ok();
     }
@@ -234,19 +229,14 @@ class CheckController extends Controller
     /** 删除草稿：已审核不可删（1203）；事务内锁行复查防并发 */
     public function destroy(InventoryCheck $check)
     {
-        try {
-            DB::transaction(function () use ($check) {
-                // 锁盘点单行复查状态：与审核并发时防止删到正在审核的单（幂等 1203）
-                $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === InventoryCheck::STATUS_APPROVED) {
-                    throw new InventoryException('已审核单据不可删除', 1203);
-                }
-                $locked->delete();
-            });
-        } catch (InventoryException $e) {
-            // 1203 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1203, $e->getMessage());
-        }
+        DB::transaction(function () use ($check) {
+            // 锁盘点单行复查状态：与审核并发时防止删到正在审核的单（幂等 1203）
+            $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status === InventoryCheck::STATUS_APPROVED) {
+                throw new InventoryException('已审核单据不可删除', 1203);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -254,89 +244,84 @@ class CheckController extends Controller
     /** 审核：事务内逐项生成 check_in/check_out 流水并更新余额；幂等 1204；并发 1206 */
     public function approve(InventoryCheck $check)
     {
-        try {
-            $result = null;
-            // attempts=2：死锁自动重试一次（B-3；余额行锁序已由 InventoryService 统一，兜底盘点按明细序
-            // 内联预锁的残余交叉窗口——apply 单条调用无法重排该预锁序列）
-            DB::transaction(function () use ($check, &$result) {
-                // 锁盘点单行：同一单据重复审核在此判重（幂等）
-                $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === InventoryCheck::STATUS_APPROVED) {
-                    throw new InventoryException('该盘点单已审核', 1204);
+        $result = null;
+        // attempts=2：死锁自动重试一次（B-3；余额行锁序已由 InventoryService 统一，兜底盘点按明细序
+        // 内联预锁的残余交叉窗口——apply 单条调用无法重排该预锁序列）
+        DB::transaction(function () use ($check, &$result) {
+            // 锁盘点单行：同一单据重复审核在此判重（幂等）
+            $locked = InventoryCheck::whereKey($check->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status === InventoryCheck::STATUS_APPROVED) {
+                throw new InventoryException('该盘点单已审核', 1204);
+            }
+            $changed = 0;
+            $increased = '0';  // 盘盈数量合计（bcadd 累加，D-3 铁律禁浮点累加）
+            $decreased = '0';  // 盘亏数量合计
+            $increasedItems = 0; // 盘盈项数（前端「盘盈 X 项 +N」文案用）
+            $decreasedItems = 0; // 盘亏项数
+            // 明细行显式标注模型类型（larastan 无法从关系泛型推断 foreach 元素）
+            /** @var InventoryCheckItem $item */
+            foreach ($locked->items as $item) {
+                // 差异 = 实盘 − 账面（bcsub 构造性精确，两位小数字符串满足 decimal cast 的 string 属性）
+                $diff = bcsub((string) $item->actual_qty, (string) $item->book_qty, 2);
+                $item->diff_qty = $diff;
+                $item->save();
+                // 零差异不生成流水（差值恒为两位小数，bccomp === 0 即零差异，无浮点容差窗口）
+                if (bccomp($diff, '0', 2) === 0) {
+                    continue;
                 }
-                $changed = 0;
-                $increased = '0';  // 盘盈数量合计（bcadd 累加，D-3 铁律禁浮点累加）
-                $decreased = '0';  // 盘亏数量合计
-                $increasedItems = 0; // 盘盈项数（前端「盘盈 X 项 +N」文案用）
-                $decreasedItems = 0; // 盘亏项数
-                // 明细行显式标注模型类型（larastan 无法从关系泛型推断 foreach 元素）
-                /** @var InventoryCheckItem $item */
-                foreach ($locked->items as $item) {
-                    // 差异 = 实盘 − 账面（bcsub 构造性精确，两位小数字符串满足 decimal cast 的 string 属性）
-                    $diff = bcsub((string) $item->actual_qty, (string) $item->book_qty, 2);
-                    $item->diff_qty = $diff;
-                    $item->save();
-                    // 零差异不生成流水（差值恒为两位小数，bccomp === 0 即零差异，无浮点容差窗口）
-                    if (bccomp($diff, '0', 2) === 0) {
-                        continue;
-                    }
-                    // 锁余额行：账面快照已被并发变动（其他盘点单先审）→ 整体回滚 1206
-                    $balance = InventoryBalance::where('product_id', $item->product_id)
-                        ->where('warehouse_id', $locked->warehouse_id)
-                        ->where('location_id', $item->location_id)
-                        ->lockForUpdate()
-                        ->first();
-                    // ! $balance 为防御性分支：余额行只增不删，账面快照存在时理论不可达（1205 已拦无账商品）；
-                    // 若未来支持账外盘盈（暂不做，见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md），
-                    // 此处须改为按「无余额行=账面 0」比对放行盘盈
-                    // 余额与账面快照均为两位小数，bcsub 差值非 0 即并发变动（替代浮点 0.005 容差比较）
-                    if (
-                        ! $balance
-                        || bccomp(bcsub((string) $balance->quantity, (string) $item->book_qty, 2), '0', 2) !== 0
-                    ) {
-                        throw new InventoryException('库存已变动，请重新盘点', 1206);
-                    }
-                    $direction = bccomp($diff, '0', 2) > 0 ? 1 : -1;
-                    // 流水数量 = 差值绝对值（负差值侧 bcsub 反转符号，保持恒正契约）
-                    $diffAbs = $direction > 0 ? $diff : bcsub('0', $diff, 2);
-                    // 盘盈/盘亏走统一引擎（同事务，双写一致）
-                    $this->inventoryService->apply([[
-                        'product_id' => $item->product_id,
-                        'warehouse_id' => $locked->warehouse_id,
-                        'location_id' => $item->location_id,
-                        'direction' => $direction,
-                        'quantity' => $diffAbs,
-                        'source_type' => $direction > 0 ? 'check_in' : 'check_out',
-                        'source_id' => $locked->id,
-                        'source_no' => $locked->no,
-                        'remark' => $direction > 0 ? '盘盈' : '盘亏',
-                    ]], auth()->id());
-                    $changed++;
-                    if ($direction > 0) {
-                        $increased = bcadd($increased, $diffAbs, 2);
-                        $increasedItems++;
-                    } else {
-                        $decreased = bcadd($decreased, $diffAbs, 2);
-                        $decreasedItems++;
-                    }
+                // 锁余额行：账面快照已被并发变动（其他盘点单先审）→ 整体回滚 1206
+                $balance = InventoryBalance::where('product_id', $item->product_id)
+                    ->where('warehouse_id', $locked->warehouse_id)
+                    ->where('location_id', $item->location_id)
+                    ->lockForUpdate()
+                    ->first();
+                // ! $balance 为防御性分支：余额行只增不删，账面快照存在时理论不可达（1205 已拦无账商品）；
+                // 若未来支持账外盘盈（暂不做，见 docs/bugs/2026-08-13-盘点盘盈无余额行误拒.md），
+                // 此处须改为按「无余额行=账面 0」比对放行盘盈
+                // 余额与账面快照均为两位小数，bcsub 差值非 0 即并发变动（替代浮点 0.005 容差比较）
+                if (
+                    ! $balance
+                    || bccomp(bcsub((string) $balance->quantity, (string) $item->book_qty, 2), '0', 2) !== 0
+                ) {
+                    throw new InventoryException('库存已变动，请重新盘点', 1206);
                 }
-                $locked->status = InventoryCheck::STATUS_APPROVED;
-                $locked->checker = auth()->user()->name ?? '';
-                $locked->check_time = now();
-                $locked->save();
-                $result = [
-                    'changed_items' => $changed,
-                    // 合计出参转数值保持 JSON 数字类型不变（累加本身已 bcmath 精确，此转型仅序列化口径）
-                    'increased' => (float) $increased,
-                    'decreased' => (float) $decreased,
-                    'increased_items' => $increasedItems,
-                    'decreased_items' => $decreasedItems,
-                ];
-            }, 2);
-        } catch (InventoryException $e) {
-            // 1204 已审核 / 1206 并发变动（余额不足等防御性场景同样归 1206）
-            return $this->fail($e->getCode() ?: 1206, $e->getMessage());
-        }
+                $direction = bccomp($diff, '0', 2) > 0 ? 1 : -1;
+                // 流水数量 = 差值绝对值（负差值侧 bcsub 反转符号，保持恒正契约）
+                $diffAbs = $direction > 0 ? $diff : bcsub('0', $diff, 2);
+                // 盘盈/盘亏走统一引擎（同事务，双写一致）
+                $this->inventoryService->apply([[
+                    'product_id' => $item->product_id,
+                    'warehouse_id' => $locked->warehouse_id,
+                    'location_id' => $item->location_id,
+                    'direction' => $direction,
+                    'quantity' => $diffAbs,
+                    'source_type' => $direction > 0 ? 'check_in' : 'check_out',
+                    'source_id' => $locked->id,
+                    'source_no' => $locked->no,
+                    'remark' => $direction > 0 ? '盘盈' : '盘亏',
+                ]], auth()->id());
+                $changed++;
+                if ($direction > 0) {
+                    $increased = bcadd($increased, $diffAbs, 2);
+                    $increasedItems++;
+                } else {
+                    $decreased = bcadd($decreased, $diffAbs, 2);
+                    $decreasedItems++;
+                }
+            }
+            $locked->status = InventoryCheck::STATUS_APPROVED;
+            $locked->checker = auth()->user()->name ?? '';
+            $locked->check_time = now();
+            $locked->save();
+            $result = [
+                'changed_items' => $changed,
+                // 合计出参转数值保持 JSON 数字类型不变（累加本身已 bcmath 精确，此转型仅序列化口径）
+                'increased' => (float) $increased,
+                'decreased' => (float) $decreased,
+                'increased_items' => $increasedItems,
+                'decreased_items' => $decreasedItems,
+            ];
+        }, 2);
 
         return $this->ok($result);
     }

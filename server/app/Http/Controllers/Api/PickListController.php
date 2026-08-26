@@ -205,53 +205,48 @@ class PickListController extends Controller
     /** 更新草稿：仅草稿（1514）；校验同 store；事务内锁行复查防并发 */
     public function update(Request $request, PickList $pick)
     {
-        try {
-            if ($pick->status !== PickList::STATUS_DRAFT) {
-                return $this->fail(1514, '已审核单据不可修改');
-            }
-            $data = $this->validatePayload($request);
-            if ($fail = $this->validateBusinessItems($data)) {
-                return $fail;
-            }
-            if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-                return $this->fail(422, '仓库与库位不能为空');
-            }
-            // 工单状态校验：spec §5.1 生产中→领料（同 store 口径）
-            $order = ProductionOrder::find($data['order_id']);
-            if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
-                return $this->fail(1513, '工单当前状态不可领料');
-            }
-            // 工单物料行一次预取（同 store 口径，P1-4）
-            $materialMap = $this->materialMap((int) $data['order_id']);
-            if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
-                return $this->fail(1513, $msg);
-            }
-
-            DB::transaction(function () use ($pick, $data, $materialMap) {
-                // 锁领料单行复查状态：与审核并发时防止改到正在审核的单（幂等 1514）
-                $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== PickList::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可修改', 1514);
-                }
-                $locked->update([
-                    'order_id' => $data['order_id'],
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 明细全量替换（草稿单无流水引用，直接重建；需求快照取自预取 map，P1-4）
-                $locked->items()->delete();
-                $locked->items()->createMany(array_map(fn ($i) => [
-                    'product_id' => $i['product_id'],
-                    'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
-                    'pick_qty' => $i['pick_qty'],
-                    'issued_qty' => 0,
-                ], $data['items']));
-            });
-        } catch (ProductionException $e) {
-            // 1514 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1514, $e->getMessage());
+        if ($pick->status !== PickList::STATUS_DRAFT) {
+            return $this->fail(1514, '已审核单据不可修改');
         }
+        $data = $this->validatePayload($request);
+        if ($fail = $this->validateBusinessItems($data)) {
+            return $fail;
+        }
+        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
+            return $this->fail(422, '仓库与库位不能为空');
+        }
+        // 工单状态校验：spec §5.1 生产中→领料（同 store 口径）
+        $order = ProductionOrder::find($data['order_id']);
+        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
+            return $this->fail(1513, '工单当前状态不可领料');
+        }
+        // 工单物料行一次预取（同 store 口径，P1-4）
+        $materialMap = $this->materialMap((int) $data['order_id']);
+        if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
+            return $this->fail(1513, $msg);
+        }
+
+        DB::transaction(function () use ($pick, $data, $materialMap) {
+            // 锁领料单行复查状态：与审核并发时防止改到正在审核的单（幂等 1514）
+            $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PickList::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可修改', 1514);
+            }
+            $locked->update([
+                'order_id' => $data['order_id'],
+                'warehouse_id' => $data['warehouse_id'],
+                'location_id' => $data['location_id'],
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建；需求快照取自预取 map，P1-4）
+            $locked->items()->delete();
+            $locked->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
+                'pick_qty' => $i['pick_qty'],
+                'issued_qty' => 0,
+            ], $data['items']));
+        });
 
         return $this->ok();
     }
@@ -259,22 +254,17 @@ class PickListController extends Controller
     /** 删除草稿：仅草稿（1514）；事务内锁行复查防并发 */
     public function destroy(PickList $pick)
     {
-        try {
-            if ($pick->status !== PickList::STATUS_DRAFT) {
-                return $this->fail(1514, '已审核单据不可删除');
-            }
-            DB::transaction(function () use ($pick) {
-                // 锁领料单行复查状态（幂等 1514）
-                $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== PickList::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可删除', 1514);
-                }
-                $locked->delete();
-            });
-        } catch (ProductionException $e) {
-            // 1514 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1514, $e->getMessage());
+        if ($pick->status !== PickList::STATUS_DRAFT) {
+            return $this->fail(1514, '已审核单据不可删除');
         }
+        DB::transaction(function () use ($pick) {
+            // 锁领料单行复查状态（幂等 1514）
+            $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PickList::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可删除', 1514);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -374,9 +364,6 @@ class PickListController extends Controller
                 $locked->save();
                 $result = ['no' => $locked->no];
             }, 2);
-        } catch (ProductionException $e) {
-            // 1516 幂等 / 1513 超需求剩余 / 1515 库存不足（事务整体回滚）
-            return $this->fail($e->getCode() ?: 1513, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）
             return $this->fail(1515, '库存不足，领料被拒绝');

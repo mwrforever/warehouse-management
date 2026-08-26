@@ -1,10 +1,6 @@
 <?php
 
-use App\Exceptions\InventoryException;
-use App\Exceptions\ProductionException;
-use App\Exceptions\PurchaseException;
-use App\Exceptions\RoutingException;
-use App\Exceptions\SalesException;
+use App\Exceptions\Contracts\BusinessExceptionInterface;
 use App\Http\Middleware\EnsurePermission;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
@@ -33,12 +29,11 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         // 系统异常统一记 error 级中文日志（AGENTS.md §7.2：系统异常记 error 含堆栈）：
-        // 业务异常族（*Exception）属预期业务失败（控制器捕获转统一响应），不刷 error 防噪音；
+        // 业务异常族（实现 BusinessExceptionInterface）属预期业务失败（全局渲染器转统一响应），不刷 error 防噪音；
         // 只记录 URL+方法，不记录请求参数（请求体可能含密码等敏感信息，AGENTS.md §8.5）
         // 本文件处于全局命名空间，Throwable 直接解析为全局类（禁止 use Throwable——非复合名 use 触发 PHP 警告）
         $exceptions->report(function (Throwable $e): void {
-            if ($e instanceof PurchaseException || $e instanceof SalesException || $e instanceof ProductionException
-                || $e instanceof InventoryException || $e instanceof RoutingException) {
+            if ($e instanceof BusinessExceptionInterface) {
                 return;
             }
             $request = request();
@@ -51,6 +46,21 @@ return Application::configure(basePath: dirname(__DIR__))
                 'trace' => $e->getTraceAsString(),
             ]);
         })->stop(); // 已自行记录（含上下文与堆栈），停止框架默认英文报告，避免同一异常重复落盘
+
+        // 领域业务异常全局渲染（D-13）：五个业务异常族（实现 BusinessExceptionInterface）统一转
+        // {code, message, data} 信封，HTTP 200，业务码取异常构造第二参数（getCode），
+        // 与控制器原 fail($e->getCode(), $e->getMessage()) 字节级等价——全部 throw 点均显式携带
+        // 业务码（唯一例外 InventoryService 库存不足防御路径，仅被控制器保留的语境化 catch 翻译承接，
+        // 不会进入本渲染器）；code=0 兜底 422 仅防未来无码 throw 逃逸（code=0 会被前端误判成功）
+        $exceptions->render(function (BusinessExceptionInterface $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'code' => $e->getCode() ?: 422,
+                    'message' => $e->getMessage(),
+                    'data' => null,
+                ], 200);
+            }
+        });
         // 未认证与无权限统一返回 JSON（前后端分离约定）
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {

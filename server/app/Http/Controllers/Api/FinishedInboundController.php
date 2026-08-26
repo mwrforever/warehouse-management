@@ -185,54 +185,49 @@ class FinishedInboundController extends Controller
     /** 更新草稿：仅草稿（1527）；校验同 store；事务内锁行复查防并发 */
     public function update(Request $request, FinishedInbound $finishedInbound)
     {
-        try {
-            if ($finishedInbound->status !== FinishedInbound::STATUS_DRAFT) {
-                return $this->fail(1527, '已审核单据不可修改');
-            }
-            $data = $this->validatePayload($request);
-            if ($fail = $this->validateBusinessItems($data)) {
-                return $fail;
-            }
-            if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-                return $this->fail(422, '仓库与库位不能为空');
-            }
-            $order = ProductionOrder::find($data['order_id']);
-            if (! $order) {
-                return $this->fail(422, '工单不存在');
-            }
-            // 工单状态校验：spec §5.1 生产中→成品入库（同 store 口径）
-            if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
-                return $this->fail(1525, '工单当前状态不可入库');
-            }
-            if ($msg = $this->validateItems($order, $data['items'])) {
-                [$code, $message] = $msg;
-
-                return $this->fail($code, $message);
-            }
-
-            DB::transaction(function () use ($finishedInbound, $data) {
-                // 锁入库单行复查状态（幂等 1527）
-                $locked = FinishedInbound::whereKey($finishedInbound->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== FinishedInbound::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可修改', 1527);
-                }
-                $locked->update([
-                    'order_id' => $data['order_id'],
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 明细全量替换（草稿单无流水引用，直接重建）
-                $locked->items()->delete();
-                $locked->items()->createMany(array_map(fn ($i) => [
-                    'product_id' => $i['product_id'],
-                    'quantity' => $i['quantity'],
-                ], $data['items']));
-            });
-        } catch (ProductionException $e) {
-            // 1527 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1527, $e->getMessage());
+        if ($finishedInbound->status !== FinishedInbound::STATUS_DRAFT) {
+            return $this->fail(1527, '已审核单据不可修改');
         }
+        $data = $this->validatePayload($request);
+        if ($fail = $this->validateBusinessItems($data)) {
+            return $fail;
+        }
+        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
+            return $this->fail(422, '仓库与库位不能为空');
+        }
+        $order = ProductionOrder::find($data['order_id']);
+        if (! $order) {
+            return $this->fail(422, '工单不存在');
+        }
+        // 工单状态校验：spec §5.1 生产中→成品入库（同 store 口径）
+        if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
+            return $this->fail(1525, '工单当前状态不可入库');
+        }
+        if ($msg = $this->validateItems($order, $data['items'])) {
+            [$code, $message] = $msg;
+
+            return $this->fail($code, $message);
+        }
+
+        DB::transaction(function () use ($finishedInbound, $data) {
+            // 锁入库单行复查状态（幂等 1527）
+            $locked = FinishedInbound::whereKey($finishedInbound->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== FinishedInbound::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可修改', 1527);
+            }
+            $locked->update([
+                'order_id' => $data['order_id'],
+                'warehouse_id' => $data['warehouse_id'],
+                'location_id' => $data['location_id'],
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建）
+            $locked->items()->delete();
+            $locked->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+            ], $data['items']));
+        });
 
         return $this->ok();
     }
@@ -240,22 +235,17 @@ class FinishedInboundController extends Controller
     /** 删除草稿：仅草稿（1527）；事务内锁行复查防并发 */
     public function destroy(FinishedInbound $finishedInbound)
     {
-        try {
-            if ($finishedInbound->status !== FinishedInbound::STATUS_DRAFT) {
-                return $this->fail(1527, '已审核单据不可删除');
-            }
-            DB::transaction(function () use ($finishedInbound) {
-                // 锁入库单行复查状态（幂等 1527）
-                $locked = FinishedInbound::whereKey($finishedInbound->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== FinishedInbound::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可删除', 1527);
-                }
-                $locked->delete();
-            });
-        } catch (ProductionException $e) {
-            // 1527 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1527, $e->getMessage());
+        if ($finishedInbound->status !== FinishedInbound::STATUS_DRAFT) {
+            return $this->fail(1527, '已审核单据不可删除');
         }
+        DB::transaction(function () use ($finishedInbound) {
+            // 锁入库单行复查状态（幂等 1527）
+            $locked = FinishedInbound::whereKey($finishedInbound->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== FinishedInbound::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可删除', 1527);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -327,9 +317,6 @@ class FinishedInboundController extends Controller
                 $locked->save();
                 $result = ['no' => $locked->no];
             }, 2);
-        } catch (ProductionException $e) {
-            // 1528 幂等 / 1525 超剩余产量 / 1526 成品不一致（事务整体回滚）
-            return $this->fail($e->getCode() ?: 1525, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底（入库方向理论不触发，防御路径）
             return $this->fail(422, '入库失败，请重试');

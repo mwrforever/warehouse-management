@@ -134,65 +134,60 @@ class OutsourcingController extends Controller
             return $this->fail(422, '工序不属于该工单');
         }
         // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec 5 §4 规则定义）：无路线/无 node_no → 422，
-        // 路由头/节点缺失等数据异常 422 由下方统一 catch 承接（修复轮 2 前在 try 外泄漏 500）
-        try {
-            $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
-            if ((int) $op->is_outsourced !== 1) {
-                return $this->fail(422, '该工序不是委外工序');
-            }
-            if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
-                return $this->fail(422, '该工序已完成，不可委外');
-            }
-            // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
-            $order = ProductionOrder::find($data['order_id']);
-            // 工单状态校验（B-1）：与发出 approve 同口径 [已下达,生产中]（1523，spec §5.1 生产中→委外）——
-            // 草稿工单的工序行会随工单编辑全删重建，草稿期挂委外单会令 operation_id 外键（RESTRICT）
-            // 卡死工单编辑（QueryException 500 且无自愈路径），从源头禁止
-            $canOutsource = $order && in_array($order->status, [
-                ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING,
-            ], true);
-            if (! $canOutsource) {
-                return $this->fail(1523, '工单当前状态不可委外');
-            }
-            $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
-                ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
-            // 工单缺失分支已由上方 1523 守卫承接（$canOutsource 对 null 工单恒 false），此处 $order 必非空
-            if (bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
-                return $this->fail(1520, '委外数量超过节点剩余计划量');
-            }
-
-            // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
-            // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-            $os = DB::transaction(function () use ($data, $node) {
-                $os = $this->sequenceService->nextNoByConfig(
-                    DocumentSequence::TYPE_OS,
-                    fn (string $no) => OutsourcingOrder::create([
-                        'no' => $no,
-                        'order_id' => $data['order_id'],
-                        'operation_id' => $data['operation_id'],
-                        'supplier_id' => $data['supplier_id'],
-                        'status' => OutsourcingOrder::STATUS_DRAFT,
-                        'warehouse_id' => $data['warehouse_id'],
-                        'location_id' => $data['location_id'],
-                        'quantity' => $data['quantity'],
-                        // 回收品=节点输出产品快照（回收入账商品口径，1529 一致性校验基准）
-                        'output_product_id' => $node->output_product_id,
-                        'remark' => $data['remark'] ?? null,
-                    ]),
-                    // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                    fn (string $prefix, string $dateKey) => ($no = OutsourcingOrder::where('no', 'like', $prefix.date('Ymd').'%')
-                        ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-                );
-                // 组件行落库：节点逐行校验（应发 ≤ 单位用量×委外量，bcmath 权威）后落库
-                $items = $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity']);
-                $os->items()->createMany($items);
-
-                return $os;
-            }, 2);
-        } catch (ProductionException $e) {
-            // 422 节点缺失（数据异常）/ 组件载荷不符（应发超上限/重复/非节点材料）——整体回滚
-            return $this->fail($e->getCode() ?: 422, $e->getMessage());
+        // 路由头/节点缺失等数据异常 422 由异常自带业务码经全局渲染器统一转信封（D-13 后控制器不再自行 catch）
+        $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
+        if ((int) $op->is_outsourced !== 1) {
+            return $this->fail(422, '该工序不是委外工序');
         }
+        if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
+            return $this->fail(422, '该工序已完成，不可委外');
+        }
+        // 草稿期校验：委外量 ≤ 剩余可委外量 = 工单数量 − Σ同节点非草稿委外单（1520，bcmath）
+        $order = ProductionOrder::find($data['order_id']);
+        // 工单状态校验（B-1）：与发出 approve 同口径 [已下达,生产中]（1523，spec §5.1 生产中→委外）——
+        // 草稿工单的工序行会随工单编辑全删重建，草稿期挂委外单会令 operation_id 外键（RESTRICT）
+        // 卡死工单编辑（QueryException 500 且无自愈路径），从源头禁止
+        $canOutsource = $order && in_array($order->status, [
+            ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING,
+        ], true);
+        if (! $canOutsource) {
+            return $this->fail(1523, '工单当前状态不可委外');
+        }
+        $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
+            ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
+        // 工单缺失分支已由上方 1523 守卫承接（$canOutsource 对 null 工单恒 false），此处 $order 必非空
+        if (bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+            return $this->fail(1520, '委外数量超过节点剩余计划量');
+        }
+
+        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
+        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
+        $os = DB::transaction(function () use ($data, $node) {
+            $os = $this->sequenceService->nextNoByConfig(
+                DocumentSequence::TYPE_OS,
+                fn (string $no) => OutsourcingOrder::create([
+                    'no' => $no,
+                    'order_id' => $data['order_id'],
+                    'operation_id' => $data['operation_id'],
+                    'supplier_id' => $data['supplier_id'],
+                    'status' => OutsourcingOrder::STATUS_DRAFT,
+                    'warehouse_id' => $data['warehouse_id'],
+                    'location_id' => $data['location_id'],
+                    'quantity' => $data['quantity'],
+                    // 回收品=节点输出产品快照（回收入账商品口径，1529 一致性校验基准）
+                    'output_product_id' => $node->output_product_id,
+                    'remark' => $data['remark'] ?? null,
+                ]),
+                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
+                fn (string $prefix, string $dateKey) => ($no = OutsourcingOrder::where('no', 'like', $prefix.date('Ymd').'%')
+                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
+            );
+            // 组件行落库：节点逐行校验（应发 ≤ 单位用量×委外量，bcmath 权威）后落库
+            $items = $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity']);
+            $os->items()->createMany($items);
+
+            return $os;
+        }, 2);
 
         return $this->ok(['no' => $os->no]);
     }
@@ -200,12 +195,7 @@ class OutsourcingController extends Controller
     /** from-operation 预填：节点输入材料清单×单位用量 + 回收品 + 计划/已委外/剩余量（结构不符 422） */
     public function fromOperation(int $operationId)
     {
-        try {
-            return $this->ok($this->outsourcingService->fromOperation($operationId));
-        } catch (ProductionException $e) {
-            // 422：工单无路线/节点非委外/节点已完成等结构不符（预填不可用）
-            return $this->fail($e->getCode() ?: 422, $e->getMessage());
-        }
+        return $this->ok($this->outsourcingService->fromOperation($operationId));
     }
 
     /** 详情：头信息 + 组件明细（余料退回可退数=已发−已退）+ 回收记录摘要 */
@@ -255,80 +245,75 @@ class OutsourcingController extends Controller
     /** 更新草稿：仅草稿（1521）；校验同 store；items 全量替换；事务内锁行复查防并发 */
     public function update(Request $request, OutsourcingOrder $outsourcing)
     {
-        try {
-            if ($outsourcing->status !== OutsourcingOrder::STATUS_DRAFT) {
-                return $this->fail(1521, '已审核单据不可修改');
-            }
-            $data = $this->validatePayload($request);
-            // 委外量判正走 bccomp（D-3 铁律：禁浮点参与数量比较；与 store 同口径）
-            if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
-                return $this->fail(422, '委外数量必须大于 0');
-            }
-            if (! $request->filled('supplier_id')) {
-                return $this->fail(422, '供应商不能为空');
-            }
-            if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-                return $this->fail(422, '仓库与库位不能为空');
-            }
-            $op = WorkOrderOperation::where('id', $data['operation_id'])->where('order_id', $data['order_id'])->first();
-            if (! $op) {
-                return $this->fail(422, '工序不属于该工单');
-            }
-            // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec 5 §4 规则定义）：无路线/无 node_no → 422
-            $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
-            if ((int) $op->is_outsourced !== 1) {
-                return $this->fail(422, '该工序不是委外工序');
-            }
-            if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
-                return $this->fail(422, '该工序已完成，不可委外');
-            }
-            // 草稿期校验：委外量 ≤ 剩余可委外量（排除本次编辑自身——草稿本不在非草稿口径，双保险）
-            $order = ProductionOrder::find($data['order_id']);
-            // 工单状态校验（B-1b）：编辑可改挂工单/工序，不校验则可把工单 A 建的委外草稿改挂草稿工单 B，
-            // 绕过 store 的 B-1 校验——草稿工单 B 编辑虽已被工单侧 1504 引用守卫兜底（不再 500），
-            // 但其编辑/删除会被该草稿委外单莫名冻结且形成口径外脏数据，故与 store/approve 同口径
-            // [已下达,生产中] 从源头禁止（1523）
-            $canOutsource = $order && in_array($order->status, [
-                ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING,
-            ], true);
-            if (! $canOutsource) {
-                return $this->fail(1523, '工单当前状态不可委外');
-            }
-            $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
-                ->where('id', '!=', $outsourcing->id)
-                ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
-            // 工单缺失分支已由上方 1523 守卫承接（$canOutsource 对 null 工单恒 false），此处 $order 必非空
-            if (bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
-                return $this->fail(1520, '委外数量超过节点剩余计划量');
-            }
-
-            DB::transaction(function () use ($outsourcing, $data, $node) {
-                // 锁委外单行复查状态（幂等 1521）
-                $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== OutsourcingOrder::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可修改', 1521);
-                }
-                // 组件载荷校验（节点口径）——校验失败整单回滚
-                $items = $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity']);
-                $locked->update([
-                    'order_id' => $data['order_id'],
-                    'operation_id' => $data['operation_id'],
-                    'supplier_id' => $data['supplier_id'],
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'quantity' => $data['quantity'],
-                    // 回收品=节点输出产品快照（回收入账商品口径，1529 一致性校验基准）
-                    'output_product_id' => $node->output_product_id,
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 组件全量替换（草稿单无流水引用，直接重建；唯一键防重复）
-                $locked->items()->delete();
-                $locked->items()->createMany($items);
-            });
-        } catch (ProductionException $e) {
-            // 1521 已审核（锁行复查与并发审核幂等拦截）/ 422 组件载荷不符
-            return $this->fail($e->getCode() ?: 1521, $e->getMessage());
+        if ($outsourcing->status !== OutsourcingOrder::STATUS_DRAFT) {
+            return $this->fail(1521, '已审核单据不可修改');
         }
+        $data = $this->validatePayload($request);
+        // 委外量判正走 bccomp（D-3 铁律：禁浮点参与数量比较；与 store 同口径）
+        if (bccomp((string) $data['quantity'], '0', 2) <= 0) {
+            return $this->fail(422, '委外数量必须大于 0');
+        }
+        if (! $request->filled('supplier_id')) {
+            return $this->fail(422, '供应商不能为空');
+        }
+        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
+            return $this->fail(422, '仓库与库位不能为空');
+        }
+        $op = WorkOrderOperation::where('id', $data['operation_id'])->where('order_id', $data['order_id'])->first();
+        if (! $op) {
+            return $this->fail(422, '工序不属于该工单');
+        }
+        // 委外对象=工艺路线节点（仅 is_outsourced=1 节点可委外，spec 5 §4 规则定义）：无路线/无 node_no → 422
+        $node = $this->outsourcingService->routingNodeForOperation($data['operation_id']);
+        if ((int) $op->is_outsourced !== 1) {
+            return $this->fail(422, '该工序不是委外工序');
+        }
+        if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
+            return $this->fail(422, '该工序已完成，不可委外');
+        }
+        // 草稿期校验：委外量 ≤ 剩余可委外量（排除本次编辑自身——草稿本不在非草稿口径，双保险）
+        $order = ProductionOrder::find($data['order_id']);
+        // 工单状态校验（B-1b）：编辑可改挂工单/工序，不校验则可把工单 A 建的委外草稿改挂草稿工单 B，
+        // 绕过 store 的 B-1 校验——草稿工单 B 编辑虽已被工单侧 1504 引用守卫兜底（不再 500），
+        // 但其编辑/删除会被该草稿委外单莫名冻结且形成口径外脏数据，故与 store/approve 同口径
+        // [已下达,生产中] 从源头禁止（1523）
+        $canOutsource = $order && in_array($order->status, [
+            ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING,
+        ], true);
+        if (! $canOutsource) {
+            return $this->fail(1523, '工单当前状态不可委外');
+        }
+        $outsourced = bcadd((string) OutsourcingOrder::where('operation_id', $data['operation_id'])
+            ->where('id', '!=', $outsourcing->id)
+            ->where('status', '!=', OutsourcingOrder::STATUS_DRAFT)->sum('quantity'), '0', 2);
+        // 工单缺失分支已由上方 1523 守卫承接（$canOutsource 对 null 工单恒 false），此处 $order 必非空
+        if (bccomp((string) $data['quantity'], bcsub((string) $order->quantity, $outsourced, 2), 2) > 0) {
+            return $this->fail(1520, '委外数量超过节点剩余计划量');
+        }
+
+        DB::transaction(function () use ($outsourcing, $data, $node) {
+            // 锁委外单行复查状态（幂等 1521）
+            $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== OutsourcingOrder::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可修改', 1521);
+            }
+            // 组件载荷校验（节点口径）——校验失败整单回滚
+            $items = $this->outsourcingService->validateItems($data['items'], $node, (string) $data['quantity']);
+            $locked->update([
+                'order_id' => $data['order_id'],
+                'operation_id' => $data['operation_id'],
+                'supplier_id' => $data['supplier_id'],
+                'warehouse_id' => $data['warehouse_id'],
+                'location_id' => $data['location_id'],
+                'quantity' => $data['quantity'],
+                // 回收品=节点输出产品快照（回收入账商品口径，1529 一致性校验基准）
+                'output_product_id' => $node->output_product_id,
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 组件全量替换（草稿单无流水引用，直接重建；唯一键防重复）
+            $locked->items()->delete();
+            $locked->items()->createMany($items);
+        });
 
         return $this->ok();
     }
@@ -336,22 +321,17 @@ class OutsourcingController extends Controller
     /** 删除草稿：仅草稿（1521）；事务内锁行复查防并发 */
     public function destroy(OutsourcingOrder $outsourcing)
     {
-        try {
-            if ($outsourcing->status !== OutsourcingOrder::STATUS_DRAFT) {
-                return $this->fail(1521, '已审核单据不可删除');
-            }
-            DB::transaction(function () use ($outsourcing) {
-                // 锁委外单行复查状态（幂等 1521）
-                $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== OutsourcingOrder::STATUS_DRAFT) {
-                    throw new ProductionException('已审核单据不可删除', 1521);
-                }
-                $locked->delete();
-            });
-        } catch (ProductionException $e) {
-            // 1521 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1521, $e->getMessage());
+        if ($outsourcing->status !== OutsourcingOrder::STATUS_DRAFT) {
+            return $this->fail(1521, '已审核单据不可删除');
         }
+        DB::transaction(function () use ($outsourcing) {
+            // 锁委外单行复查状态（幂等 1521）
+            $locked = OutsourcingOrder::whereKey($outsourcing->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== OutsourcingOrder::STATUS_DRAFT) {
+                throw new ProductionException('已审核单据不可删除', 1521);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -464,9 +444,6 @@ class OutsourcingController extends Controller
                 $locked->save();
                 $result = ['no' => $locked->no];
             }, 2);
-        } catch (ProductionException $e) {
-            // 1523 幂等/工单状态不符 / 422 零组件脏数据防线 / 1520 剩余量复查 / 1522 库存不足（事务整体回滚）
-            return $this->fail($e->getCode() ?: 1523, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）
             return $this->fail(1522, '库存不足，委外发出被拒绝');
@@ -608,9 +585,6 @@ class OutsourcingController extends Controller
                 }
                 $result = ['no' => $receipt->no];
             }, 2);
-        } catch (ProductionException $e) {
-            // 1524 超收 / 422 状态不符（事务整体回滚）
-            return $this->fail($e->getCode() ?: 422, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底（入库方向理论不触发，防御路径）
             return $this->fail(422, '回收失败，请重试');
@@ -747,9 +721,6 @@ class OutsourcingController extends Controller
                 }
                 $result = ['no' => $return->no];
             }, 2);
-        } catch (ProductionException $e) {
-            // 422 状态不符/超退/组件归属不符（事务整体回滚）
-            return $this->fail($e->getCode() ?: 422, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底（入库方向理论不触发，防御路径）
             return $this->fail(422, '退回失败，请重试');

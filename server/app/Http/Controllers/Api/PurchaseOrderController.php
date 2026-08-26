@@ -201,43 +201,38 @@ class PurchaseOrderController extends Controller
     /** 更新草稿：仅草稿（1303）；items 全量替换；金额重算；事务内锁行复查防并发 */
     public function update(Request $request, PurchaseOrder $order)
     {
-        try {
-            if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-                return $this->fail(1303, '已审核订单不可修改');
-            }
-            $data = $this->validatePayload($request);
-            // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
-            if ($fail = $this->validateBusinessItems($data['items'])) {
-                return $fail;
-            }
-
-            DB::transaction(function () use ($order, $data) {
-                // 锁订单行复查状态：与审核并发时防止改到正在审核的单（幂等 1303）
-                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                    throw new PurchaseException('已审核订单不可修改', 1303);
-                }
-                $locked->update([
-                    'supplier_id' => $data['supplier_id'],
-                    'order_date' => $data['order_date'],
-                    'expected_date' => $data['expected_date'] ?? null,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 明细全量替换（草稿单无流水引用，直接重建）
-                $locked->items()->delete();
-                $locked->items()->createMany(array_map(fn ($i) => [
-                    'product_id' => $i['product_id'],
-                    'quantity' => $i['quantity'],
-                    'price' => $i['price'],
-                    'received_qty' => 0,
-                    'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
-                ], $data['items']));
-            });
-        } catch (PurchaseException $e) {
-            // 1303 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1303, $e->getMessage());
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1303, '已审核订单不可修改');
         }
+        $data = $this->validatePayload($request);
+        // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
+        if ($fail = $this->validateBusinessItems($data['items'])) {
+            return $fail;
+        }
+
+        DB::transaction(function () use ($order, $data) {
+            // 锁订单行复查状态：与审核并发时防止改到正在审核的单（幂等 1303）
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
+                throw new PurchaseException('已审核订单不可修改', 1303);
+            }
+            $locked->update([
+                'supplier_id' => $data['supplier_id'],
+                'order_date' => $data['order_date'],
+                'expected_date' => $data['expected_date'] ?? null,
+                'total_amount' => $this->orderService->calculateTotal($data['items']),
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建）
+            $locked->items()->delete();
+            $locked->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+                'price' => $i['price'],
+                'received_qty' => 0,
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+            ], $data['items']));
+        });
 
         return $this->ok();
     }
@@ -245,22 +240,17 @@ class PurchaseOrderController extends Controller
     /** 删除草稿：仅草稿（1304）；事务内锁行复查防并发 */
     public function destroy(PurchaseOrder $order)
     {
-        try {
-            if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-                return $this->fail(1304, '已审核订单不可删除');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行复查状态：与审核并发时防止删到正在审核的单（幂等 1304）
-                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                    throw new PurchaseException('已审核订单不可删除', 1304);
-                }
-                $locked->delete();
-            });
-        } catch (PurchaseException $e) {
-            // 1304 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1304, $e->getMessage());
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1304, '已审核订单不可删除');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行复查状态：与审核并发时防止删到正在审核的单（幂等 1304）
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
+                throw new PurchaseException('已审核订单不可删除', 1304);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -268,25 +258,20 @@ class PurchaseOrderController extends Controller
     /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人；锁内复查抛错转业务码 */
     public function approve(PurchaseOrder $order)
     {
-        try {
-            if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-                return $this->fail(1305, '该订单已审核');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行：同一订单重复审核在此判重（幂等）
-                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                    throw new PurchaseException('该订单已审核', 1305);
-                }
-                $locked->status = PurchaseOrder::STATUS_APPROVED;
-                $locked->approved_at = now();
-                $locked->created_by = $locked->created_by ?? auth()->id();
-                $locked->save();
-            });
-        } catch (PurchaseException $e) {
-            // 1305 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1305, $e->getMessage());
+        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
+            return $this->fail(1305, '该订单已审核');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行：同一订单重复审核在此判重（幂等）
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
+                throw new PurchaseException('该订单已审核', 1305);
+            }
+            $locked->status = PurchaseOrder::STATUS_APPROVED;
+            $locked->approved_at = now();
+            $locked->created_by = $locked->created_by ?? auth()->id();
+            $locked->save();
+        });
 
         return $this->ok(['no' => $order->no]);
     }
@@ -294,24 +279,19 @@ class PurchaseOrderController extends Controller
     /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单；锁内复查抛错转业务码 */
     public function close(PurchaseOrder $order)
     {
-        try {
-            if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-                return $this->fail(1306, '当前状态不可关闭');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
-                $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-                    throw new PurchaseException('当前状态不可关闭', 1306);
-                }
-                $locked->status = PurchaseOrder::STATUS_CLOSED;
-                $locked->closed_at = now();
-                $locked->save();
-            });
-        } catch (PurchaseException $e) {
-            // 1306 状态不符（锁行复查与并发拦截）
-            return $this->fail($e->getCode() ?: 1306, $e->getMessage());
+        if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+            return $this->fail(1306, '当前状态不可关闭');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
+            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
+                throw new PurchaseException('当前状态不可关闭', 1306);
+            }
+            $locked->status = PurchaseOrder::STATUS_CLOSED;
+            $locked->closed_at = now();
+            $locked->save();
+        });
 
         return $this->ok();
     }

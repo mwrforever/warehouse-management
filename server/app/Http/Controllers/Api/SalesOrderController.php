@@ -202,43 +202,38 @@ class SalesOrderController extends Controller
     /** 更新草稿：仅草稿（1402）；items 全量替换；金额重算；事务内锁行复查防并发 */
     public function update(Request $request, SalesOrder $order)
     {
-        try {
-            if ($order->status !== SalesOrder::STATUS_DRAFT) {
-                return $this->fail(1402, '已审核订单不可修改');
-            }
-            $data = $this->validatePayload($request);
-            // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
-            if ($fail = $this->validateBusinessItems($data['items'])) {
-                return $fail;
-            }
-
-            DB::transaction(function () use ($order, $data) {
-                // 锁订单行复查状态：与审核并发时防止改到正在审核的单（幂等 1402）
-                $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== SalesOrder::STATUS_DRAFT) {
-                    throw new SalesException('已审核订单不可修改', 1402);
-                }
-                $locked->update([
-                    'customer_id' => $data['customer_id'],
-                    'order_date' => $data['order_date'],
-                    'expected_date' => $data['expected_date'] ?? null,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 明细全量替换（草稿单无流水引用，直接重建）
-                $locked->items()->delete();
-                $locked->items()->createMany(array_map(fn ($i) => [
-                    'product_id' => $i['product_id'],
-                    'quantity' => $i['quantity'],
-                    'price' => $i['price'],
-                    'shipped_qty' => 0,
-                    'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
-                ], $data['items']));
-            });
-        } catch (SalesException $e) {
-            // 1402 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1402, $e->getMessage());
+        if ($order->status !== SalesOrder::STATUS_DRAFT) {
+            return $this->fail(1402, '已审核订单不可修改');
         }
+        $data = $this->validatePayload($request);
+        // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
+        if ($fail = $this->validateBusinessItems($data['items'])) {
+            return $fail;
+        }
+
+        DB::transaction(function () use ($order, $data) {
+            // 锁订单行复查状态：与审核并发时防止改到正在审核的单（幂等 1402）
+            $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== SalesOrder::STATUS_DRAFT) {
+                throw new SalesException('已审核订单不可修改', 1402);
+            }
+            $locked->update([
+                'customer_id' => $data['customer_id'],
+                'order_date' => $data['order_date'],
+                'expected_date' => $data['expected_date'] ?? null,
+                'total_amount' => $this->orderService->calculateTotal($data['items']),
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建）
+            $locked->items()->delete();
+            $locked->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+                'price' => $i['price'],
+                'shipped_qty' => 0,
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+            ], $data['items']));
+        });
 
         return $this->ok();
     }
@@ -246,22 +241,17 @@ class SalesOrderController extends Controller
     /** 删除草稿：仅草稿（1403）；事务内锁行复查防并发 */
     public function destroy(SalesOrder $order)
     {
-        try {
-            if ($order->status !== SalesOrder::STATUS_DRAFT) {
-                return $this->fail(1403, '已审核订单不可删除');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行复查状态：与审核并发时防止删到正在审核的单（幂等 1403）
-                $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== SalesOrder::STATUS_DRAFT) {
-                    throw new SalesException('已审核订单不可删除', 1403);
-                }
-                $locked->delete();
-            });
-        } catch (SalesException $e) {
-            // 1403 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1403, $e->getMessage());
+        if ($order->status !== SalesOrder::STATUS_DRAFT) {
+            return $this->fail(1403, '已审核订单不可删除');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行复查状态：与审核并发时防止删到正在审核的单（幂等 1403）
+            $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== SalesOrder::STATUS_DRAFT) {
+                throw new SalesException('已审核订单不可删除', 1403);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -269,25 +259,20 @@ class SalesOrderController extends Controller
     /** 审核：仅草稿（幂等 1404）；置已审核 + approved_at；锁内复查抛错转业务码 */
     public function approve(SalesOrder $order)
     {
-        try {
-            if ($order->status !== SalesOrder::STATUS_DRAFT) {
-                return $this->fail(1404, '该订单已审核');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行：同一订单重复审核在此判重（幂等）
-                $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== SalesOrder::STATUS_DRAFT) {
-                    throw new SalesException('该订单已审核', 1404);
-                }
-                $locked->status = SalesOrder::STATUS_APPROVED;
-                $locked->approved_at = now();
-                $locked->created_by = $locked->created_by ?? auth()->id();
-                $locked->save();
-            });
-        } catch (SalesException $e) {
-            // 1404 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1404, $e->getMessage());
+        if ($order->status !== SalesOrder::STATUS_DRAFT) {
+            return $this->fail(1404, '该订单已审核');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行：同一订单重复审核在此判重（幂等）
+            $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== SalesOrder::STATUS_DRAFT) {
+                throw new SalesException('该订单已审核', 1404);
+            }
+            $locked->status = SalesOrder::STATUS_APPROVED;
+            $locked->approved_at = now();
+            $locked->created_by = $locked->created_by ?? auth()->id();
+            $locked->save();
+        });
 
         return $this->ok(['no' => $order->no]);
     }
@@ -295,24 +280,19 @@ class SalesOrderController extends Controller
     /** 关闭：仅已审核/部分出库（1405）；置关闭 + closed_at；关闭后不可再生成出库单；锁内复查抛错转业务码 */
     public function close(SalesOrder $order)
     {
-        try {
-            if (! in_array($order->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
-                return $this->fail(1405, '当前状态不可关闭');
-            }
-            DB::transaction(function () use ($order) {
-                // 锁订单行复查状态：与出库审核并发时防止关闭正在出库的订单
-                $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if (! in_array($locked->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
-                    throw new SalesException('当前状态不可关闭', 1405);
-                }
-                $locked->status = SalesOrder::STATUS_CLOSED;
-                $locked->closed_at = now();
-                $locked->save();
-            });
-        } catch (SalesException $e) {
-            // 1405 状态不符（锁行复查与并发拦截）
-            return $this->fail($e->getCode() ?: 1405, $e->getMessage());
+        if (! in_array($order->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
+            return $this->fail(1405, '当前状态不可关闭');
         }
+        DB::transaction(function () use ($order) {
+            // 锁订单行复查状态：与出库审核并发时防止关闭正在出库的订单
+            $locked = SalesOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
+            if (! in_array($locked->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
+                throw new SalesException('当前状态不可关闭', 1405);
+            }
+            $locked->status = SalesOrder::STATUS_CLOSED;
+            $locked->closed_at = now();
+            $locked->save();
+        });
 
         return $this->ok();
     }

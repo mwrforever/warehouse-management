@@ -254,55 +254,50 @@ class SalesOutboundController extends Controller
     /** 更新草稿：仅草稿（1408）；items 全量替换；订单行校验同 store；事务内锁行复查防并发 */
     public function update(Request $request, SalesOutbound $outbound)
     {
-        try {
-            if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
-                return $this->fail(1408, '已审核单据不可修改');
-            }
-            $data = $this->validatePayload($request);
-            if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-                return $this->fail(1406, '仓库与库位不能为空');
-            }
-            if ($fail = $this->validateBusinessItems($data['items'])) {
-                return $fail;
-            }
-            if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
-                return $this->fail(1407, '出库明细与订单行不一致');
-            }
-            if ($orderId = $data['order_id'] ?? null) {
-                $check = $this->validateOrderItems($orderId, (int) $data['customer_id'], $data['items']);
-                if ($check !== null) {
-                    return $this->fail(1407, $check);
-                }
-            }
-
-            DB::transaction(function () use ($outbound, $data) {
-                // 锁出库单行复查状态：与审核并发时防止改到正在审核的单（幂等 1408）
-                $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
-                    throw new SalesException('已审核单据不可修改', 1408);
-                }
-                $locked->update([
-                    'customer_id' => $data['customer_id'],
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'order_id' => $data['order_id'] ?? null,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
-                    'remark' => $data['remark'] ?? $locked->remark,
-                ]);
-                // 明细全量替换（草稿单无流水引用，直接重建）
-                $locked->items()->delete();
-                $locked->items()->createMany(array_map(fn ($i) => [
-                    'product_id' => $i['product_id'],
-                    'quantity' => $i['quantity'],
-                    'price' => $i['price'],
-                    'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
-                    'order_item_id' => $i['order_item_id'] ?? null,
-                ], $data['items']));
-            });
-        } catch (SalesException $e) {
-            // 1408 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1408, $e->getMessage());
+        if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
+            return $this->fail(1408, '已审核单据不可修改');
         }
+        $data = $this->validatePayload($request);
+        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
+            return $this->fail(1406, '仓库与库位不能为空');
+        }
+        if ($fail = $this->validateBusinessItems($data['items'])) {
+            return $fail;
+        }
+        if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
+            return $this->fail(1407, '出库明细与订单行不一致');
+        }
+        if ($orderId = $data['order_id'] ?? null) {
+            $check = $this->validateOrderItems($orderId, (int) $data['customer_id'], $data['items']);
+            if ($check !== null) {
+                return $this->fail(1407, $check);
+            }
+        }
+
+        DB::transaction(function () use ($outbound, $data) {
+            // 锁出库单行复查状态：与审核并发时防止改到正在审核的单（幂等 1408）
+            $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
+                throw new SalesException('已审核单据不可修改', 1408);
+            }
+            $locked->update([
+                'customer_id' => $data['customer_id'],
+                'warehouse_id' => $data['warehouse_id'],
+                'location_id' => $data['location_id'],
+                'order_id' => $data['order_id'] ?? null,
+                'total_amount' => $this->orderService->calculateTotal($data['items']),
+                'remark' => $data['remark'] ?? $locked->remark,
+            ]);
+            // 明细全量替换（草稿单无流水引用，直接重建）
+            $locked->items()->delete();
+            $locked->items()->createMany(array_map(fn ($i) => [
+                'product_id' => $i['product_id'],
+                'quantity' => $i['quantity'],
+                'price' => $i['price'],
+                'amount' => $this->orderService->lineAmount((string) $i['quantity'], (string) $i['price']),
+                'order_item_id' => $i['order_item_id'] ?? null,
+            ], $data['items']));
+        });
 
         return $this->ok();
     }
@@ -310,22 +305,17 @@ class SalesOutboundController extends Controller
     /** 删除草稿：仅草稿（1408）；事务内锁行复查防并发 */
     public function destroy(SalesOutbound $outbound)
     {
-        try {
-            if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
-                return $this->fail(1408, '已审核单据不可删除');
-            }
-            DB::transaction(function () use ($outbound) {
-                // 锁出库单行复查状态：与审核并发时防止删到正在审核的单（幂等 1408）
-                $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
-                    throw new SalesException('已审核单据不可删除', 1408);
-                }
-                $locked->delete();
-            });
-        } catch (SalesException $e) {
-            // 1408 已审核（锁行复查与并发审核幂等拦截）
-            return $this->fail($e->getCode() ?: 1408, $e->getMessage());
+        if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
+            return $this->fail(1408, '已审核单据不可删除');
         }
+        DB::transaction(function () use ($outbound) {
+            // 锁出库单行复查状态：与审核并发时防止删到正在审核的单（幂等 1408）
+            $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
+                throw new SalesException('已审核单据不可删除', 1408);
+            }
+            $locked->delete();
+        });
 
         return $this->ok();
     }
@@ -436,9 +426,6 @@ class SalesOutboundController extends Controller
                 $locked->save();
                 $result = ['no' => $locked->no];
             }, 2);
-        } catch (SalesException $e) {
-            // 1410 幂等 / 1407 超量或订单状态不符 / 1409 库存不足（事务整体回滚）
-            return $this->fail($e->getCode() ?: 1407, $e->getMessage());
         } catch (InventoryException $e) {
             // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径；消息不含商品名时用通用文案）
             return $this->fail(1409, '库存不足，出库被拒绝');
