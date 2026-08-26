@@ -11,6 +11,7 @@ use App\Models\RoutingEdge;
 use App\Models\RoutingHeader;
 use App\Models\RoutingNode;
 use App\Models\RoutingNodeMaterial;
+use App\Support\DeletionGuard;
 use Illuminate\Support\Facades\DB;
 
 class RoutingService
@@ -174,12 +175,22 @@ class RoutingService
     }
 
     /**
-     * 保存（新建/更新）：事务内「锁成品行 → 启用唯一 1707 → DAG 校验 → 取号建头/改头 → 全量替换节点/材料/边」
+     * 保存（新建/更新）：载荷归一化+链接结构校验 → 被工单引用保护（1705）→
+     * 事务内「锁成品行 → 启用唯一 1707 → DAG 校验 → 取号建头/改头 → 全量替换节点/材料/边」
      *
-     * @param  array  $data  validatePayload 归一化后的载荷（edges 已转 from/to）
+     * @param  array  $data  已过 SaveRoutingRequest 格式校验的原始载荷（nodes/edges 原始形态）
+     *
+     * @throws RoutingException 链接结构 422 / 被引用 1705 / 启用唯一 1707 / DAG 校验 1701~1704、1708~1710
      */
     public function persist(array $data, ?RoutingHeader $routing, DocumentSequenceService $sequenceService): RoutingHeader
     {
+        // 载荷归一化 + 链接结构校验（422，原控制器 validatePayload 后半段下沉；格式 422 已提前至 FormRequest）
+        $data = $this->normalizePayload($data);
+        // 被工单引用（order.routing_id 关联）：仅可启停，禁止改结构（1705，读检查无需持锁）
+        if ($routing && DeletionGuard::referenced('production_orders', 'routing_id', $routing->id)) {
+            throw new RoutingException('工艺路线已被生产工单使用，仅可启用/停用', 1705);
+        }
+
         return DB::transaction(function () use ($data, $routing, $sequenceService) {
             // 锁成品行串行化同成品并发启停（同 BOM 口径）
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
@@ -243,9 +254,17 @@ class RoutingService
         }, 2);
     }
 
-    /** 删除（头删除级联节点/材料/边） */
+    /**
+     * 删除：被工单引用不可删（1706）；头删除级联节点/材料/边（FK cascade）
+     *
+     * @throws RoutingException 被工单引用 1706
+     */
     public function delete(RoutingHeader $routing): void
     {
+        // 被工单引用保护（读检查无需持锁；原控制器 DeletionGuard 检查下沉）
+        if (DeletionGuard::referenced('production_orders', 'routing_id', $routing->id)) {
+            throw new RoutingException('工艺路线已被生产工单使用，不可删除', 1706);
+        }
         $routing->delete();
     }
 
@@ -295,6 +314,69 @@ class RoutingService
             'edges' => $routing->edges->sortBy('id')->map(fn (RoutingEdge $e) => [
                 'id' => $e->id, 'from_node_no' => $e->fromNode?->node_no, 'to_node_no' => $e->toNode?->node_no,
             ]),
+        ];
+    }
+
+    /**
+     * 载荷归一化 + 链接结构校验（原控制器 validatePayload 后半段下沉）
+     *
+     * 结构校验（均 422，格式层语义）：边端点必须存在于节点集 / 连线重复（同源多边合法，
+     * 故不使用 distinct 规则）/ 同节点材料重复（唯一索引兜底前的友好报错）。
+     * 归一化：数值字段转 int/string、缺省默认值、edges 的 from_node_no/to_node_no 键转 from/to。
+     *
+     * @param  array  $data  已过 SaveRoutingRequest 格式校验的原始载荷
+     * @return array 归一化后载荷（persist 事务内各步消费的形态）
+     *
+     * @throws RoutingException 链接结构 422（连线端点不存在/连线重复/重复输入材料）
+     */
+    private function normalizePayload(array $data): array
+    {
+        // 边端点必须在节点集内 + 去重（重复边 422；同源多边合法）
+        $nodeNos = array_column($data['nodes'], 'node_no');
+        $seen = [];
+        foreach ($data['edges'] ?? [] as $e) {
+            if (! in_array($e['from_node_no'], $nodeNos, true) || ! in_array($e['to_node_no'], $nodeNos, true)) {
+                throw new RoutingException('连线端点不存在于节点集中', 422);
+            }
+            $key = $e['from_node_no'].'>'.$e['to_node_no'];
+            if (isset($seen[$key])) {
+                throw new RoutingException('连线重复', 422);
+            }
+            $seen[$key] = true;
+        }
+        // 同节点材料去重（唯一索引兜底前的友好报错）
+        foreach ($data['nodes'] as $n) {
+            $ids = array_column($n['materials'] ?? [], 'material_id');
+            if (count($ids) !== count(array_unique($ids))) {
+                throw new RoutingException('工序['.$n['name'].']存在重复输入材料', 422);
+            }
+        }
+
+        // 归一化默认值（与原控制器 validatePayload 逐条等价）
+        return [
+            'product_id' => (int) $data['product_id'],
+            'version' => $data['version'],
+            'quantity' => (string) ($data['quantity'] ?? 1),
+            'status' => (int) ($data['status'] ?? RoutingHeader::STATUS_ENABLED),
+            'remark' => $data['remark'] ?? null,
+            'nodes' => array_map(fn ($n) => [
+                'node_no' => $n['node_no'],
+                'process_id' => (int) $n['process_id'],
+                'name' => $n['name'],
+                'output_product_id' => (int) $n['output_product_id'],
+                'output_qty' => (string) ($n['output_qty'] ?? 1),
+                'is_outsourced' => (int) ($n['is_outsourced'] ?? 0),
+                'remark' => $n['remark'] ?? null,
+                'materials' => array_map(fn ($m) => [
+                    'material_id' => (int) $m['material_id'],
+                    'qty_per_unit' => (string) $m['qty_per_unit'],
+                    'unit_id' => (int) $m['unit_id'],
+                ], $n['materials'] ?? []),
+            ], $data['nodes']),
+            'edges' => array_map(
+                fn ($e) => ['from' => $e['from_node_no'], 'to' => $e['to_node_no']],
+                $data['edges'] ?? [],
+            ),
         ];
     }
 }
