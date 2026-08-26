@@ -214,7 +214,7 @@ class ReportServiceTest extends TestCase
 
     public function test_inventory_summary_amount_uses_latest_purchase_price(): void
     {
-        // 正常路径：金额=余额×最近一次采购入库单价（分）÷100 元；取最近一条单价
+        // 正常路径：金额=余额×最近一次采购入库单价（分），half-up 整数分；取最近一条单价
         $raw = $this->makeProduct('MAT-A', 'raw_material', '原材料');
         $this->makeBalance($raw, '2.00');
         // 种子无供应商 → 自建（supplier_id 外键）
@@ -237,9 +237,9 @@ class ReportServiceTest extends TestCase
         ]);
 
         $res = $this->service->inventorySummary('category');
-        // 2 × 150 分 = 300 分 = 3.00 元
-        $this->assertSame('3.00', $res['items'][0]['amount_total']);
-        $this->assertSame('3.00', $res['total']['amount_total']);
+        // 2 × 150 分 = 300 分（R2：整数分口径，元展示由前端负责）
+        $this->assertSame(300, $res['items'][0]['amount_total']);
+        $this->assertSame(300, $res['total']['amount_total']);
     }
 
     public function test_inventory_summary_amount_excludes_draft_inbound_price(): void
@@ -424,7 +424,7 @@ class ReportServiceTest extends TestCase
         OperationReport::create([
             'operation_id' => $op->id, 'order_id' => $o->id,
             'qualified_qty' => $qualified, 'defective_qty' => $defective,
-            'hours' => $hours, 'report_time' => now()->toDateTimeString(),
+            'hours' => $hours, 'reported_at' => now()->toDateTimeString(),
         ]);
     }
 
@@ -670,12 +670,12 @@ class ReportServiceTest extends TestCase
         $this->assertCount(1, $res['items']);
         $row = $res['items'][0];
         $this->assertSame('2026-08', $row['period']);
-        $this->assertSame('123.45', $row['purchase_amount']);
-        $this->assertSame('50.00', $row['sales_amount']);
+        $this->assertSame(12345, $row['purchase_amount']);
+        $this->assertSame(5000, $row['sales_amount']);
         $this->assertSame('10.00', $row['purchase_qty']);
         $this->assertSame('4.00', $row['sales_qty']);
-        $this->assertSame('123.45', $res['totals']['purchase_amount']);
-        $this->assertSame('50.00', $res['totals']['sales_amount']);
+        $this->assertSame(12345, $res['totals']['purchase_amount']);
+        $this->assertSame(5000, $res['totals']['sales_amount']);
         $this->assertFalse($res['truncated']);
     }
 
@@ -698,8 +698,8 @@ class ReportServiceTest extends TestCase
 
         $this->assertCount(1, $res['items']);
         $this->assertSame('2026-08-31', $res['items'][0]['period']);
-        $this->assertSame('100.00', $res['totals']['purchase_amount']);
-        $this->assertSame('0', $res['totals']['sales_amount']);
+        $this->assertSame(10000, $res['totals']['purchase_amount']);
+        $this->assertSame(0, $res['totals']['sales_amount']);
         $this->assertSame('0', $res['totals']['sales_qty']);
     }
 
@@ -708,8 +708,8 @@ class ReportServiceTest extends TestCase
         // 边界路径：无数据区间 → items 空、totals 全 0
         $res = $this->service->purchaseSales('2099-01-01', '2099-01-31', 'day');
         $this->assertSame([], $res['items']);
-        $this->assertSame('0', $res['totals']['purchase_amount']);
-        $this->assertSame('0', $res['totals']['sales_amount']);
+        $this->assertSame(0, $res['totals']['purchase_amount']);
+        $this->assertSame(0, $res['totals']['sales_amount']);
     }
 
     public function test_purchase_sales_truncates_at_500_periods_but_totals_cover_full_range(): void
@@ -738,8 +738,8 @@ class ReportServiceTest extends TestCase
         // 前 500 个最小周期保留：首周期 2026-01-01、末周期 2027-05-15（第 501 天 2027-05-16 被剪掉）
         $this->assertSame('2026-01-01', $res['items'][0]['period']);
         $this->assertSame('2027-05-15', $res['items'][499]['period']);
-        // totals 仍为全区间合计：501 × 1.00 元、501 × 数量 1
-        $this->assertSame('501.00', $res['totals']['purchase_amount']);
+        // totals 仍为全区间合计：501 × 100 分、501 × 数量 1
+        $this->assertSame(50100, $res['totals']['purchase_amount']);
         $this->assertSame('501.00', $res['totals']['purchase_qty']);
     }
 }

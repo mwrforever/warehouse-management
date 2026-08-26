@@ -55,10 +55,13 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:role.delete')->delete('/roles/{role}', [RoleController::class, 'destroy']);
     });
 
-    // 数据字典：按编码取值登录即可访问（供其他模块下拉）；CRUD 要求认证 + 对应权限（dictionary.list/create/update/delete）
+    // 数据字典：全部要求认证 + 对应权限（dictionary.list/create/update/delete）；
+    // 按编码取值与列表同口径要求 dictionary.list（D-11 权限收紧：byCode 为公开字典查询，
+    // 管理员配置的角色通常持有；前端 api/dictionary.ts 未调用该接口，无实际影响面）
     Route::middleware('auth:sanctum')->group(function () {
         // 注意：code/{code} 必须先于 {dictionary} 注册，避免 code 被解析为字典 ID
-        Route::get('/dictionaries/code/{code}', [DictionaryController::class, 'byCode']);
+        Route::middleware('permission:dictionary.list')
+            ->get('/dictionaries/code/{code}', [DictionaryController::class, 'byCode']);
         Route::middleware('permission:dictionary.list')->get('/dictionaries', [DictionaryController::class, 'index']);
         Route::middleware('permission:dictionary.list')
             ->get('/dictionaries/{dictionary}/items', [DictionaryController::class, 'items']);

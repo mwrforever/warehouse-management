@@ -14,9 +14,12 @@
         v-model="query.product_id"
         clearable
         filterable
-        placeholder="按成品筛选"
+        remote
+        :remote-method="searchFinished"
+        :loading="finishedLoading"
+        placeholder="输入编码/名称筛选成品"
         style="width: 200px"
-        @change="() => load()"
+        @change="onProductFilterChange"
       >
         <el-option
           v-for="p in finishedProducts"
@@ -35,7 +38,9 @@
       <el-table-column prop="code" label="路线编码" width="170" class-name="font-code" />
       <el-table-column prop="product_name" label="成品名称" min-width="140" />
       <el-table-column prop="version" label="版本" width="80" class-name="font-code" />
-      <el-table-column prop="quantity" label="基准数量" width="90" />
+      <el-table-column label="基准数量" width="90" align="right">
+        <template #default="{ row }">{{ formatThousand(row.quantity) }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
@@ -89,11 +94,13 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { routingApi, type RoutingListItem } from '../../api/routing'
-import { productApi, type ProductItem } from '../../api/product'
+import { productApi } from '../../api/product'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import RoutingCanvasDialog from '../../components/routing/RoutingCanvasDialog.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
+import { formatThousand } from '../../utils/format'
 
 const auth = useAuthStore()
 // 列表查询状态（成品筛选为可空下拉，空值不参与过滤）
@@ -103,7 +110,35 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
   onError: (e) => ElMessage.error(e.message),
 })
 
-const finishedProducts = ref<ProductItem[]>([])
+// 筛选成品下拉选项（BF-3 remote）：label 编码+名称；画布内商品下拉由 RoutingCanvasDialog 自管
+interface ProductOption {
+  id: number
+  name: string
+  code: string
+}
+
+// 筛选成品下拉（BF-3）：成品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
+const {
+  options: finishedProducts,
+  loading: finishedLoading,
+  load: loadFinished,
+  search: searchFinished,
+  pin: pinFinished,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) =>
+    productApi.list({ page: 1, per_page: 100, type: 'finished', keyword: kw }).then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 选中成品后 pin：后续关键字搜索替换选项时已选值仍显示名称（防裸 id），再触发列表查询
+function onProductFilterChange(productId: number | null | undefined) {
+  if (productId != null) {
+    const hit = finishedProducts.value.find((p) => p.id === productId)
+    if (hit) pinFinished(hit)
+  }
+  load()
+}
 // 画布弹窗状态：currentId=null 新建；readonlyMode=true 详情查看
 const canvasVisible = ref(false)
 const currentId = ref<number | null>(null)
@@ -163,20 +198,15 @@ async function remove(row: RoutingListItem) {
 
 onMounted(() => {
   search()
-  // 预拉成品下拉（列表筛选用；画布弹窗内部自拉编辑所需数据）
-  void productApi
-    .list({ page: 1, per_page: 100, type: 'finished' })
-    .then((res) => {
-      finishedProducts.value = res.items
-    })
-    .catch((e: Error) => ElMessage.error(e.message))
+  // 筛选成品下拉初载（BF-3 remote 模式保留前 100 条）；画布弹窗内部自拉编辑所需数据
+  void loadFinished()
 })
 </script>
 
 <style scoped>
 /* 页面骨架与 BOM 管理页一致 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

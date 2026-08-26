@@ -201,10 +201,15 @@ export const salesApi = {
   async closeOrder(id: number) {
     await http.post(`/sales/orders/${id}/close`)
   },
-  // 可出库订单列表（从订单生成下拉数据源）
-  async availableOrders() {
-    const { data } = await http.get('/sales/orders/available')
-    return data.data as { items: AvailableOrder[]; total: number }
+  // 可出库订单列表（从订单生成下拉数据源；BF-3 后端支持单号 keyword 模糊搜索与 per_page 分页钳制 100）
+  async availableOrders(params?: { keyword?: string; per_page?: number }) {
+    const { data } = await http.get('/sales/orders/available', { params })
+    return data.data as {
+      items: AvailableOrder[]
+      total: number
+      page: number
+      per_page: number
+    }
   },
   // 该订单的出库记录（详情页 tab）
   async orderOutbounds(id: number) {

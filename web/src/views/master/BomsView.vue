@@ -57,28 +57,36 @@
       @current-change="refresh"
     />
 
-    <!-- 新建/编辑弹窗：单头 + 明细动态行（宽 800px） -->
-    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑 BOM' : '新建 BOM'" width="800px">
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="成品" required>
+    <!-- 新建/编辑弹窗：单头 + 明细动态行（宽 800px）；禁点遮罩关闭防误触丢失已录明细 -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="form.id ? '编辑 BOM' : '新建 BOM'"
+      width="800px"
+      :close-on-click-modal="false"
+    >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <el-form-item label="成品" prop="product_id" required>
           <el-select
             v-model="form.product_id"
             filterable
+            remote
+            :remote-method="searchFinished"
+            :loading="finishedLoading"
             style="width: 100%"
-            placeholder="仅成品类型商品"
+            placeholder="搜索成品编码/名称"
           >
             <el-option
               v-for="p in finishedProducts"
               :key="p.id"
-              :label="`${p.code} ${p.name}`"
+              :label="productLabel(p)"
               :value="p.id"
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="版本" required
+        <el-form-item label="版本" prop="version" required
           ><el-input v-model="form.version" style="width: 160px"
         /></el-form-item>
-        <el-form-item label="基准数量"
+        <el-form-item label="基准数量" prop="quantity"
           ><el-input-number v-model="form.quantity" :min="0.01" :precision="2"
         /></el-form-item>
         <el-form-item label="备注"
@@ -90,27 +98,42 @@
         <el-form-item label="物料明细">
           <div class="items-wrap">
             <div v-for="(row, idx) in form.items" :key="idx" class="item-row">
-              <el-select
-                v-model="row.material_id"
-                filterable
-                placeholder="物料（原料/半成品）"
-                style="width: 260px"
-                @change="(id: number) => applyMaterialUnit(row, id)"
+              <el-form-item
+                :prop="`items.${idx}.material_id`"
+                :rules="itemMaterialRules"
+                label-width="0"
               >
-                <el-option
-                  v-for="m in materialProducts"
-                  :key="m.id"
-                  :label="`${m.code} ${m.name}`"
-                  :value="m.id"
+                <el-select
+                  v-model="row.material_id"
+                  filterable
+                  remote
+                  :remote-method="searchMaterials"
+                  :loading="materialLoading"
+                  placeholder="搜索物料（原料/半成品）编码/名称"
+                  style="width: 260px"
+                  @change="(id: number) => applyMaterialUnit(row, id)"
+                >
+                  <el-option
+                    v-for="m in materialProducts"
+                    :key="m.id"
+                    :label="productLabel(m)"
+                    :value="m.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item
+                :prop="`items.${idx}.quantity`"
+                :rules="itemQuantityRules"
+                label-width="0"
+              >
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="0.01"
+                  :precision="2"
+                  placeholder="用量"
+                  style="width: 120px"
                 />
-              </el-select>
-              <el-input-number
-                v-model="row.quantity"
-                :min="0.01"
-                :precision="2"
-                placeholder="用量"
-                style="width: 120px"
-              />
+              </el-form-item>
               <span class="unit-name">{{ unitName(row.unit_id) }}</span>
               <el-button link type="danger" @click="removeItem(idx)">删 除</el-button>
             </div>
@@ -139,14 +162,22 @@
 
 <script setup lang="ts">
 // BOM 管理页：单头+明细一次保存/全量替换；启用切换自动停用同成品其他版本（后端 1120 兜底）
-import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { onMounted, reactive, ref, watch } from 'vue'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import { bomApi, type BomItem, type BomRow } from '../../api/bom'
-import { productApi, type ProductItem } from '../../api/product'
+import { productApi } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
@@ -185,12 +216,70 @@ const form = reactive<BomForm>({
   status: 1,
   items: [],
 })
-const finishedProducts = ref<ProductItem[]>([])
-const materialProducts = ref<ProductItem[]>([])
+// 弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+// 表单校验规则（D-17）：成品/版本必填；基准数量须 > 0 且最多 2 位小数。
+// 明细行物料必选与用量格式由行内 rules 承载；「至少一行明细」「单位齐全」跨行校验保持保存侧手工
+const rules: FormRules = {
+  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  version: [{ required: true, message: '请填写版本号', trigger: 'blur' }],
+  quantity: [quantityRule(false, '基准数量必须大于 0')],
+}
+// 明细行规则：物料必选；用量须 > 0（输入框 :min=0.01 已钳制，rules 兜底空值/精度）
+const itemMaterialRules: FormItemRule[] = [
+  { required: true, message: '请选择物料', trigger: 'change' },
+]
+const itemQuantityRules: FormItemRule[] = [quantityRule(false, '用量必须大于 0')]
+// 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑回显 pin 项缺编码/单位时仅保证展示与带出
+interface ProductOption {
+  id: number
+  name: string
+  code: string
+  unit_id: number
+}
+
+// 成品下拉（BF-3）：成品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
+const {
+  options: finishedProducts,
+  loading: finishedLoading,
+  load: loadFinished,
+  search: searchFinished,
+  pin: pinFinished,
+  reset: resetFinished,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) =>
+    productApi.list({ page: 1, per_page: 100, type: 'finished', keyword: kw }).then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 物料下拉（BF-3）：原料+半成品双路合并（成品嵌套由后端 1119 兜底），超 100 条后服务端搜索
+const {
+  options: materialProducts,
+  loading: materialLoading,
+  load: loadMaterials,
+  search: searchMaterials,
+  pin: pinMaterial,
+  reset: resetMaterials,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) =>
+    Promise.all([
+      productApi.list({ page: 1, per_page: 100, type: 'raw_material', keyword: kw }),
+      productApi.list({ page: 1, per_page: 100, type: 'semi_finished', keyword: kw }),
+    ]).then(([raw, semi]) => [...raw.items, ...semi.items]),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
 const units = ref<UnitItem[]>([])
 const itemsVisible = ref(false)
 const currentBom = ref<BomRow | null>(null)
 const itemsRows = ref<BomItem[]>([])
+
+// 下拉选项文案：编码+名称；编辑回显 pin 项无编码时仅展示名称（避免前导空格）
+function productLabel(p: ProductOption): string {
+  return p.code ? `${p.code} ${p.name}` : p.name
+}
 
 // 单位名映射（明细行显示；unit_id 未选时为空）
 function unitName(id: number | null) {
@@ -224,6 +313,11 @@ async function openEdit(row: BomRow) {
   try {
     // 明细请求成功后组装行数据并打开弹窗，请求期间表单不会被旧数据回写
     const res = await bomApi.items(row.id)
+    // 回显 pin：成品/物料可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id（物料需带 unit_id 供单位带出）
+    pinFinished({ id: row.product_id, name: row.product_name ?? '', code: '', unit_id: 0 })
+    for (const i of res.items) {
+      pinMaterial({ id: i.material_id, name: i.material_name, code: '', unit_id: i.unit_id })
+    }
     form.items = res.items.map((i) => ({
       material_id: i.material_id,
       quantity: i.quantity,
@@ -235,6 +329,18 @@ async function openEdit(row: BomRow) {
     ElMessage.error((e as Error).message)
   }
 }
+
+// 弹窗开关边界（BF-3 remote 会话）：打开初载下拉前 100 条，关闭清空选项与 pin 集并作废在途，
+// 防止上一张 BOM 的回显成品/物料串入下一张新单的下拉
+watch(dialogVisible, (open) => {
+  if (open) {
+    loadFinished()
+    loadMaterials()
+  } else {
+    resetFinished()
+    resetMaterials()
+  }
+})
 
 // 动态行：默认单位取第一个单位（选择物料后由 applyMaterialUnit 带出该物料单位）
 function newRow() {
@@ -253,21 +359,24 @@ function removeItem(idx: string | number) {
   form.items.splice(idx as number, 1)
 }
 
-// 保存：单头+明细一次提交；后端 1118/1119/1120/1123 错误提示展示
+// 保存：单头+明细一次提交；跨行校验（至少一条明细/单位齐全）保持手工；后端 1118/1119/1120/1123 错误提示展示
 async function save() {
-  if (!form.product_id) return ElMessage.warning('请选择成品')
+  // 提交前统一 el-form 校验（D-17）：成品/版本/基准数量必填 + 明细行物料/用量格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (!form.items.length) return ElMessage.warning('请至少添加一条物料明细')
-  if (form.items.some((i) => !i.material_id || !i.quantity || !i.unit_id))
-    return ElMessage.warning('请补全物料行信息')
+  // 单位随物料自动带出，无可见输入控件不进 rules；此处兜底校验未带出单位的情况
+  if (form.items.some((i) => !i.unit_id)) return ElMessage.warning('请补全物料行信息')
   saving.value = true
   try {
+    // 成品经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     const payload = {
-      product_id: form.product_id,
+      product_id: form.product_id!,
       version: form.version,
       quantity: form.quantity,
       remark: form.remark,
       status: form.status,
-      // 经上面 some 校验后物料/单位必填，此处用 as number 收窄类型（纯类型层面，运行时值不变）
+      // 物料必选由行内 rules 拦截、单位由上方 some 校验兜底，此处用 as number 收窄类型（纯类型层面，运行时值不变）
       items: form.items.map((i) => ({
         material_id: i.material_id as number,
         quantity: i.quantity,
@@ -327,22 +436,19 @@ async function remove(row: BomRow) {
 
 onMounted(async () => {
   search()
-  const [fin, mat, unit] = await Promise.all([
-    productApi.list({ page: 1, per_page: 100, type: 'finished' }),
-    productApi.list({ page: 1, per_page: 100 }),
-    unitApi.list({ page: 1, per_page: 100 }),
-  ])
-  finishedProducts.value = fin.items
-  // 物料下拉：仅原料/半成品（成品嵌套由后端 1119 兜底，前端直接过滤）
-  materialProducts.value = mat.items.filter((p) => p.type !== 'finished')
-  units.value = unit.items
+  try {
+    // 单位下拉（小主数据，维持本地装载）
+    units.value = (await unitApi.list({ page: 1, per_page: 100 })).items
+  } catch {
+    // 下拉加载失败不阻塞主流程（对齐 InboundsView 兜底；主列表由 useListQuery 独立提示）
+  }
 })
 </script>
 
 <style scoped>
 /* 页面骨架 + 明细动态行布局 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -354,6 +460,10 @@ onMounted(async () => {
 }
 .items-wrap {
   width: 100%;
+}
+/* 行内校验包裹：零化 el-form-item 默认下边距，保持动态行一行布局 */
+.items-wrap :deep(.el-form-item) {
+  margin-bottom: 0;
 }
 .item-row {
   display: flex;

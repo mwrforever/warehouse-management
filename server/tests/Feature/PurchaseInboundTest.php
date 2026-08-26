@@ -72,7 +72,7 @@ class PurchaseInboundTest extends TestCase
         $order = PurchaseOrder::create([
             'no' => 'PO'.date('Ymd').'-001', 'supplier_id' => $this->supplier->id,
             'order_date' => now()->toDateString(), 'status' => PurchaseOrder::STATUS_APPROVED,
-            'total_amount' => '100000.00', 'approved_at' => now(),
+            'total_amount' => 100000, 'approved_at' => now(),
         ]);
         $this->matItemId = $order->items()->create(['product_id' => $this->mat->id, 'quantity' => 100, 'price' => 500, 'received_qty' => 0, 'amount' => 50000])->id;
         $this->semiItemId = $order->items()->create(['product_id' => $this->semi->id, 'quantity' => 50, 'price' => 1000, 'received_qty' => 0, 'amount' => 50000])->id;
@@ -120,7 +120,7 @@ class PurchaseInboundTest extends TestCase
         $this->assertMatchesRegularExpression('/^PI\d{12}001$/', $no);
         $inbound = PurchaseInbound::where('no', $no)->first();
         $this->assertSame(PurchaseInbound::STATUS_DRAFT, $inbound->status);
-        $this->assertSame('30000.00', $inbound->total_amount);
+        $this->assertSame(30000, $inbound->total_amount);
     }
 
     public function test_store_requires_warehouse_location_with_1307(): void
@@ -162,7 +162,7 @@ class PurchaseInboundTest extends TestCase
         ]]));
         $inbound = PurchaseInbound::where('no', $no)->first();
         $this->assertNull($inbound->order_id);
-        $this->assertSame('500.00', $inbound->total_amount);
+        $this->assertSame(500, $inbound->total_amount);
     }
 
     public function test_store_rejects_empty_items_with_1301(): void
@@ -318,7 +318,7 @@ class PurchaseInboundTest extends TestCase
             ->assertJsonPath('data.items.0.product_code', 'MAT-001')
             ->assertJsonPath('data.items.0.quantity', '100.00')
             ->assertJsonPath('data.items.0.remaining_qty', '100.00')
-            ->assertJsonPath('data.items.0.price', '500.00');
+            ->assertJsonPath('data.items.0.price', 500);
     }
 
     public function test_from_order_rejects_completed_order(): void
@@ -383,7 +383,7 @@ class PurchaseInboundTest extends TestCase
             ->assertJsonPath('code', 0)
             ->assertJsonPath('data.items.0.product_code', 'MAT-001')
             ->assertJsonPath('data.items.0.quantity', '60.00')
-            ->assertJsonPath('data.items.0.amount', '30000.00')
+            ->assertJsonPath('data.items.0.amount', 30000)
             ->assertJsonPath('data.items.0.order_item_id', $this->matItemId);
     }
 
@@ -423,7 +423,7 @@ class PurchaseInboundTest extends TestCase
         // 0 行被剔除：仅 SEMI 一行，金额按过滤后行计算 = 30 件 × 1000 分单价
         $this->assertSame(1, $inbound->items()->count());
         $this->assertSame($this->semi->id, $inbound->items()->first()->product_id);
-        $this->assertSame('30000.00', $inbound->total_amount);
+        $this->assertSame(30000, $inbound->total_amount);
     }
 
     public function test_store_all_rows_zero_rejected(): void
@@ -488,7 +488,7 @@ class PurchaseInboundTest extends TestCase
         $inbound = PurchaseInbound::find($id);
         $this->assertSame(1, $inbound->items()->count());
         $this->assertSame($this->semi->id, $inbound->items()->first()->product_id);
-        $this->assertSame('20000.00', $inbound->total_amount);
+        $this->assertSame(20000, $inbound->total_amount);
     }
 
     public function test_approve_still_checks_remaining(): void

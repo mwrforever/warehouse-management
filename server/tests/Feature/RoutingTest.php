@@ -16,6 +16,7 @@ use App\Models\User;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -126,6 +127,26 @@ class RoutingTest extends TestCase
         $this->assertSame('3.00', (string) $op10->materials()->first()->qty_per_unit);
     }
 
+    public function test_routing_store_batches_material_and_edge_inserts(): void
+    {
+        // 性能契约（P1-D-1）：材料/边逐行 INSERT 改批量插入——本载荷 5 节点 7 材料 6 边，
+        // routing_node_materials 仅按节点批 5 条 INSERT、routing_edges 仅 1 条 INSERT（非逐行）
+        $materialInserts = 0;
+        $edgeInserts = 0;
+        DB::listen(function ($q) use (&$materialInserts, &$edgeInserts) {
+            if (str_starts_with($q->sql, 'insert into "routing_node_materials"')) {
+                $materialInserts++;
+            }
+            if (str_starts_with($q->sql, 'insert into "routing_edges"')) {
+                $edgeInserts++;
+            }
+        });
+        $res = $this->postRouting($this->routingPayload());
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(5, $materialInserts);
+        $this->assertSame(1, $edgeInserts);
+    }
+
     public function test_routing_graph_returns_full_dag(): void
     {
         $res = $this->postRouting($this->routingPayload());
@@ -204,6 +225,19 @@ class RoutingTest extends TestCase
         $this->withToken($this->token)->putJson("/api/v1/routings/{$id1}/toggle", ['status' => 0])->assertJsonPath('code', 0);
         $id2 = $this->postRouting($this->routingPayload(['version' => 'v2']))->json('data.id');
         $this->withToken($this->token)->putJson("/api/v1/routings/{$id2}/toggle", ['status' => 1])->assertJsonPath('code', 0);
+        $this->assertSame(1, RoutingHeader::where('product_id', $this->finished->id)->where('status', 1)->count());
+    }
+
+    public function test_routing_toggle_enable_auto_disables_other_enabled_version(): void
+    {
+        // 正常路径：v1 仍启用时直接 toggle 启用 v2 → v1 被自动停用（同成品启用唯一不变式，B-103；
+        // 上一用例先手工停 v1 再启 v2，未覆盖「启用时自动停用其他启用版本」分支）
+        $id1 = $this->postRouting($this->routingPayload())->json('data.id');
+        $id2 = $this->postRouting($this->routingPayload(['version' => 'v2', 'status' => 0]))->json('data.id');
+        $this->withToken($this->token)->putJson("/api/v1/routings/{$id2}/toggle", ['status' => 1])->assertJsonPath('code', 0);
+        $this->assertSame(0, RoutingHeader::find($id1)->status);
+        $this->assertSame(1, RoutingHeader::find($id2)->status);
+        // 不变式收口断言：同成品启用版本恒为 1
         $this->assertSame(1, RoutingHeader::where('product_id', $this->finished->id)->where('status', 1)->count());
     }
 

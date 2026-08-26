@@ -211,19 +211,19 @@ onMounted(async () => {
 <style scoped>
 /* 页面骨架：卡片容器（筛选栏样式由 ListFilterBar 提供） */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
 }
 /* 方向色：+绿 / -红（设计系统 inventory.md §3） */
 .dir-in {
-  color: #059669;
+  color: var(--a-600);
   font-weight: 700;
   font-family: 'Fira Code', monospace;
 }
 .dir-out {
-  color: #dc2626;
+  color: var(--err);
   font-weight: 700;
   font-family: 'Fira Code', monospace;
 }
@@ -231,13 +231,13 @@ onMounted(async () => {
   font-weight: 600;
 }
 .source-no {
-  color: #334155;
+  color: var(--p-700);
   font-family: 'Fira Code', monospace;
   cursor: pointer;
   text-decoration: underline;
-  text-decoration-color: #cbd5e1;
+  text-decoration-color: var(--p-300);
 }
 .source-no:hover {
-  color: #059669;
+  color: var(--a-600);
 }
 </style>

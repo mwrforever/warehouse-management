@@ -146,20 +146,31 @@ class RbacSeeder extends Seeder
         );
 
         // 内置 admin 用户（不可删除），挂 admin 角色
-        // 密码支持 ADMIN_PASSWORD 环境变量覆盖（生产部署必须设置强口令；默认值仅限本地开发/E2E）
-        $adminUser = User::firstOrCreate(
-            ['username' => 'admin'],
-            [
+        // 口令一律经 ADMIN_PASSWORD 环境变量显式注入（AGENTS.md §8.5：种子禁止通用口令兜底，D-19a）：
+        // 首次建号缺失即抛异常终止种子并提示设置方法（fail-fast，本地与生产同一要求——生产无例外路径）；
+        // 既有 admin 重跑种子时不重建，仅在显式配置且口令不一致时轮换（见下方 fail-closed 逻辑）
+        $envPassword = config('app.admin_password');
+        $adminUser = User::where('username', 'admin')->first();
+        if ($adminUser === null) {
+            if ($envPassword === null || $envPassword === '') {
+                throw new \RuntimeException(
+                    '种子终止：缺少 ADMIN_PASSWORD 环境变量，内置 admin 账号禁止使用默认口令创建。'
+                    .'请在 .env 或进程环境变量中设置强口令后重跑 db:seed（示例：ADMIN_PASSWORD=<你的强口令>）；'
+                    .'自动化测试见 phpunit.xml、E2E 见 web/playwright.config.ts 的显式注入配置'
+                );
+            }
+            // User 模型 password cast 已自动哈希
+            $adminUser = User::create([
+                'username' => 'admin',
                 'name' => '管理员',
                 'email' => 'admin@php-design.local',
-                'password' => config('app.admin_password') ?: 'admin123',
+                'password' => $envPassword,
                 'status' => 1,
-            ]
-        );
+            ]);
+        }
         // 密码轮换：仅当显式配置 ADMIN_PASSWORD 时，既有 admin 密码与配置不一致才同步更新
-        // （fail-closed：env 缺失时跳过，防止重跑种子把用户改过的强口令静默降级回公开弱口令 admin123；
+        // （fail-closed：env 缺失时跳过，防止重跑种子把用户改过的强口令静默降级；
         // 经 config 读取，config:cache 后生产环境同样生效；User 模型 password cast 已自动哈希）
-        $envPassword = config('app.admin_password');
         if ($envPassword !== null && $envPassword !== '' && ! Hash::check($envPassword, $adminUser->password)) {
             $adminUser->password = $envPassword;
             $adminUser->save();

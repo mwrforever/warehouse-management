@@ -1,5 +1,5 @@
 // Playwright E2E 配置：Chromium + 自动拉起后端（SQLite 种子库）与前端 dev server
-// 后端启动前先 migrate:fresh --seed（含 admin/admin123 超管账号），E2E 数据每次全量重建
+// 后端启动前先 migrate:fresh --seed（admin 口令经 webServer env 显式注入 ADMIN_PASSWORD），E2E 数据每次全量重建
 import { existsSync } from 'node:fs'
 import { defineConfig, devices } from '@playwright/test'
 
@@ -69,6 +69,9 @@ export default defineConfig({
       env: {
         DB_CONNECTION: 'sqlite',
         DB_DATABASE: 'database/e2e.sqlite',
+        // E2E 显式注入种子口令（D-19a：seeder 已消除 admin123 兜底，缺变量 migrate:fresh --seed 即抛异常；
+        // 与 e2e 用例硬编码的 admin 登录口令一致——显式声明而非兜底，符合 AGENTS.md §8.5）
+        ADMIN_PASSWORD: 'admin123',
       },
     },
     {

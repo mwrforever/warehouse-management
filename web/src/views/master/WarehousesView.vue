@@ -328,7 +328,7 @@ onMounted(search)
 <style scoped>
 /* 页面骨架 + 库位弹窗工具栏 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

@@ -2,22 +2,43 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   productionApi,
   type ProductionOperation,
   type ProductionOrderDetail,
-  type ProductionOrderItem,
 } from '../../api/production'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 import UserSelect from '../../components/UserSelect.vue'
+import { optionalQuantityRule, quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
-// 生产中工单下拉（label 单号+成品）
-const orders = ref<ProductionOrderItem[]>([])
+
+// 工单下拉选项（BF-3 remote）：label 单号+成品；仅 status=2 生产中工单可报工
+interface OrderOption {
+  id: number
+  no: string
+  product_name: string
+}
+
+// 工单下拉（BF-3）：生产中工单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: orders,
+  loading: ordersLoading,
+  load: loadOrders,
+  search: searchOrders,
+  pin: pinOrder,
+} = useRemoteOptions<OrderOption>({
+  fetch: (kw) =>
+    productionApi.orders({ status: 2, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
 const selectedOrder = ref<number | null>(null)
 const detail = ref<ProductionOrderDetail | null>(null)
 const operations = ref<ProductionOperation[]>([])
@@ -28,6 +49,15 @@ const reportForm = reactive({
   operator: '',
   remark: '',
 })
+// 报工卡片表单引用：提交前统一触发 el-form 校验（D-17）
+const reportFormRef = ref<FormInstance>()
+// 表单校验规则（D-17）：合格数必填且 ≥ 0（0 合格合法，如首工序报 0）；不良数/工时可选，
+// 填写时须 ≥ 0 且最多 2 位小数。「合格数 ≤ 工单计划数」为业务上限校验，保持在 on-blur 与提交侧手工
+const reportRules: FormRules = {
+  qualified_qty: [quantityRule(true, '合格数不能为负数')],
+  defective_qty: [optionalQuantityRule('不良数不能为负数')],
+  hours: [optionalQuantityRule('工时不能为负数')],
+}
 
 // 当前进行中工序（无进行中 = 全部已完成）
 const currentOp = computed(() => operations.value.find((o) => o.status === 1) ?? null)
@@ -46,9 +76,16 @@ function stepStatus(status: number) {
   return 'wait'
 }
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：快速切换工单 A→B 时，
+// A 的慢 detail 后到必须丢弃——否则步骤条/报工卡片被拉回 A 的工序，用户以为在给 B 报工，
+// 提交却取 currentOp（A 的工序），产量报错工序且无感知
+let loadSeq = 0
+
 // 加载工序（选单/报工成功后调用，步骤条随工序状态自动推进）
 async function loadOperations() {
   const orderId = selectedOrder.value
+  // 入口捕获会话序号：清空选择同样视为新会话，作废在途的旧工单请求
+  const seq = ++loadSeq
   if (!orderId) {
     // 清除工单选择：重置详情/工序/报工表单——防止旧工单残留数据被误提交（bug #3 回归）。
     // 操作人保留预填的当前登录用户（非工单相关字段，随工单切换不应被清空）
@@ -64,8 +101,13 @@ async function loadOperations() {
   }
   loading.value = true
   try {
-    detail.value = await productionApi.orderDetail(orderId)
-    operations.value = detail.value.operations
+    const d = await productionApi.orderDetail(orderId)
+    // 迟到守卫：旧工单的慢响应丢弃，防覆盖新工单已回填的工序状态（所见非所选）
+    if (seq !== loadSeq) return
+    detail.value = d
+    operations.value = d.operations
+    // 工单回显 pin：详情携带单号/成品名，工单可能不在下拉前 100 条内（含路由直达场景），不 pin 则下拉只显示裸 id
+    pinOrder({ id: d.id, no: d.no, product_name: d.product_name })
     // 切换工单后重置报工表单（新工序从零报工）；操作人保留预填的当前登录用户，不被切换清空
     Object.assign(reportForm, {
       qualified_qty: null,
@@ -74,9 +116,12 @@ async function loadOperations() {
       remark: '',
     })
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧工单的报错会打扰当前选择
+    if (seq !== loadSeq) return
     ElMessage.error((e as Error).message)
   } finally {
-    loading.value = false
+    // 只有当前会话才能复位 loading，防旧会话提前关掉新会话的加载态
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -103,20 +148,22 @@ function validateHours() {
   }
 }
 
-// 提交报工：校验链（已选工单且有进行中工序 → 合格数必填且 ≤ 计划数 → 工时 ≥0）→ report → 成功提示 → 重新加载工序（步骤条推进）
+// 提交报工：校验链（已选工单且有进行中工序 → el-form rules 前置格式校验 → 合格数 ≤ 计划数业务上限）→ report → 成功提示 → 重新加载工序（步骤条推进）
 async function submitReport() {
-  // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）
-  if (!selectedOrder.value || !detail.value || !currentOp.value) return
-  if (reportForm.qualified_qty == null || Number(reportForm.qualified_qty) < 0) {
-    ElMessage.warning('请填写合格的合格数')
+  // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）；
+  // 详情 id 与选中工单不一致（切换在途窗口）同样拒绝——防产量报进旧工单的工序（BF-2）
+  if (
+    !selectedOrder.value ||
+    !detail.value ||
+    detail.value.id !== selectedOrder.value ||
+    !currentOp.value
+  )
     return
-  }
+  // 提交前统一 el-form 校验（D-17）：合格数必填/范围精度 + 不良数/工时格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await reportFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (Number(reportForm.qualified_qty) > orderQuantity.value) {
     ElMessage.warning('合格数不能超过工单计划数量')
-    return
-  }
-  if (reportForm.hours != null && Number(reportForm.hours) < 0) {
-    ElMessage.warning('工时不能为负数')
     return
   }
   saving.value = true
@@ -148,12 +195,8 @@ async function submitReport() {
 onMounted(async () => {
   // 操作人默认预填当前登录用户（spec §4.3 应用点，可改选）
   reportForm.operator = auth.user?.name ?? ''
-  try {
-    // 仅生产中工单可报工（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  }
+  // 工单下拉初载（BF-3 remote 模式保留前 100 条）：失败由 onError 提示，不阻塞路由直达预填
+  void loadOrders()
   // 路由直达：工单列表「报 工」跳转携带 order_id
   const orderId = Number(route.query.order_id)
   if (orderId) {
@@ -168,8 +211,11 @@ onMounted(async () => {
       <span class="page-title">工序报工</span>
       <el-select
         v-model="selectedOrder"
-        placeholder="选择工单"
+        placeholder="输入单号搜索生产中工单"
         filterable
+        remote
+        :remote-method="searchOrders"
+        :loading="ordersLoading"
         clearable
         style="width: 340px"
         @change="loadOperations"
@@ -203,8 +249,14 @@ onMounted(async () => {
         当前工序：{{ currentOp.process_name }}（已报合格 {{ Number(currentOp.qualified_qty) }} /
         计划 {{ orderQuantity }}）
       </div>
-      <el-form :model="reportForm" label-width="90px" class="form-grid">
-        <el-form-item label="合格数" required>
+      <el-form
+        ref="reportFormRef"
+        :model="reportForm"
+        :rules="reportRules"
+        label-width="90px"
+        class="form-grid"
+      >
+        <el-form-item label="合格数" prop="qualified_qty" required>
           <el-input-number
             v-model="reportForm.qualified_qty"
             :min="0"
@@ -215,7 +267,7 @@ onMounted(async () => {
             @blur="validateQualified"
           />
         </el-form-item>
-        <el-form-item label="不良数">
+        <el-form-item label="不良数" prop="defective_qty">
           <el-input-number
             v-model="reportForm.defective_qty"
             :min="0"
@@ -225,7 +277,7 @@ onMounted(async () => {
           />
           <div class="hint">不良数仅记录与统计，返修/报废流程后续版本提供</div>
         </el-form-item>
-        <el-form-item label="工时">
+        <el-form-item label="工时" prop="hours">
           <el-input-number
             v-model="reportForm.hours"
             :min="0"
@@ -261,7 +313,7 @@ onMounted(async () => {
 <style scoped>
 /* 工序报工页样式（nexus-factory）：步骤条三态联动 + 报工卡片表单，见 pages/production.md §3 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -282,7 +334,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -319,7 +371,7 @@ onMounted(async () => {
 /* 不良数旁注：返修/报废后续版本提供 */
 .hint {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--p-400);
   margin-top: 4px;
   line-height: 1.5;
 }

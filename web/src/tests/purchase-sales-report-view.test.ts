@@ -24,15 +24,15 @@ describe('PurchaseSalesReportView', () => {
       items: [
         {
           period: '2026-08-10',
-          purchase_amount: '123.45',
-          sales_amount: '50.00',
+          purchase_amount: 12345,
+          sales_amount: 5000,
           purchase_qty: '10.00',
           sales_qty: '4.00',
         },
       ],
       totals: {
-        purchase_amount: '123.45',
-        sales_amount: '50.00',
+        purchase_amount: 12345,
+        sales_amount: 5000,
         purchase_qty: '10.00',
         sales_qty: '4.00',
       },
@@ -41,7 +41,7 @@ describe('PurchaseSalesReportView', () => {
   })
 
   it('渲染 KPI 与差额（销售-采购为负时红色样式）', async () => {
-    // 正常路径：差额 = 50.00 - 123.45 = -73.45（负数加 negative 类）
+    // 正常路径：金额整数分（R2 契约），差额 = 5000 - 12345 = -7345 分 → 展示 -73.45（负数加 negative 类）
     const wrapper = mount(PurchaseSalesReportView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     // 收窄断言到 KPI 卡（避免与表格单元格数值混淆）
@@ -57,14 +57,14 @@ describe('PurchaseSalesReportView', () => {
     // 边界路径：items 空 → KPI 显示 0.00、el-empty「暂无数据」、不渲染图表
     purchaseSales.mockResolvedValue({
       items: [],
-      totals: { purchase_amount: '0', sales_amount: '0', purchase_qty: '0', sales_qty: '0' },
+      totals: { purchase_amount: 0, sales_amount: 0, purchase_qty: '0', sales_qty: '0' },
       truncated: false,
     })
     const wrapper = mount(PurchaseSalesReportView, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(wrapper.text()).toContain('暂无数据')
     expect(wrapper.find('.mock-chart').exists()).toBeFalsy()
-    // 空态三要素之「KPI 显示 0」：采购金额卡 formatThousand('0') 恒为 '0.00'
+    // 空态三要素之「KPI 显示 0」：采购金额卡 formatYuan(0) 恒为 '0.00'（分转元展示）
     expect(wrapper.findAll('.kpi-card').at(0)!.text()).toContain('0.00')
   })
 
@@ -81,7 +81,7 @@ describe('PurchaseSalesReportView', () => {
       )
       .mockResolvedValueOnce({
         items: [],
-        totals: { purchase_amount: '222.22', sales_amount: '0', purchase_qty: '0', sales_qty: '0' },
+        totals: { purchase_amount: 22222, sales_amount: 0, purchase_qty: '0', sales_qty: '0' },
         truncated: false,
       })
     const wrapper = mount(PurchaseSalesReportView, { global: { plugins: [ElementPlus] } })
@@ -93,7 +93,7 @@ describe('PurchaseSalesReportView', () => {
     // 旧响应此时才返回：必须被丢弃
     resolveFirst({
       items: [],
-      totals: { purchase_amount: '999.99', sales_amount: '0', purchase_qty: '0', sales_qty: '0' },
+      totals: { purchase_amount: 99999, sales_amount: 0, purchase_qty: '0', sales_qty: '0' },
       truncated: false,
     })
     await flushPromises()

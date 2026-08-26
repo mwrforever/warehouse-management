@@ -10,19 +10,17 @@
 // 节点选中策略（TC-RTG-01 实测）：工具栏「添加节点」自动选中新节点 → 面板直接配置；
 //   画布卡片点选为主、面板「节点」下拉兜底（配置过程零选择开销，E2E 不依赖卡片点击定位）
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 production.spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 production.spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }

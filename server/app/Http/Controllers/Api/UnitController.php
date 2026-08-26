@@ -1,18 +1,21 @@
 <?php
 
-// 计量单位控制器：CRUD + 编码唯一 + 被商品引用保护
+// 计量单位控制器：分页列表 读取 + CRUD 薄壳（写流程全部下沉 UnitService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Product;
+use App\Http\Requests\Master\SaveUnitRequest;
 use App\Models\Unit;
+use App\Services\UnitService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 
 class UnitController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(private UnitService $unitService) {}
 
     /** 分页列表（per_page 钳制 1-100） */
     public function index(Request $request)
@@ -31,33 +34,16 @@ class UnitController extends Controller
     }
 
     /** 新建单位：编码重复 1103 */
-    public function store(Request $request)
+    public function store(SaveUnitRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:20',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Unit::where('code', $data['code'])->exists()) {
-            return $this->fail(1103, '单位编码已存在');
-        }
-        $unit = Unit::create(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? 1]);
-
-        return $this->ok(['id' => $unit->id]);
+        // 写流程下沉 UnitService（编码唯一 1103、被商品引用保护 1104 由其抛出）
+        return $this->ok(['id' => $this->unitService->create($request->validated())->id]);
     }
 
     /** 更新单位：编码唯一（排除自身） */
-    public function update(Request $request, Unit $unit)
+    public function update(SaveUnitRequest $request, Unit $unit)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:20',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Unit::where('code', $data['code'])->where('id', '!=', $unit->id)->exists()) {
-            return $this->fail(1103, '单位编码已存在');
-        }
-        $unit->update(['name' => $data['name'], 'code' => $data['code'], 'status' => $data['status'] ?? $unit->status]);
+        $this->unitService->update($unit, $request->validated());
 
         return $this->ok();
     }
@@ -65,10 +51,7 @@ class UnitController extends Controller
     /** 删除单位：被商品引用 1104 */
     public function destroy(Unit $unit)
     {
-        if (Product::where('unit_id', $unit->id)->exists()) {
-            return $this->fail(1104, '单位已被商品使用，不可删除');
-        }
-        $unit->delete();
+        $this->unitService->delete($unit);
 
         return $this->ok();
     }

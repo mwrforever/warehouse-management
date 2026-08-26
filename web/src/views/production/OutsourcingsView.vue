@@ -4,7 +4,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import {
   productionApi,
   type OutsourcingItem,
@@ -12,23 +18,44 @@ import {
   type OutsourcingReceiptRecord,
   type OutsourcingReturnRecord,
   type ProductionOperation,
-  type ProductionOrderItem,
 } from '../../api/production'
 import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 import { formatThousand } from '../../utils/format'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
 const saving = ref(false)
-// 生产中工单下拉（label 单号+成品，仅 status=2 可委外）
-const orders = ref<ProductionOrderItem[]>([])
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
+
+// 工单下拉选项（BF-3 remote）：label 单号+成品；仅 status=2 生产中工单可委外
+interface OrderOption {
+  id: number
+  no: string
+  product_name: string
+}
+
+// 工单下拉（BF-3）：生产中工单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: orders,
+  loading: ordersLoading,
+  load: loadOrders,
+  search: searchOrders,
+  pin: pinOrder,
+  reset: resetOrders,
+} = useRemoteOptions<OrderOption>({
+  fetch: (kw) =>
+    productionApi.orders({ status: 2, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
 // 当前工单的委外工序（仅 is_outsourced=1 且未完成的节点可选，label 含节点号与产出）
 const processOptions = ref<ProductionOperation[]>([])
 // 选中工序的节点预填（组件清单/回收品/剩余可委外量）
@@ -58,6 +85,12 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
   onError: (e) => ElMessage.error(e.message),
 })
 
+// 工序网络「打开委外页」跳转携带 ?keyword=单号：setup 期预填筛选实现按单号定位（BF-1）。
+// 必须在挂载前赋值——ListFilterBar 以 props.keyword 为内部防抖源初始值，挂载后再赋值会触发
+// 其 300ms 防抖链回发一次重复查询；onMounted 的 search() 即携带单号出参。重置仍回空串（defaultQuery）
+const routeKeyword = route.query.keyword
+if (routeKeyword) query.keyword = String(routeKeyword)
+
 // 新建/编辑弹窗状态
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null) // 当前编辑草稿 id（null 表示新建）
@@ -69,7 +102,25 @@ const form = reactive({
   location_id: undefined as number | undefined,
   quantity: undefined as number | undefined,
   remark: '',
+  // 组件行纳入表单单模型（rows 承接 itemRows 引用，经 reactive 自动解包）：
+  // 行内校验 prop 路径 rows.${index}.required_qty 需从 :model 解析取值（element-plus getProp），
+  // 行数据仍唯一存于 itemRows，模板表格仍绑定 itemRows
+  rows: itemRows,
 })
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+// 表单校验规则（D-17）：表头必填（工单/委外工序/供应商/仓库/库位）由 rules 承载；
+// 数量须 > 0；「委外数量 ≤ 节点剩余计划量」「至少一个发料组件」为业务校验保持在保存侧手工
+const dialogRules: FormRules = {
+  order_id: [{ required: true, message: '请选择工单', trigger: 'change' }],
+  operation_id: [{ required: true, message: '请选择委外工序', trigger: 'change' }],
+  supplier_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  quantity: [quantityRule(false, '委外数量必须大于 0')],
+  warehouse_id: [{ required: true, message: '请选择仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择库位', trigger: 'change' }],
+}
+// 组件应发行校验：允许 0（0 行保存时过滤，空组件行不随单提交），负值/超精度在 validate 阶段拦截
+const itemQtyRules: FormItemRule[] = [quantityRule(true, '应发数量不能小于 0')]
 
 // 回收弹窗状态（剩余可回收 = 委外量 - 已回收累计；入库仓库/库位独立选择；回收品只读）
 const receiptVisible = ref(false)
@@ -83,6 +134,14 @@ const receiptForm = reactive({
   location_id: undefined as number | undefined,
   remark: '',
 })
+// 回收弹窗表单引用与规则（D-17）：数量格式层/必填由 rules 承载，
+// 「≤ 剩余可回收」业务上限保持在保存侧手工校验
+const receiptFormRef = ref<FormInstance>()
+const receiptRules: FormRules = {
+  quantity: [quantityRule(false, '回收数量必须大于 0')],
+  warehouse_id: [{ required: true, message: '请选择入库仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择入库库位', trigger: 'change' }],
+}
 
 // 余料退回弹窗状态（明细行可退 = 组件已发 − 已退；入库仓库/库位独立选择）
 const returnVisible = ref(false)
@@ -102,7 +161,19 @@ const returnForm = reactive({
   warehouse_id: undefined as number | undefined,
   location_id: undefined as number | undefined,
   remark: '',
+  // 退回行纳入表单单模型（rows 承接 returnRows 引用，见 form.rows 注释）：
+  // 行内校验 prop 路径 rows.${index}.return_qty 需从 :model 解析取值
+  rows: returnRows,
 })
+// 退回弹窗表单引用与规则（D-17）：入库仓库/库位必填 + 退回行数量格式层由 rules 承载，
+// 「≥1 行退回量>0」「逐行 ≤ 已发未退」业务校验保持在保存侧手工
+const returnFormRef = ref<FormInstance>()
+const returnRules: FormRules = {
+  warehouse_id: [{ required: true, message: '请选择入库仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择入库库位', trigger: 'change' }],
+}
+// 退回行数量校验：允许 0（0 = 该行不退回，保存时过滤），负值/超精度在 validate 阶段拦截
+const returnQtyRules: FormItemRule[] = [quantityRule(true, '退回数量不能小于 0')]
 
 // 回收/退回记录弹窗状态（共用容器，标题区分）
 const recordsVisible = ref(false)
@@ -122,8 +193,21 @@ function statusTagType(status: number) {
 // 快速切换工序/关窗重开时旧会话的慢响应必须丢弃（防 A 的迟到响应覆盖 B 已回填的编辑态）
 let sessionSeq = 0
 
-// 关窗即作废在途：主弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+// 关窗即作废在途：任一弹窗关闭后迟到的预填/详情/流水响应禁止回写与重开弹窗
+//（弹窗已关，回写无意义且污染重开时的 reset）
+// 新建/编辑弹窗开关同时是工单下拉的 remote 会话边界（BF-3）：打开初载前 100 条，关闭清空选项与 pin 集
 watch(dialogVisible, (open) => {
+  if (!open) sessionSeq++
+  if (open) {
+    loadOrders()
+  } else {
+    resetOrders()
+  }
+})
+watch(returnVisible, (open) => {
+  if (!open) sessionSeq++
+})
+watch(recordsVisible, (open) => {
   if (!open) sessionSeq++
 })
 
@@ -138,6 +222,8 @@ async function onOrderChange(orderId: number | undefined, session: number = ++se
     const d = await productionApi.orderDetail(orderId)
     // 迟到守卫：会话已作废（工序切换/关窗重开）时丢弃过期下拉回写
     if (session !== sessionSeq) return
+    // 工单回显 pin：详情携带单号/成品名，工单可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id
+    pinOrder({ id: d.id, no: d.no, product_name: d.product_name })
     // 委外对象=工艺路线节点：仅 is_outsourced=1 且未完成（status 2 已完成）的节点可委外（spec 5 §4 规则定义）
     processOptions.value = d.operations.filter((op) => op.is_outsourced === 1 && op.status !== 2)
   } catch (e) {
@@ -280,24 +366,12 @@ async function openEdit(row: OutsourcingItem) {
   }
 }
 
-// 保存：校验链（工单 → 工序 → 供应商 → 数量>0 且 ≤ 节点剩余 → 组件行 ≥1 → 仓库/库位）→ 新建/更新
+// 保存：校验链（el-form rules 前置：工单/工序/供应商/数量格式/仓库库位必填 →
+// 数量 ≤ 节点剩余计划量 → 组件行重算兜底 → 过滤 0 行后至少一个发料组件）→ 新建/更新
 async function save() {
-  if (!form.order_id) {
-    ElMessage.warning('请选择工单')
-    return
-  }
-  if (!form.operation_id) {
-    ElMessage.warning('请选择委外工序')
-    return
-  }
-  if (!form.supplier_id) {
-    ElMessage.warning('请选择供应商')
-    return
-  }
-  if (form.quantity == null || Number(form.quantity) <= 0) {
-    ElMessage.warning('委外数量必须大于 0')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：表头必填 + 数量范围精度 + 组件应发行格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (Number(form.quantity) > remainingQty.value) {
     ElMessage.warning('委外数量超过节点剩余计划量')
     return
@@ -310,7 +384,7 @@ async function save() {
   ) {
     recomputeRows()
   }
-  // 过滤 0 行：空组件行不随单提交（后端 min:1 由非空行满足）
+  // 过滤 0 行：空组件行不随单提交（后端 min:1 由非空行满足；行内 rules 已允许 0 并拦截负数）
   const items = itemRows.value
     .filter((r) => Number(r.required_qty) > 0)
     .map((r) => ({
@@ -322,16 +396,13 @@ async function save() {
     ElMessage.warning('至少需要一个发料组件')
     return
   }
-  if (!form.warehouse_id || !form.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
-    return
-  }
+  // 表头各 id 经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
   const payload = {
-    order_id: form.order_id,
-    operation_id: form.operation_id,
-    supplier_id: form.supplier_id,
-    warehouse_id: form.warehouse_id,
-    location_id: form.location_id,
+    order_id: form.order_id!,
+    operation_id: form.operation_id!,
+    supplier_id: form.supplier_id!,
+    warehouse_id: form.warehouse_id!,
+    location_id: form.location_id!,
     quantity: Number(form.quantity),
     items,
     remark: form.remark,
@@ -392,24 +463,22 @@ async function approveRow(row: OutsourcingItem) {
   }
 }
 
-// 回收弹窗打开：取已回收累计与回收品，剩余可回收 = 委外量 - 已回收，默认全量回收
-async function openReceipt(row: OutsourcingItem) {
-  try {
-    const d = await productionApi.outsourcingDetail(row.id)
-    receiptId.value = row.id
-    receiptRemaining.value = round2(Number(d.quantity) - Number(d.received_qty))
-    receiptOutput.value = d.output_product_name ?? '—'
-    Object.assign(receiptForm, {
-      quantity: receiptRemaining.value,
-      warehouse_id: undefined,
-      location_id: undefined,
-      remark: '',
-    })
-    receiptLocations.value = []
-    receiptVisible.value = true
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  }
+// 回收弹窗打开：直接消费列表行字段（数量/已回收/回收品三字段 index 均返回），省一次委外详情请求
+//（详情是委外域最重读路径：4 组关系预载 + SUM）。列表行滞后仅致预填偏大，提交有后端 1524 超收校验兜底；
+// 剩余可回收 = 委外量 - 已回收，默认全量回收
+function openReceipt(row: OutsourcingItem) {
+  receiptId.value = row.id
+  // received_qty 类型可选（历史行兜底 0），output_product_name 无路线历史单为空显示 —
+  receiptRemaining.value = round2(Number(row.quantity) - Number(row.received_qty ?? 0))
+  receiptOutput.value = row.output_product_name ?? '—'
+  Object.assign(receiptForm, {
+    quantity: receiptRemaining.value,
+    warehouse_id: undefined,
+    location_id: undefined,
+    remark: '',
+  })
+  receiptLocations.value = []
+  receiptVisible.value = true
 }
 
 // 回收入库仓库切换 → 联动库位下拉（与发出仓库独立选择）
@@ -433,27 +502,24 @@ function validateReceiptQty() {
   }
 }
 
-// 提交回收：校验链（数量>0 且 ≤ 剩余 → 入库仓库/库位）→ 创建即审核回收单 → 状态转已回收
+// 提交回收：校验链（el-form rules 前置：数量格式/入库仓库库位必填 → 数量 ≤ 剩余可回收，
+// 业务上限保持手工）→ 创建即审核回收单 → 状态转已回收
 async function submitReceipt() {
   if (!receiptId.value) return
-  if (receiptForm.quantity == null || Number(receiptForm.quantity) <= 0) {
-    ElMessage.warning('回收数量必须大于 0')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：回收数量必填/范围精度 + 入库仓库库位必填在前端拦截
+  const valid = await receiptFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (Number(receiptForm.quantity) > receiptRemaining.value) {
     ElMessage.warning('回收数量超过委外数量')
     return
   }
-  if (!receiptForm.warehouse_id || !receiptForm.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
-    return
-  }
   saving.value = true
   try {
+    // 数量/仓库/库位经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     await productionApi.receiptOutsourcing(receiptId.value, {
-      quantity: receiptForm.quantity,
-      warehouse_id: receiptForm.warehouse_id,
-      location_id: receiptForm.location_id,
+      quantity: receiptForm.quantity!,
+      warehouse_id: receiptForm.warehouse_id!,
+      location_id: receiptForm.location_id!,
       remark: receiptForm.remark,
     })
     ElMessage.success('回收成功')
@@ -467,9 +533,13 @@ async function submitReceipt() {
 }
 
 // 退回余料弹窗打开：详情组件行 → 可退 = 已发 − 已退（已退满的行不展示）
+// 会话序号守卫（BF-2）：快速连点两行退回/关窗重开时旧单慢详情必须丢弃——
+// 防 A 的迟到明细覆盖 B 单语境，用户在「B 单语境」弹窗里提交实际退回 A 单
 async function openReturn(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.outsourcingDetail(row.id)
+    if (session !== sessionSeq) return
     if (!d.items?.length) {
       ElMessage.warning('该委外单无发料组件，不可退回')
       return
@@ -494,6 +564,8 @@ async function openReturn(row: OutsourcingItem) {
     returnLocations.value = []
     returnVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前操作
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -520,9 +592,13 @@ async function onReturnWarehouseChange(whId: number | undefined) {
   }
 }
 
-// 提交退回：校验链（至少一行退回量>0 → 逐行 ≤ 可退 → 入库仓库/库位）→ 创建即审核退回单 → 刷新
+// 提交退回：校验链（el-form rules 前置：退回行数量格式/入库仓库库位必填 →
+// 至少一行退回量>0 → 逐行 ≤ 已发未退，业务校验保持手工）→ 创建即审核退回单 → 刷新
 async function submitReturn() {
   if (!returnId.value) return
+  // 提交前统一 el-form 校验（D-17）：入库仓库库位必填 + 退回行数量格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await returnFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   const lines = returnRows.value
     .filter((r) => Number(r.return_qty) > 0)
     .map((r) => ({ item_id: r.item_id, quantity: round2(Number(r.return_qty)) }))
@@ -539,16 +615,13 @@ async function submitReturn() {
     ElMessage.warning('退回数量超过已发未退数量')
     return
   }
-  if (!returnForm.warehouse_id || !returnForm.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
-    return
-  }
   saving.value = true
   try {
+    // 仓库/库位经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     await productionApi.createOutsourcingReturn(returnId.value, {
       items: lines,
-      warehouse_id: returnForm.warehouse_id,
-      location_id: returnForm.location_id,
+      warehouse_id: returnForm.warehouse_id!,
+      location_id: returnForm.location_id!,
       remark: returnForm.remark,
     })
     ElMessage.success('退回成功')
@@ -562,24 +635,32 @@ async function submitReturn() {
   }
 }
 
-// 回收记录弹窗：按委外单加载回收流水
+// 回收记录弹窗：按委外单加载回收流水（会话序号守卫 BF-2：快速连点两行时旧单慢流水丢弃）
 async function openReceipts(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
+    const d = await productionApi.outsourcingReceipts(row.id)
+    if (session !== sessionSeq) return
     recordsTitle.value = '回收记录'
-    receiptRecords.value = (await productionApi.outsourcingReceipts(row.id)).items
+    receiptRecords.value = d.items
     recordsVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
 
-// 退回记录弹窗：按委外单加载退回流水
+// 退回记录弹窗：按委外单加载退回流水（会话序号守卫同上）
 async function openReturns(row: OutsourcingItem) {
+  const session = ++sessionSeq
   try {
+    const d = await productionApi.outsourcingReturns(row.id)
+    if (session !== sessionSeq) return
     recordsTitle.value = '退回记录'
-    returnRecords.value = (await productionApi.outsourcingReturns(row.id)).items
+    returnRecords.value = d.items
     recordsVisible.value = true
   } catch (e) {
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -589,8 +670,6 @@ onMounted(async () => {
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
     suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
-    // 仅生产中工单可委外（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -644,13 +723,9 @@ onMounted(async () => {
         <template #default="{ row }">{{ row.output_product_name ?? '—' }}</template>
       </el-table-column>
       <el-table-column prop="supplier_name" label="供应商" min-width="140" />
-      <el-table-column
-        prop="quantity"
-        label="数量"
-        align="right"
-        width="100"
-        class-name="font-code"
-      />
+      <el-table-column label="数量" align="right" width="100" class-name="font-code">
+        <template #default="{ row }">{{ formatThousand(row.quantity) }}</template>
+      </el-table-column>
       <el-table-column label="已回收" align="right" width="100" class-name="font-code">
         <template #default="{ row }">{{ formatThousand(row.received_qty ?? 0) }}</template>
       </el-table-column>
@@ -719,13 +794,16 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="dialogRules" label-width="90px">
         <div class="form-grid">
-          <el-form-item label="工单" required>
+          <el-form-item label="工单" prop="order_id" required>
             <el-select
               v-model="form.order_id"
-              placeholder="选择生产中工单"
+              placeholder="输入单号搜索生产中工单"
               filterable
+              remote
+              :remote-method="searchOrders"
+              :loading="ordersLoading"
               style="width: 100%"
               @change="onOrderChange"
             >
@@ -737,7 +815,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="委外工序" required>
+          <el-form-item label="委外工序" prop="operation_id" required>
             <el-select
               v-model="form.operation_id"
               placeholder="选择工序"
@@ -753,7 +831,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="供应商" required>
+          <el-form-item label="供应商" prop="supplier_id" required>
             <el-select
               v-model="form.supplier_id"
               placeholder="选择供应商"
@@ -768,7 +846,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="数量" required>
+          <el-form-item label="数量" prop="quantity" required>
             <el-input-number
               v-model="form.quantity"
               :min="0"
@@ -780,7 +858,7 @@ onMounted(async () => {
               @change="validateQuantity"
             />
           </el-form-item>
-          <el-form-item label="仓库" required>
+          <el-form-item label="仓库" prop="warehouse_id" required>
             <el-select
               v-model="form.warehouse_id"
               placeholder="选择仓库"
@@ -790,7 +868,7 @@ onMounted(async () => {
               <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="库位" required>
+          <el-form-item label="库位" prop="location_id" required>
             <el-select
               v-model="form.location_id"
               placeholder="选择库位"
@@ -821,17 +899,23 @@ onMounted(async () => {
               >
             </el-table-column>
             <el-table-column label="应发数量" width="160">
-              <template #default="{ row }">
-                <el-input-number
-                  v-model="row.required_qty"
-                  :min="0"
-                  :precision="2"
-                  :controls="false"
-                  placeholder="应发数量"
-                  size="small"
-                  @blur="validateItemQty(row)"
-                  @change="validateItemQty(row)"
-                />
+              <template #default="{ row, $index }">
+                <el-form-item
+                  :prop="`rows.${$index}.required_qty`"
+                  :rules="itemQtyRules"
+                  label-width="0"
+                >
+                  <el-input-number
+                    v-model="row.required_qty"
+                    :min="0"
+                    :precision="2"
+                    :controls="false"
+                    placeholder="应发数量"
+                    size="small"
+                    @blur="validateItemQty(row)"
+                    @change="validateItemQty(row)"
+                  />
+                </el-form-item>
               </template>
             </el-table-column>
             <el-table-column prop="unit_name" label="单位" width="80" />
@@ -854,14 +938,14 @@ onMounted(async () => {
       width="560px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="90px">
+      <el-form ref="receiptFormRef" :model="receiptForm" :rules="receiptRules" label-width="90px">
         <el-form-item label="回收品">
           <span class="receipt-product">{{ receiptOutput }}</span>
         </el-form-item>
         <el-form-item label="剩余可回收">
           <span class="remain-cell">{{ formatThousand(receiptRemaining) }}</span>
         </el-form-item>
-        <el-form-item label="回收数量" required>
+        <el-form-item label="回收数量" prop="quantity" required>
           <el-input-number
             v-model="receiptForm.quantity"
             :min="0"
@@ -872,7 +956,7 @@ onMounted(async () => {
             @blur="validateReceiptQty"
           />
         </el-form-item>
-        <el-form-item label="入库仓库" required>
+        <el-form-item label="入库仓库" prop="warehouse_id" required>
           <el-select
             v-model="receiptForm.warehouse_id"
             placeholder="选择仓库"
@@ -882,7 +966,7 @@ onMounted(async () => {
             <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="入库库位" required>
+        <el-form-item label="入库库位" prop="location_id" required>
           <el-select
             v-model="receiptForm.location_id"
             placeholder="选择库位"
@@ -906,7 +990,7 @@ onMounted(async () => {
 
     <!-- 余料退回弹窗：组件明细（已发/已退/可退）+ 退回量（≤ 可退）+ 入库仓库/库位（独立选择） -->
     <el-dialog v-model="returnVisible" title="余料退回" width="720px" :close-on-click-modal="false">
-      <el-form label-width="90px">
+      <el-form ref="returnFormRef" :model="returnForm" :rules="returnRules" label-width="90px">
         <el-table :data="returnRows" size="small" class="data-table">
           <el-table-column prop="material_name" label="物料" min-width="140" />
           <el-table-column label="已发" align="right" width="90" class-name="font-code">
@@ -919,20 +1003,26 @@ onMounted(async () => {
             <template #default="{ row }">{{ formatThousand(row.remaining) }}</template>
           </el-table-column>
           <el-table-column label="退回量" width="150">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.return_qty"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                size="small"
-                @blur="validateReturnQty(row)"
-                @change="validateReturnQty(row)"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item
+                :prop="`rows.${$index}.return_qty`"
+                :rules="returnQtyRules"
+                label-width="0"
+              >
+                <el-input-number
+                  v-model="row.return_qty"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  size="small"
+                  @blur="validateReturnQty(row)"
+                  @change="validateReturnQty(row)"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
         </el-table>
-        <el-form-item label="入库仓库" required>
+        <el-form-item label="入库仓库" prop="warehouse_id" required>
           <el-select
             v-model="returnForm.warehouse_id"
             placeholder="选择仓库"
@@ -942,7 +1032,7 @@ onMounted(async () => {
             <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="入库库位" required>
+        <el-form-item label="入库库位" prop="location_id" required>
           <el-select
             v-model="returnForm.location_id"
             placeholder="选择库位"
@@ -1011,7 +1101,7 @@ onMounted(async () => {
 <style scoped>
 /* 委外加工页样式（nexus-factory）：骨架与其他生产页面一致；生产特有样式见 pages/production.md §6 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -1019,7 +1109,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;

@@ -25,6 +25,11 @@ use Illuminate\Support\Carbon;
  */
 class Category extends Model
 {
+    /** 分类状态：0停用 1启用 */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['name', 'parent_id', 'sort', 'status'];
 
     protected function casts(): array

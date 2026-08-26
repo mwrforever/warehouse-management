@@ -85,11 +85,13 @@ const form = reactive<ProcessForm>({
   status: 1,
 })
 
-// 加载全量列表（后端已按 sort 升序）
+// 加载全量列表（后端已按 sort 升序）；失败弹错避免首屏静默空白（对齐 AlertsView 显式 catch 先例）
 async function load() {
   loading.value = true
   try {
     rows.value = (await processApi.list()).items
+  } catch (e) {
+    ElMessage.error((e as Error).message)
   } finally {
     loading.value = false
   }
@@ -164,7 +166,7 @@ onMounted(load)
 <style scoped>
 /* 页面骨架同上 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

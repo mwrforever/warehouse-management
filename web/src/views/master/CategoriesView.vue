@@ -93,9 +93,13 @@ function hasChildren(node: CategoryItem) {
   return !!node.children?.length
 }
 
-// 加载树
+// 加载树：失败弹错避免首屏静默空白（对齐 AlertsView 显式 catch 先例）
 async function load() {
-  tree.value = await categoryApi.tree()
+  try {
+    tree.value = await categoryApi.tree()
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
 }
 
 // 新建（默认顶级）
@@ -167,7 +171,7 @@ onMounted(load)
 <style scoped>
 /* 树节点行内操作：hover 显示，点击不冒泡到节点选中 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

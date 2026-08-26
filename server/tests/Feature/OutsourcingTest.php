@@ -24,6 +24,7 @@ use App\Models\WorkOrderOperation;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Feature\Concerns\DagOrderFactory;
 use Tests\TestCase;
 
@@ -210,6 +211,63 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('code', 422);
     }
 
+    public function test_store_rejects_draft_order_with_1523(): void
+    {
+        // 异常路径（B-1）：草稿工单不可建委外单（与发出 approve 同口径 [已下达,生产中]，1523）——
+        // 修复前 store 无工单状态校验，草稿工单可挂草稿委外单；该草稿单 operation_id 外键会卡死
+        // 工单编辑（update 重建工序行撞 FK），故从源头禁止
+        $this->baseDag();
+        // 模拟「新建草稿 DAG 工单」形态：dagOrder 默认下达+开工，改库打回草稿（OP30 仍为待开工委外节点）；
+        // 先 refresh 对齐库内生产中态——否则内存模型仍为建单时的草稿值，同值赋值 save 短路不打 UPDATE
+        $this->order->refresh();
+        $this->order->status = ProductionOrder::STATUS_DRAFT;
+        $this->order->save();
+        $this->withToken($this->token)->postJson('/api/v1/production/outsourcings', $this->payload())
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '工单当前状态不可委外');
+        // 拒绝时不落单据
+        $this->assertDatabaseCount('outsourcing_orders', 0);
+        // 回归路径：工单下达（草稿→已下达）后建单放行
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$this->order->id}/release")
+            ->assertJsonPath('code', 0);
+        $this->createOutsourcing($this->payload());
+        $this->assertDatabaseCount('outsourcing_orders', 1);
+    }
+
+    public function test_update_rejects_reassign_to_draft_order_with_1523(): void
+    {
+        // 异常路径（B-1b）：编辑改挂草稿工单 → 1523（与 store 的 B-1 校验同口径）——修复前 update
+        // 无工单状态校验，可把工单 A 建的委外草稿改挂草稿工单 B（B 建单即快照 DAG 工序含委外节点），
+        // 绕过 store 源头拦截，令 B 的编辑/删除被草稿委外单 1504 冻结
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        // 草稿工单 B：同成品直接建单（默认草稿态，快照工序 OP30 为待开工委外节点）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->dag['fin']->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
+        ]);
+        $res->assertJsonPath('code', 0);
+        $draftOrder = ProductionOrder::where('id', $res->json('data.id'))->firstOrFail();
+        $this->assertSame(ProductionOrder::STATUS_DRAFT, $draftOrder->status);
+        $draftOp = $draftOrder->operations()->where('is_outsourced', 1)->firstOrFail();
+        // 改挂草稿工单 B 被拒：业务码 1523 + HTTP 200 统一信封（非 500）
+        $this->withToken($this->token)->putJson("/api/v1/production/outsourcings/{$os->id}", $this->payload([
+            'order_id' => $draftOrder->id, 'operation_id' => $draftOp->id,
+        ]))
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '工单当前状态不可委外');
+        // 拒绝时单据保持原工单归属（未半改）
+        $this->assertDatabaseHas('outsourcing_orders', ['id' => $os->id, 'order_id' => $this->order->id]);
+        // 回归路径：工单 B 下达后改挂放行（B 计划 5 = 载荷数量 5，未超剩余计划量）
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$draftOrder->id}/release")
+            ->assertJsonPath('code', 0);
+        $this->withToken($this->token)->putJson("/api/v1/production/outsourcings/{$os->id}", $this->payload([
+            'order_id' => $draftOrder->id, 'operation_id' => $draftOp->id,
+        ]))->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('outsourcing_orders', ['id' => $os->id, 'order_id' => $draftOrder->id]);
+    }
+
     // 核心不变式（发出，默认载荷 5）：组件余额 12→2、6→1，分量 outsourcing_out 流水（direction=-1、
     // 商品=发料组件）+ 操作人/时间落库
     public function test_approve_deducts_default_payload_components_and_writes_movement(): void
@@ -354,6 +412,36 @@ class OutsourcingTest extends TestCase
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.items.0.quantity', '6.00')
             ->assertJsonPath('data.items.0.no', 'OSR'.date('YmdHi').'001');
+    }
+
+    public function test_receipts_index_eager_loads_warehouse_and_location(): void
+    {
+        // 正常路径（B-101 回归）：列表预载仓库/库位——2 行记录仅各发 1 次 in 批量查询（逐行懒加载会各发 2 次）
+        $dag = $this->dagOrder();
+        ['ops' => $ops] = $dag;
+        $os = $this->approvedDagOutsourcing($dag);
+        // 首工序（下料）报满 → 委外工序置进行中（分批回收前置，与分批回收用例同流程）
+        $this->withToken($this->token)->postJson("/api/v1/production/operations/{$ops['OP10']->id}/reports", [
+            'qualified_qty' => 6,
+        ])->assertJsonPath('code', 0);
+        // 两批回收（3+3）制造 2 行记录：懒加载时每行各触发一次仓库/库位查询
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/receipts", [
+            'quantity' => 3, 'warehouse_id' => $this->wh->id, 'location_id' => $this->b01->id,
+        ])->assertJsonPath('code', 0);
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->getJson("/api/v1/production/outsourcings/{$os->id}/receipts")
+            ->assertJsonPath('code', 0)
+            ->assertJsonCount(2, 'data.items')
+            ->assertJsonPath('data.items.0.warehouse_name', '主仓')
+            ->assertJsonPath('data.items.0.location_name', 'B-01');
+        $log = collect(DB::getQueryLog());
+        // 预载契约：仓库/库位各只查 1 次（in 批量）；懒加载会按行各查 2 次
+        $this->assertSame(1, $log->filter(fn (array $q) => str_contains($q['query'], 'from "warehouses"'))->count());
+        $this->assertSame(1, $log->filter(fn (array $q) => str_contains($q['query'], 'from "locations"'))->count());
     }
 
     public function test_update_destroy_draft_ok_approved_rejected_with_1521(): void
@@ -725,6 +813,47 @@ class OutsourcingTest extends TestCase
         $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
         $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no2]);
         $this->assertSame(OutsourcingOrder::STATUS_DRAFT, (int) $os2->fresh()->status);
+    }
+
+    // B-104 回归：审核期组件余额行批量预锁——2 组件仅 1 次 in 批量锁查询（修复前循环内逐组件
+    // 各锁一次 = 2 次），与 PickList/PurchaseInbound/SalesOutbound 批量预锁模式对齐；扣减业务结果不变
+    public function test_approve_locks_component_balances_in_single_batch_query(): void
+    {
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        $batchLockQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "inventory_balances"')
+                && str_contains($q['query'], ' in ('));
+        DB::disableQueryLog();
+        // 批量预锁契约：防超卖校验前余额行 whereIn 一次锁定（引擎 apply 内重复加锁幂等，仍为 = 单行形态）
+        $this->assertCount(1, $batchLockQueries);
+        // 业务结果不变：两组件按应发扣减（原料 12→2、半成品B 6→1）
+        $this->assertSame('2.00', $this->balanceOf($this->dag['raw']->id));
+        $this->assertSame('1.00', $this->balanceOf($this->dag['semiB']->id));
+    }
+
+    // P-3 回归：零组件防线判空与组件预载共用一次 items 查询——修复前 count() 判空 +
+    // load('items.material') 对 outsourcing_order_items 查 2 次，合并后 1 次；
+    // 零组件 422 防线行为由 OutsourcingReturnTest::test_approve_rejects_legacy_draft_without_items_422 守护
+    public function test_approve_items_guard_and_prefetch_share_single_query(): void
+    {
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/outsourcings/{$os->id}/approve")
+            ->assertJsonPath('code', 0);
+        $itemsQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "outsourcing_order_items"'));
+        DB::disableQueryLog();
+        // 单查契约：判空防线与循环预载共用一次 items 查询（count + load 双查已合并）
+        $this->assertCount(1, $itemsQueries);
     }
 
     // 组件余额读取（该委外仓位的余额行；无行=0，decimal 归一字符串——测试断言口径与实现 bcmath 一致）

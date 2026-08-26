@@ -13,6 +13,7 @@ use App\Models\Unit;
 use App\Models\User;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class SalesOrderTest extends TestCase
@@ -51,7 +52,7 @@ class SalesOrderTest extends TestCase
         $this->fin = Product::create(['name' => '成品B', 'code' => 'FIN-002', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
     }
 
-    // 组装订单载荷（默认 2 行：FIN-002×10@100元、SEMI-001×5@20元）
+    // 组装订单载荷（默认 2 行：FIN-002×10@10000分、SEMI-001×5@2000分，单价分单位整数）
     private function payload(array $overrides = []): array
     {
         return array_merge([
@@ -90,19 +91,19 @@ class SalesOrderTest extends TestCase
         $this->assertMatchesRegularExpression('/^SO\d{12}001$/', $no);
         $order = SalesOrder::where('no', $no)->first();
         $this->assertSame(SalesOrder::STATUS_DRAFT, $order->status);
-        // 10×10000 + 5×2000 = 110000 分
-        $this->assertSame('110000.00', $order->total_amount);
+        // 10×10000 + 5×2000 = 110000 分（整数分口径）
+        $this->assertSame(110000, $order->total_amount);
         $this->assertSame(2, $order->items()->count());
     }
 
     public function test_store_amount_precise_with_decimal_quantity(): void
     {
-        // 边界路径：小数数量×单价 bcmath 精确（1.55×123=190.65 分，浮点会 190.6499...）
+        // 边界路径：小数数量×分单价产生小数分（1.55×123=190.65 分）——half-up 取整到 191 分落 bigint
         $no = $this->createOrder($this->payload(['items' => [
             ['product_id' => $this->fin->id, 'quantity' => 1.55, 'price' => 123],
         ]]));
         $order = SalesOrder::where('no', $no)->first();
-        $this->assertSame('190.65', $order->items()->first()->amount);
+        $this->assertSame(191, $order->items()->first()->amount);
     }
 
     public function test_store_rejects_empty_items_with_1401(): void
@@ -148,6 +149,19 @@ class SalesOrderTest extends TestCase
             ->assertJsonPath('code', 1412);
     }
 
+    public function test_store_item_validation_queries_products_in_single_batch(): void
+    {
+        // 性能路径（B-105）：原料禁售校验须一次 whereIn 批量预取全部明细商品，
+        // 禁止循环内逐行 Product::find（N 行明细 N 次查询的 N+1 形态；2 行明细断言仅 1 次商品行查询）
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson('/api/v1/sales/orders', $this->payload())
+            ->assertJsonPath('code', 0);
+        $productSelects = collect(DB::getQueryLog())
+            ->filter(fn ($q) => str_starts_with($q['query'], 'select * from "products"'));
+        DB::disableQueryLog();
+        $this->assertCount(1, $productSelects, '明细商品校验应一次批量查询完成，实际查询：'.$productSelects->pluck('query')->implode(' | '));
+    }
+
     public function test_update_draft_recalculates_total(): void
     {
         // 正常路径：草稿可改，金额重算（10×10000 改为 12×10000 → 120000+10000=130000）
@@ -157,7 +171,7 @@ class SalesOrderTest extends TestCase
         $items[0]['quantity'] = 12;
         $this->withToken($this->token)->putJson("/api/v1/sales/orders/{$order->id}", $this->payload(['items' => $items]))
             ->assertJsonPath('code', 0);
-        $this->assertSame('130000.00', SalesOrder::where('no', $no)->first()->total_amount);
+        $this->assertSame(130000, SalesOrder::where('no', $no)->first()->total_amount);
     }
 
     public function test_update_approved_rejected_with_1402(): void
@@ -237,7 +251,7 @@ class SalesOrderTest extends TestCase
             ->assertJsonPath('data.items.0.customer_name', '测试客户')
             ->assertJsonPath('data.items.0.status', 1)
             ->assertJsonPath('data.items.0.status_label', '已审核')
-            ->assertJsonPath('data.items.0.total_amount', '110000.00');
+            ->assertJsonPath('data.items.0.total_amount', 110000);
         $this->withToken($this->token)->getJson('/api/v1/sales/orders?keyword=SO'.date('Ymd'))
             ->assertJsonPath('data.total', 1);
         $this->withToken($this->token)->getJson('/api/v1/sales/orders?status=0')
@@ -254,7 +268,7 @@ class SalesOrderTest extends TestCase
             ->assertJsonPath('data.items.0.product_code', 'FIN-002')
             ->assertJsonPath('data.items.0.quantity', '10.00')
             ->assertJsonPath('data.items.0.shipped_qty', '0.00')
-            ->assertJsonPath('data.items.0.amount', '100000.00');
+            ->assertJsonPath('data.items.0.amount', 100000);
     }
 
     public function test_available_only_lists_outboundable_orders(): void
@@ -272,6 +286,34 @@ class SalesOrderTest extends TestCase
         $res2 = $this->withToken($this->token)->getJson('/api/v1/sales/orders/available');
         $this->assertSame(1, $res2->json('data.total'));
         $this->assertSame($no, $res2->json('data.items.0.no'));
+    }
+
+    public function test_available_supports_keyword_search_and_pagination(): void
+    {
+        // BF-3/B-106：可出库订单下拉数据源支持单号关键字搜索与分页
+        // （原实现全量装载订单头+全部明细行再集合过滤，订单量增长后下拉不可选且响应线性膨胀）
+        $no1 = $this->createOrder($this->payload());
+        $this->approveOrder($no1);
+        $no2 = $this->createOrder($this->payload());
+        $this->approveOrder($no2);
+        $no3 = $this->createOrder($this->payload());
+        $this->approveOrder($no3);
+
+        // 正常路径：关键字按单号模糊，完整单号唯一命中 no2
+        $res = $this->withToken($this->token)->getJson('/api/v1/sales/orders/available?keyword='.$no2);
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(1, $res->json('data.total'));
+        $this->assertSame($no2, $res->json('data.items.0.no'));
+
+        // 边界路径：分页 per_page=2 → 首页 2 条、total=3、响应带分页元数据（与 index 同结构）
+        $page = $this->withToken($this->token)->getJson('/api/v1/sales/orders/available?per_page=2');
+        $this->assertSame(3, $page->json('data.total'));
+        $this->assertCount(2, $page->json('data.items'));
+        $this->assertSame(2, $page->json('data.per_page'));
+
+        // 边界路径：per_page 超上限钳制 100（与其他列表接口同口径，防大 per_page 绕过）
+        $clamp = $this->withToken($this->token)->getJson('/api/v1/sales/orders/available?per_page=999');
+        $this->assertSame(100, $clamp->json('data.per_page'));
     }
 
     public function test_orders_requires_sales_order_permission(): void

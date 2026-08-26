@@ -15,7 +15,7 @@ use Illuminate\Support\Carbon;
  * @property string $prefix
  * @property string $date_format
  * @property int $seq_length
- * @property bool $enabled
+ * @property bool $is_enabled
  * @property string|null $remark
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -24,13 +24,13 @@ class DocumentNumberConfig extends Model
 {
     protected $table = 'document_number_configs';
 
-    protected $fillable = ['type', 'prefix', 'date_format', 'seq_length', 'enabled', 'remark'];
+    protected $fillable = ['type', 'prefix', 'date_format', 'seq_length', 'is_enabled', 'remark'];
 
     protected function casts(): array
     {
         return [
             'seq_length' => 'integer',
-            'enabled' => 'boolean',
+            'is_enabled' => 'boolean',
         ];
     }
 }

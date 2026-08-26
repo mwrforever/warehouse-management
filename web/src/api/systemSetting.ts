@@ -8,7 +8,7 @@ export interface NumberConfigItem {
   prefix: string
   date_format: string
   seq_length: number
-  enabled: boolean
+  is_enabled: boolean
   remark: string | null
 }
 
@@ -20,7 +20,7 @@ export const systemSettingApi = {
     })
     return data.data as { items: NumberConfigItem[]; total: number; page: number; per_page: number }
   },
-  // 编辑规则（prefix/date_format/seq_length/enabled/remark；type 由种子固定不可改）
+  // 编辑规则（prefix/date_format/seq_length/is_enabled/remark；type 由种子固定不可改）
   async update(id: number, payload: Omit<NumberConfigItem, 'id' | 'type' | 'type_label'>) {
     await http.put(`/document-number-configs/${id}`, payload)
   },

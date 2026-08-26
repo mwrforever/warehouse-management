@@ -24,6 +24,11 @@ use Illuminate\Support\Carbon;
  */
 class Location extends Model
 {
+    /** 库位状态：0停用 1启用 */
+    public const STATUS_DISABLED = 0;
+
+    public const STATUS_ENABLED = 1;
+
     protected $fillable = ['warehouse_id', 'name', 'code', 'status'];
 
     protected function casts(): array

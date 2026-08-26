@@ -55,7 +55,7 @@ watch(() => props.value, render)
   font-family: var(--font-code, monospace);
   font-size: 11px;
   line-height: 32px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, var(--p-400));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

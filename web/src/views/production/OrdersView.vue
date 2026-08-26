@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   productionApi,
   type OperationGraphNode,
@@ -19,6 +19,7 @@ import OperationGraph from '../../components/OperationGraph.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { formatThousand, toLocalDateString } from '../../utils/format'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -43,6 +44,16 @@ const form = reactive({
   plan_date: toLocalDateString(new Date()),
   remark: '',
 })
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+
+// 表单校验规则（D-17）：成品/计划日期必填；数量须 > 0 且最多 2 位小数
+// （输入框 :min=0 允许 0 属输入侧宽容，提交前此处按工单语义拦截 0）
+const rules: FormRules = {
+  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  quantity: [quantityRule(false, '数量必须大于 0')],
+  plan_date: [{ required: true, message: '请选择计划日期', trigger: 'change' }],
+}
 // 成品下拉实例引用（打开弹窗后聚焦）
 const productSelect = ref<{ focus: () => void } | null>(null)
 
@@ -99,16 +110,26 @@ function outsourceTagType(status: number) {
   return 'success'
 }
 
+// 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：BOM 校验/编辑回填为异步落点，
+// 快速切换成品/连点编辑时旧会话的慢响应必须丢弃——
+// 防 A 的「无启用 BOM」迟到响应误清空 B 的选择并弹错、旧单详情覆盖新单回填
+let sessionSeq = 0
+
 // 选成品后即时校验启用 BOM（无启用版本 → 1501 文案并清空选择）
 async function onProductChange(pid: number | undefined) {
   if (!pid) return
+  const session = ++sessionSeq
   try {
     const res = await bomApi.list({ product_id: pid })
+    // 迟到守卫：旧成品的校验结果丢弃，防误清空新选择并弹错（快速切成品 A→B）
+    if (session !== sessionSeq) return
     if (!res.items.some((b) => b.status === 1)) {
       ElMessage.error('该成品没有启用版本的 BOM')
       form.product_id = undefined
     }
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -128,10 +149,12 @@ function openCreate() {
   nextTick(() => productSelect.value?.focus())
 }
 
-// 编辑草稿（仅草稿可编辑，详情回填）
+// 编辑草稿（仅草稿可编辑，详情回填）；快速连点两行编辑时旧单慢详情丢弃（BF-2 会话守卫）
 async function openEdit(row: ProductionOrderItem) {
+  const session = ++sessionSeq
   try {
     const d = await productionApi.orderDetail(row.id)
+    if (session !== sessionSeq) return
     editing.value = true
     editingId.value = row.id
     Object.assign(form, {
@@ -142,27 +165,21 @@ async function openEdit(row: ProductionOrderItem) {
     })
     dialogVisible.value = true
   } catch (e) {
+    // 过期会话的失败不提示：新会话已接管，旧单报错会打扰当前编辑
+    if (session !== sessionSeq) return
     ElMessage.error((e as Error).message)
   }
 }
 
-// 保存：校验链（成品 → 数量>0 → 计划日期）；新建成功 → 定位新单 → 展开确认弹窗
+// 保存：校验链（成品 → 数量>0 → 计划日期，由 el-form rules 前置拦截）；新建成功 → 定位新单 → 展开确认弹窗
 async function save() {
-  if (!form.product_id) {
-    ElMessage.warning('请选择成品')
-    return
-  }
-  if (!form.quantity || Number(form.quantity) <= 0) {
-    ElMessage.warning('数量必须大于 0')
-    return
-  }
-  if (!form.plan_date) {
-    ElMessage.warning('请选择计划日期')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：成品必填/数量范围精度/计划日期必填在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
+  // 成品/数量经上方 rules 校验必填且 > 0，此处 ! 收窄类型（纯类型层面，运行时值不变）
   const payload = {
-    product_id: form.product_id,
-    quantity: form.quantity,
+    product_id: form.product_id!,
+    quantity: form.quantity!,
     plan_date: form.plan_date,
     remark: form.remark,
   }
@@ -177,20 +194,25 @@ async function save() {
     } else {
       const res = await productionApi.createOrder(payload)
       ElMessage.success(`工单 ${res.no} 创建成功`)
-      // 新建成功：直接以创建响应 id 拉详情打开 BOM 展开弹窗（不依赖列表回查——
-      // 旧实现列表刷新失败时误报「创建失败」误导用户重复提交，bug #11 回归）
-      expandData.value = await productionApi.orderDetail(res.id)
+      // 创建成功语义与后续展示解耦（BF-4）：先关窗清表单——若详情拉取失败落入外层 catch，
+      // 弹窗滞留+通用错误会让用户误以为创建失败而重试，造成重复建单
       dialogVisible.value = false
-      expandVisible.value = true
-      // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
-      reset()
-      // 新建弹窗提交后清空表单（下次打开即为空表单）
       Object.assign(form, {
         product_id: undefined,
         quantity: undefined,
         plan_date: toLocalDateString(new Date()),
         remark: '',
       })
+      // 以创建响应 id 拉详情打开 BOM 展开弹窗（不依赖列表回查，bug #11 回归）；
+      // 失败仅提示「已创建」语义：新单可从列表定位，不得诱导重试
+      try {
+        expandData.value = await productionApi.orderDetail(res.id)
+        expandVisible.value = true
+      } catch {
+        ElMessage.error(`工单 ${res.no} 已创建，展开确认加载失败，可从列表查看`)
+      }
+      // 列表后台补充刷新（重置筛选定位新单，新草稿必在 id 倒序首页）：失败仅警告，不影响创建成功语义
+      reset()
     }
   } catch (e) {
     ElMessage.error((e as Error).message)
@@ -557,8 +579,8 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="成品" required>
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <el-form-item label="成品" prop="product_id" required>
           <el-select
             ref="productSelect"
             v-model="form.product_id"
@@ -575,7 +597,7 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="数量" required>
+        <el-form-item label="数量" prop="quantity" required>
           <el-input-number
             v-model="form.quantity"
             :min="0"
@@ -585,7 +607,7 @@ onMounted(async () => {
             style="width: 100%"
           />
         </el-form-item>
-        <el-form-item label="计划日期" required>
+        <el-form-item label="计划日期" prop="plan_date" required>
           <el-date-picker
             v-model="form.plan_date"
             type="date"
@@ -786,7 +808,7 @@ onMounted(async () => {
               class="data-table"
               style="margin-top: 12px"
             >
-              <el-table-column prop="report_time" label="报工时间" width="160" />
+              <el-table-column prop="reported_at" label="报工时间" width="160" />
               <el-table-column prop="operator" label="操作人" width="100">
                 <template #default="{ row }">{{ row.operator ?? '—' }}</template>
               </el-table-column>
@@ -860,7 +882,7 @@ onMounted(async () => {
 <style scoped>
 /* 生产工单页样式（nexus-factory）：骨架与销售订单页一致，生产特有样式见 pages/production.md */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -868,7 +890,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -886,7 +908,7 @@ onMounted(async () => {
 .section-title {
   font-family: 'Fira Code', monospace;
   font-size: 13px;
-  color: #334155;
+  color: var(--p-700);
   margin: 16px 0 8px;
 }
 /* 缺料警告条（琥珀色，不阻断下达；下方逐行明细） */
@@ -895,9 +917,9 @@ onMounted(async () => {
 }
 /* 已完成深绿（与已审核绿同族但明度更低，防同态混淆——销售模块同款） */
 .tag-done {
-  background: #ecfdf5 !important;
-  color: #047857 !important;
-  border-color: #047857 !important;
+  background: var(--a-50) !important;
+  color: var(--a-700) !important;
+  border-color: var(--a-700) !important;
 }
 .warning-line {
   display: flex;

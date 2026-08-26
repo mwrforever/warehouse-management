@@ -1,6 +1,7 @@
 // BOM 页组件测试：物料行选择物料后单位自动带出（spec §5.7「单位（自动带出）」）
 // 背景：物料行单位原固定取第一个单位（units[0]），未随物料联动，
-// 导致 MAT-001（单位个）行显示「千克」、保存载荷 unit_id 错误（E2E TC-MST-09 回归保护）
+// 导致 MAT-001（单位个）行显示「千克」、保存载荷 unit_id 错误（E2E TC-MST-09 回归保护）；
+// 首屏下拉 Promise.all 失败不产生 unhandled rejection（BF-6）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -72,6 +73,7 @@ vi.mock('../api/unit', () => ({
   },
 }))
 import { bomApi } from '../api/bom'
+import { unitApi } from '../api/unit'
 
 describe('BOM 物料行单位自动带出', () => {
   let store: ReturnType<typeof useAuthStore>
@@ -137,6 +139,37 @@ describe('BOM 物料行单位自动带出', () => {
         items: expect.arrayContaining([expect.objectContaining({ material_id: 1, unit_id: 1 })]),
       }),
     )
+    wrapper.unmount()
+  })
+})
+
+describe('BOM 首屏下拉加载兜底（BF-6）', () => {
+  let pinia: ReturnType<typeof createPinia>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    pinia = createPinia()
+    setActivePinia(pinia)
+    useAuthStore().permissions = ['bom.create', 'bom.list']
+  })
+
+  function mountView() {
+    return mount(BomsView, { attachTo: document.body, global: { plugins: [ElementPlus, pinia] } })
+  }
+
+  it('下拉任一路加载失败不产生 unhandled rejection，主列表与新建入口不受阻塞', async () => {
+    // 异常场景：onMounted 内 Promise.all 无兜底时 rejection 无人接住（BF-6 回归）；
+    // 下拉失败只损失下拉数据源，主列表由 useListQuery 独立链路加载
+    vi.mocked(unitApi.list).mockRejectedValueOnce(new Error('单位接口不可用'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(bomApi.list, '主列表加载不受下拉失败影响').toHaveBeenCalled()
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
+    expect(newBtn, '新建入口应存在').toBeTruthy()
+    await newBtn!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.el-dialog').exists(), '下拉失败不阻塞新建弹窗').toBe(true)
     wrapper.unmount()
   })
 })

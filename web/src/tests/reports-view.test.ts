@@ -1,4 +1,5 @@
 // 工序报工页组件测试：清除工单选择后重置工序/详情/表单（bug #3 回归：防向旧工单误提交报工）
+// + 切换工单会话序号守卫（BF-2）：旧工单慢 detail 后到不得覆盖新工单、在途窗口提交不得报错工序
 // （mock productionApi + auth store + vue-router）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -77,6 +78,29 @@ function okDetail() {
         hours: 0,
       },
     ],
+  }
+}
+
+// 可控 deferred：乱序用例手动控制慢响应 resolve 时机（无需真实定时器）
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+// 切换工单用例的工单 B 详情：id 2 / 工序 12（组装）进行中——与工单 A（id 1 / 工序 11 下料）区分可断言
+function detailB() {
+  const d = okDetail()
+  return {
+    ...d,
+    id: 2,
+    no: 'MO20260814-002',
+    product_id: 10,
+    operations: [{ ...d.operations[0]!, id: 12, process_name: '组装' }],
   }
 }
 
@@ -181,5 +205,85 @@ describe('ReportsView', () => {
     await flushPromises()
     expect(reportMock).toHaveBeenCalledWith(11, expect.objectContaining({ operator: '测试管理员' }))
     expect(opItem?.text()).toContain('测试管理员')
+  })
+
+  // 顶部工单下拉选中（卡片可见后页内有第二个 ElSelect（操作人），工具栏下拉恒为第 0 个）
+  async function pickOrder(wrapper: ReturnType<typeof mount>, orderId: number) {
+    const select = wrapper.findAllComponents({ name: 'ElSelect' })[0]!
+    await select.vm.$emit('update:modelValue', orderId)
+    await select.vm.$emit('change', orderId)
+    await flushPromises()
+  }
+
+  // BF-2：快速切单 A（慢）→ B（快），A 的迟到 detail 不得覆盖 B 的工序状态（步骤条所见非所选）
+  it('乱序：快速切换工单时旧工单慢响应不得覆盖新工单工序（BF-2）', async () => {
+    // 双工单下拉；A 的 detail 受控慢、B 的立即返回
+    ordersMock.mockResolvedValue({
+      items: [
+        { id: 1, no: 'MO20260814-001', product_name: '成品A', status: 2, status_label: '生产中' },
+        { id: 2, no: 'MO20260814-002', product_name: '成品B', status: 2, status_label: '生产中' },
+      ],
+      total: 2,
+      page: 1,
+      per_page: 100,
+    })
+    const dA = deferred<ReturnType<typeof okDetail>>()
+    orderDetailMock
+      .mockImplementationOnce(() => dA.promise)
+      .mockImplementationOnce(() => Promise.resolve(detailB()))
+    const wrapper = mount(ReportsView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    // 选 A（在途）→ 选 B（快回）：步骤条/卡片为 B 的组装工序
+    await pickOrder(wrapper, 1)
+    expect(orderDetailMock).toHaveBeenCalledWith(1)
+    await pickOrder(wrapper, 2)
+    expect(orderDetailMock).toHaveBeenCalledWith(2)
+    expect(wrapper.text()).toContain('组装')
+    expect(wrapper.text()).not.toContain('下料')
+
+    // 迟到响应 A 落点：会话守卫丢弃——工序状态仍是 B 的组装，不得拉回 A 的下料
+    dA.resolve(okDetail())
+    await flushPromises()
+    expect(wrapper.text()).toContain('组装')
+    expect(wrapper.text()).not.toContain('下料')
+  })
+
+  // BF-2 最高危点：切换在途窗口（B 的 detail 未回、页面仍显示 A 的工序）点提交，
+  // 不得取 A 的 currentOp 静默报工——用户以为在给 B 报工，产量实际报进 A 的工序
+  it('乱序：切换在途窗口提交报工不得把产量报进旧工单工序（BF-2）', async () => {
+    ordersMock.mockResolvedValue({
+      items: [
+        { id: 1, no: 'MO20260814-001', product_name: '成品A', status: 2, status_label: '生产中' },
+        { id: 2, no: 'MO20260814-002', product_name: '成品B', status: 2, status_label: '生产中' },
+      ],
+      total: 2,
+      page: 1,
+      per_page: 100,
+    })
+    // A 立即返回（建立报工卡片）；B 受控慢（切换在途窗口）
+    const dB = deferred<ReturnType<typeof okDetail>>()
+    orderDetailMock
+      .mockImplementationOnce(() => Promise.resolve(okDetail()))
+      .mockImplementationOnce(() => dB.promise)
+    const wrapper = mount(ReportsView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    // 选 A → 卡片显示下料工序，填合格数 5
+    await pickOrder(wrapper, 1)
+    expect(wrapper.text()).toContain('当前工序：下料')
+    const qtyItem = wrapper
+      .findAll('.el-form-item')
+      .find((f) => f.find('.el-form-item__label').text() === '合格数')
+    await qtyItem!.find('input').setValue('5')
+
+    // 切 B（detail 在途）→ 点提交：详情与选中工单不一致，必须拒绝（不得调用 report）
+    await pickOrder(wrapper, 2)
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes('报工'))!
+      .trigger('click')
+    await flushPromises()
+    expect(reportMock).not.toHaveBeenCalled()
   })
 })

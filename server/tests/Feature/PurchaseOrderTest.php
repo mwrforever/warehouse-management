@@ -46,7 +46,7 @@ class PurchaseOrderTest extends TestCase
         $this->semi = Product::create(['name' => '半成品A', 'code' => 'SEMI-001', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unit->id, 'status' => 1]);
     }
 
-    // 组装订单载荷（默认 2 行：MAT-001×100@5元、SEMI-001×50@10元）
+    // 组装订单载荷（默认 2 行：MAT-001×100@500分、SEMI-001×50@1000分，单价分单位整数）
     private function payload(array $overrides = []): array
     {
         return array_merge([
@@ -85,19 +85,19 @@ class PurchaseOrderTest extends TestCase
         $this->assertMatchesRegularExpression('/^PO\d{12}001$/', $no);
         $order = PurchaseOrder::where('no', $no)->first();
         $this->assertSame(PurchaseOrder::STATUS_DRAFT, $order->status);
-        // 100×500 + 50×1000 = 100000 分
-        $this->assertSame('100000.00', $order->total_amount);
+        // 100×500 + 50×1000 = 100000 分（整数分口径）
+        $this->assertSame(100000, $order->total_amount);
         $this->assertSame(2, $order->items()->count());
     }
 
     public function test_store_amount_precise_with_decimal_quantity(): void
     {
-        // 边界路径：小数数量×单价 bcmath 精确（1.55×123=190.65 分，浮点会 190.6499...）
+        // 边界路径：小数数量×分单价产生小数分（1.55×123=190.65 分）——half-up 取整到 191 分落 bigint
         $no = $this->createOrder($this->payload(['items' => [
             ['product_id' => $this->mat->id, 'quantity' => 1.55, 'price' => 123],
         ]]));
         $order = PurchaseOrder::where('no', $no)->first();
-        $this->assertSame('190.65', $order->items()->first()->amount);
+        $this->assertSame(191, $order->items()->first()->amount);
     }
 
     public function test_store_rejects_empty_items_with_1301(): void
@@ -131,7 +131,7 @@ class PurchaseOrderTest extends TestCase
         $no = $this->createOrder($this->payload(['items' => [
             ['product_id' => $this->mat->id, 'quantity' => 10, 'price' => 0],
         ]]));
-        $this->assertSame('0.00', PurchaseOrder::where('no', $no)->first()->total_amount);
+        $this->assertSame(0, PurchaseOrder::where('no', $no)->first()->total_amount);
     }
 
     public function test_store_rejects_scientific_notation_quantity_with_422(): void
@@ -165,7 +165,7 @@ class PurchaseOrderTest extends TestCase
         $items[0]['quantity'] = 120;
         $this->withToken($this->token)->putJson("/api/v1/purchase/orders/{$order->id}", $this->payload(['items' => $items]))
             ->assertJsonPath('code', 0);
-        $this->assertSame('110000.00', PurchaseOrder::where('no', $no)->first()->total_amount);
+        $this->assertSame(110000, PurchaseOrder::where('no', $no)->first()->total_amount);
     }
 
     public function test_update_approved_rejected_with_1303(): void
@@ -246,7 +246,7 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('data.items.0.supplier_name', '测试供应商')
             ->assertJsonPath('data.items.0.status', 1)
             ->assertJsonPath('data.items.0.status_label', '已审核')
-            ->assertJsonPath('data.items.0.total_amount', '100000.00');
+            ->assertJsonPath('data.items.0.total_amount', 100000);
         $this->withToken($this->token)->getJson('/api/v1/purchase/orders?keyword=PO'.date('Ymd'))
             ->assertJsonPath('data.total', 1);
         $this->withToken($this->token)->getJson('/api/v1/purchase/orders?status=0')
@@ -263,7 +263,7 @@ class PurchaseOrderTest extends TestCase
             ->assertJsonPath('data.items.0.product_code', 'MAT-001')
             ->assertJsonPath('data.items.0.quantity', '100.00')
             ->assertJsonPath('data.items.0.received_qty', '0.00')
-            ->assertJsonPath('data.items.0.amount', '50000.00');
+            ->assertJsonPath('data.items.0.amount', 50000);
     }
 
     public function test_inbounds_returns_empty_items_for_draft_order(): void
@@ -291,6 +291,34 @@ class PurchaseOrderTest extends TestCase
         $this->withToken($this->token)->postJson("/api/v1/purchase/orders/{$id2}/close")->assertJsonPath('code', 0);
         $res2 = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available');
         $this->assertSame(1, $res2->json('data.total'));
+    }
+
+    public function test_available_supports_keyword_search_and_pagination(): void
+    {
+        // BF-3/B-106：可入库订单下拉数据源支持单号关键字搜索与分页
+        // （原实现全量装载订单头+全部明细行再集合过滤，订单量增长后下拉不可选且响应线性膨胀）
+        $no1 = $this->createOrder($this->payload());
+        $this->approveOrder($no1);
+        $no2 = $this->createOrder($this->payload());
+        $this->approveOrder($no2);
+        $no3 = $this->createOrder($this->payload());
+        $this->approveOrder($no3);
+
+        // 正常路径：关键字按单号模糊，完整单号唯一命中 no2
+        $res = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?keyword='.$no2);
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(1, $res->json('data.total'));
+        $this->assertSame($no2, $res->json('data.items.0.no'));
+
+        // 边界路径：分页 per_page=2 → 首页 2 条、total=3、响应带分页元数据（与 index 同结构）
+        $page = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?per_page=2');
+        $this->assertSame(3, $page->json('data.total'));
+        $this->assertCount(2, $page->json('data.items'));
+        $this->assertSame(2, $page->json('data.per_page'));
+
+        // 边界路径：per_page 超上限钳制 100（与其他列表接口同口径，防大 per_page 绕过）
+        $clamp = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?per_page=999');
+        $this->assertSame(100, $clamp->json('data.per_page'));
     }
 
     public function test_orders_requires_purchase_order_permission(): void

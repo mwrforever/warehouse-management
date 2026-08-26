@@ -135,4 +135,51 @@ describe('OrdersView 新建成功但列表刷新失败', () => {
     expect(document.body.textContent).not.toContain('工单已创建，请刷新列表查看')
     wrapper.unmount()
   })
+
+  // BF-4：创建成功但展开详情加载失败——旧实现落入外层 catch 仅弹通用错误，弹窗滞留表单未清，
+  // 用户以为创建失败而重试造成重复建单；新实现关窗清表单 + 提示带单号的「已创建」语义
+  it('创建成功但展开详情加载失败：新建弹窗关闭、展开弹窗不开、提示已创建不诱导重试（BF-4）', async () => {
+    // 列表加载（挂载与保存后 reset）均正常；展开详情拉取失败
+    ordersMock.mockReset().mockResolvedValue({ items: [], total: 0, page: 1, per_page: 10 })
+    createOrderMock.mockResolvedValue({ no: 'MO20260814-002', id: 43 })
+    orderDetailMock.mockRejectedValue(new Error('网络异常'))
+    const wrapper = mount(OrdersView, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus, pinia] },
+    })
+    await flushPromises()
+    // 打开新建弹窗并填表（成品 + 数量，计划日期默认今天）
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
+    await newBtn!.trigger('click')
+    await flushPromises()
+    const productSelect = wrapper.findAll('.el-dialog .el-select__wrapper')[0]
+    await productSelect.trigger('click')
+    await flushPromises()
+    const candidates = [
+      ...document.querySelectorAll('.el-select-dropdown .el-select-dropdown__item'),
+    ].filter((o) => (o as HTMLElement).textContent!.trim() === '成品B（FIN-002）')
+    ;(candidates[candidates.length - 1] as HTMLElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    )
+    await flushPromises()
+    const qtyInput = wrapper.findComponent({ name: 'ElInputNumber' })
+    await qtyInput.vm.$emit('update:modelValue', 10)
+    await flushPromises()
+    const saveBtn = wrapper.findAll('button').find((b) => b.text().trim() === '保 存')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+
+    // 建单仅一次且详情以创建响应 id 拉取（失败点在展开详情，不在创建）
+    expect(createOrderMock).toHaveBeenCalledTimes(1)
+    expect(orderDetailMock).toHaveBeenCalledWith(43)
+    // 新建弹窗已关闭（不滞留表单——重试会造成重复建单）
+    const createDialog = wrapper.findAll('.el-dialog').find((d) => d.text().includes('新 建工单'))
+    expect(createDialog, '新建弹窗应存在（DOM 留存）').toBeTruthy()
+    expect(createDialog!.isVisible()).toBe(false)
+    // BOM 展开弹窗未打开（详情拉取失败无数据可展示）
+    expect(wrapper.text()).not.toContain('BOM 展开确认')
+    // 错误提示带单号传达「已创建」语义：新单可在列表定位，无需（也不得）重试提交
+    expect(document.body.textContent).toContain('MO20260814-002 已创建，展开确认加载失败')
+    wrapper.unmount()
+  })
 })

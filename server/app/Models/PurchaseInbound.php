@@ -17,7 +17,7 @@ use Illuminate\Support\Carbon;
  * @property int $location_id
  * @property int|null $order_id
  * @property int $status
- * @property string $total_amount
+ * @property int $total_amount 明细金额合计（分单位整数）
  * @property Carbon|null $inbound_at
  * @property string|null $operator
  * @property string|null $remark
@@ -40,7 +40,7 @@ class PurchaseInbound extends Model
     {
         return [
             'status' => 'integer',
-            'total_amount' => 'decimal:2',
+            'total_amount' => 'integer',
             'inbound_at' => 'datetime',
         ];
     }

@@ -19,6 +19,9 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- 测试环境显式注入种子口令（D-19a：seeder 已消除 admin123 兜底，缺变量即抛异常；
+             大量 Feature 用例依赖 db:seed 建立 admin 账号——显式声明而非兜底，符合 AGENTS.md §8.5） -->
+        <env name="ADMIN_PASSWORD" value="admin123"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

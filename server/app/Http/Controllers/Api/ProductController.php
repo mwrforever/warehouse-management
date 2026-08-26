@@ -1,20 +1,15 @@
 <?php
 
-// 商品控制器：分页筛选 + CRUD + 扫码查询 + 删除保护（被 BOM/业务单据引用）
+// 商品控制器：分页筛选/扫码查询 读取 + CRUD 薄壳（写流程全部下沉 ProductService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\BomHeader;
-use App\Models\BomItem;
-use App\Models\DocumentSequence;
+use App\Http\Requests\Master\SaveProductRequest;
 use App\Models\Product;
-use App\Services\DocumentSequenceService;
+use App\Services\ProductService;
 use App\Support\ApiResponse;
-use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
 {
@@ -23,7 +18,7 @@ class ProductController extends Controller
     // 类型 → 中文标签映射（前端表格类型标签）
     private const TYPE_LABELS = ['raw_material' => '原料', 'semi_finished' => '半成品', 'finished' => '成品'];
 
-    public function __construct(private readonly DocumentSequenceService $sequenceService) {}
+    public function __construct(private ProductService $productService) {}
 
     /** 分页列表：编码/名称/条码模糊 + 类型/分类/状态过滤 */
     public function index(Request $request)
@@ -66,117 +61,19 @@ class ProductController extends Controller
     }
 
     /** 新建商品：编码/条码留空自动生成（Spec 2）+ 唯一校验 + 安全库存上下限校验 */
-    public function store(Request $request)
+    public function store(SaveProductRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:100',
-            // Spec 2：编码留空则自动生成（type=prd 配置驱动）；手填仍唯一校验 1114
-            'code' => 'nullable|string|max:50',
-            'type' => ['required', Rule::in(['raw_material', 'semi_finished', 'finished'])],
-            'category_id' => 'required|exists:categories,id',
-            'unit_id' => 'required|exists:units,id',
-            'spec' => 'nullable|string|max:100',
-            // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
-            'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
-            'safety_min' => 'nullable|numeric|min:0',
-            'safety_max' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:0,1',
-            'remark' => 'nullable|string',
-        ]);
-
-        // 编码唯一 1114；条码非空时唯一 1115（手填场景；自动生成由持久序列保证不撞）
-        if (! empty($data['code']) && Product::where('code', $data['code'])->exists()) {
-            return $this->fail(1114, '商品编码已存在');
-        }
-        if (! empty($data['barcode']) && Product::where('barcode', $data['barcode'])->exists()) {
-            return $this->fail(1115, '条码已存在');
-        }
-        // 安全库存下限不能大于上限 1122
-        $min = (float) ($data['safety_min'] ?? 0);
-        $max = (float) ($data['safety_max'] ?? 0);
-        if ($max > 0 && $min > $max) {
-            return $this->fail(1122, '安全库存下限不能大于上限');
-        }
-
-        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：商品编码序列行首建
-        // 间隙锁死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-        $product = DB::transaction(function () use ($data, $min, $max) {
-            // 除编码/条码外的商品属性（手填/自动两条创建路径共用，避免字段清单两份漂移）
-            $attributes = [
-                'name' => $data['name'], 'type' => $data['type'],
-                'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
-                'spec' => $data['spec'] ?? null,
-                'safety_min' => $min, 'safety_max' => $max,
-                'status' => $data['status'] ?? 1, 'remark' => $data['remark'] ?? null,
-            ];
-            // 编码留空 → 走编号配置自动生成（商品编码 PRD 前缀全局自增，含老库衔接）；条码留空 → 默认 = 编码。
-            // Product::create 必须封装在 persist 闭包内（与其余 12 个单据调用点对齐，B-1）：
-            // 手填 code/barcode 占用未来自动号时，create 撞 products 唯一索引的 1062/19 才能被
-            // 服务的换号重试消化；若 create 落在闭包外，异常直接 500 且序列自增随事务回滚，
-            // 自动编码路径将每次取同一号反复失败、永久不可用
-            if (empty($data['code'])) {
-                return $this->sequenceService->nextNoByConfig(
-                    DocumentSequence::TYPE_PRD,
-                    fn (string $no) => Product::create($attributes + [
-                        'code' => $no,
-                        'barcode' => $data['barcode'] ?? $no,
-                    ]),
-                    fn (string $prefix, string $dateKey) => ($no = Product::where('code', 'like', $prefix.'%')
-                        ->orderByDesc('code')->value('code')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-                );
-            }
-
-            // 手填编码：唯一性已由上方 1114/1115 预检把关，直接创建（条码留空默认 = 编码）
-            return Product::create($attributes + [
-                'code' => $data['code'],
-                'barcode' => $data['barcode'] ?? $data['code'],
-            ]);
-        }, 2);
+        // 写流程下沉 ProductService（唯一 1114/1115、区间 1122、自动编码/条码由服务内部落实）
+        $product = $this->productService->create($request->validated());
 
         // 响应回填自动生成的编码/条码（前端弹窗保存后可展示，spec §5）
         return $this->ok(['id' => $product->id, 'code' => $product->code, 'barcode' => $product->barcode]);
     }
 
     /** 更新商品：编码/条码唯一（排除自身） */
-    public function update(Request $request, Product $product)
+    public function update(SaveProductRequest $request, Product $product)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:100',
-            'code' => 'required|string|max:50',
-            'type' => ['required', Rule::in(['raw_material', 'semi_finished', 'finished'])],
-            'category_id' => 'required|exists:categories,id',
-            'unit_id' => 'required|exists:units,id',
-            'spec' => 'nullable|string|max:100',
-            // 条码字符集限制可打印 ASCII（\x20-\x7E）：CODE128 仅支持 ASCII，防中文/emoji 录入导致前端条码渲染崩溃
-            'barcode' => 'nullable|string|max:50|regex:/^[\x20-\x7E]*$/',
-            'safety_min' => 'nullable|numeric|min:0',
-            'safety_max' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:0,1',
-            'remark' => 'nullable|string',
-        ]);
-
-        if (Product::where('code', $data['code'])->where('id', '!=', $product->id)->exists()) {
-            return $this->fail(1114, '商品编码已存在');
-        }
-        if (
-            ! empty($data['barcode']) && Product::where('barcode', $data['barcode'])
-                ->where('id', '!=', $product->id)->exists()
-        ) {
-            return $this->fail(1115, '条码已存在');
-        }
-        $min = (float) ($data['safety_min'] ?? 0);
-        $max = (float) ($data['safety_max'] ?? 0);
-        if ($max > 0 && $min > $max) {
-            return $this->fail(1122, '安全库存下限不能大于上限');
-        }
-
-        $product->update([
-            'name' => $data['name'], 'code' => $data['code'], 'type' => $data['type'],
-            'category_id' => $data['category_id'], 'unit_id' => $data['unit_id'],
-            'spec' => $data['spec'] ?? null, 'barcode' => $data['barcode'] ?? null,
-            'safety_min' => $min, 'safety_max' => $max,
-            'status' => $data['status'] ?? $product->status, 'remark' => $data['remark'] ?? null,
-        ]);
+        $this->productService->update($product, $request->validated());
 
         return $this->ok();
     }
@@ -184,24 +81,7 @@ class ProductController extends Controller
     /** 删除商品：被 BOM 头/明细、库存流水、盘点明细、采购/销售明细、生产工单/工单物料/领退料/成品入库明细引用不可删 1116 */
     public function destroy(Product $product)
     {
-        // 本模块表（BOM）直接检查；下游模块表经守卫（未建自动放行，建后自动生效）
-        $referencedByBom = BomItem::where('material_id', $product->id)->exists()
-            || BomHeader::where('product_id', $product->id)->exists();
-        $referencedByOther = DeletionGuard::referenced('inventory_movements', 'product_id', $product->id)
-            || DeletionGuard::referenced('inventory_check_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('purchase_order_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('purchase_inbound_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('sales_order_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('sales_outbound_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('production_orders', 'product_id', $product->id)
-            || DeletionGuard::referenced('production_order_materials', 'material_id', $product->id)
-            || DeletionGuard::referenced('pick_list_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('return_list_items', 'product_id', $product->id)
-            || DeletionGuard::referenced('finished_inbound_items', 'product_id', $product->id);
-        if ($referencedByBom || $referencedByOther) {
-            return $this->fail(1116, '商品已被业务单据使用，不可删除');
-        }
-        $product->delete();
+        $this->productService->delete($product);
 
         return $this->ok();
     }

@@ -2,21 +2,24 @@
 
 // 报表聚合服务：4 类只读实时聚合（不落快照、零迁移），口径与业务模块事实一致
 // 日期分组一律 PHP 侧完成（phpunit/E2E 跑 SQLite、生产跑 MySQL，禁用数据库方言日期函数）；
-// 数量/金额一律 bcmath 字符串运算，比率 4 位中间精度输出 2 位小数字符串
+// 数量 bcmath 字符串运算、金额分单位整数（R2 纯分口径），比率 4 位中间精度输出 2 位小数字符串
 
 namespace App\Services;
 
 use App\Models\InventoryBalance;
 use App\Models\InventoryMovement;
 use App\Models\OperationReport;
+use App\Models\PickList;
 use App\Models\PickListItem;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\PurchaseInbound;
 use App\Models\PurchaseInboundItem;
+use App\Models\ReturnList;
 use App\Models\ReturnListItem;
 use App\Models\SalesOutbound;
 use App\Models\SalesOutboundItem;
+use App\Support\Cents;
 use Illuminate\Support\Carbon;
 
 class ReportService
@@ -33,7 +36,8 @@ class ReportService
     /**
      * 库存报表聚合：按维度汇总当前余额（group_by=category/warehouse/type）
      *
-     * 数量=余额行求和、商品种类=商品去重计数；金额=Σ(余额×最近一次采购入库单价) 估算转元，
+     * 数量=余额行求和、商品种类=商品去重计数；金额=Σ(余额×最近一次采购入库单价) 的整数分值
+     * （R2：逐行 half-up 到整数分后整数累加，元展示由前端负责），
      * 无采购记录的商品仅计数量不计金额（全组无成本价时 amount_total=null）。
      * date_to 参数 V1 仅预留（余额表无历史快照）——TODO(report-snapshot): 历史余额快照语义
      * 计划于仪表盘版本引入，届时按 updated_at<=date_to 过滤或引入余额快照表。
@@ -64,7 +68,7 @@ class ReportService
 
         $groups = [];
         $totalQty = '0';
-        $totalAmount = '0';
+        $totalAmount = 0;
         $totalAmountKnown = false;
         $totalProducts = [];
         foreach ($rows as $row) {
@@ -85,10 +89,10 @@ class ReportService
             $groups[$key]['quantity_total'] = bcadd($groups[$key]['quantity_total'] ?? '0', (string) $row->quantity, 2);
             $groups[$key]['product_count'][$row->product_id] = true;
             if (isset($prices[$row->product_id])) {
-                // 行金额 = 余额 × 单价（分）→ 元（2 位）；bcmath 全程无浮点（decimal cast 静态定型为 float，显式转字符串）
-                $lineYuan = bcdiv(bcmul((string) $row->quantity, (string) $prices[$row->product_id], 2), '100', 2);
-                $groups[$key]['amount_total'] = bcadd($groups[$key]['amount_total'] ?? '0', $lineYuan, 2);
-                $totalAmount = bcadd($totalAmount, $lineYuan, 2);
+                // 行金额 = 余额 × 单价（分）half-up 到整数分（R2：与单据行金额同口径，元展示由前端负责）
+                $lineCents = Cents::multiply((string) $row->quantity, $prices[$row->product_id]);
+                $groups[$key]['amount_total'] = ($groups[$key]['amount_total'] ?? 0) + $lineCents;
+                $totalAmount += $lineCents;
                 $totalAmountKnown = true;
             }
             $totalQty = bcadd($totalQty, (string) $row->quantity, 2);
@@ -252,7 +256,15 @@ class ReportService
         $truncated = false;
         $ordersQuery = (clone $window)
             ->join('products', 'products.id', '=', 'production_orders.product_id')
-            ->select('production_orders.*', 'products.name as product_name', 'products.code as product_code')
+            // 显式列出 items 装载端实际使用的工单列（id 同时供 lazy 分块），避免 select 通配拉取未列字段
+            ->select(
+                'production_orders.id',
+                'production_orders.no',
+                'production_orders.quantity',
+                'production_orders.completed_qty',
+                'products.name as product_name',
+                'products.code as product_code',
+            )
             ->orderBy('production_orders.plan_date')
             ->orderBy('production_orders.id');
         foreach ($ordersQuery->lazy() as $order) {
@@ -278,7 +290,7 @@ class ReportService
             // 已审核领料明细（耗用加项）
             $materials['picks'] = PickListItem::query()
                 ->join('pick_lists', 'pick_lists.id', '=', 'pick_list_items.pick_id')
-                ->where('pick_lists.status', 1)
+                ->where('pick_lists.status', PickList::STATUS_APPROVED)
                 ->whereIn('pick_lists.order_id', $orderIds)
                 ->selectRaw('pick_lists.order_id, pick_list_items.product_id, SUM(pick_list_items.pick_qty) as qty')
                 ->groupBy('pick_lists.order_id', 'pick_list_items.product_id')
@@ -286,7 +298,7 @@ class ReportService
             // 已审核退料明细（耗用减项）
             $materials['returns'] = ReturnListItem::query()
                 ->join('return_lists', 'return_lists.id', '=', 'return_list_items.return_id')
-                ->where('return_lists.status', 1)
+                ->where('return_lists.status', ReturnList::STATUS_APPROVED)
                 ->whereIn('return_lists.order_id', $orderIds)
                 ->selectRaw('return_lists.order_id, return_list_items.product_id, SUM(return_list_items.quantity) as qty')
                 ->groupBy('return_lists.order_id', 'return_list_items.product_id')
@@ -364,11 +376,12 @@ class ReportService
     }
 
     /**
-     * 采购销售汇总聚合：已审核单据金额/数量按审核时间分桶（日/月），金额分→元
+     * 采购销售汇总聚合：已审核单据金额/数量按审核时间分桶（日/月），金额分单位整数（R2）
      *
      * 采购口径=purchase_inbounds（status=1，inbound_at 闭区间，total_amount 合计）；
      * 销售口径=sales_outbounds（status=1，outbound_at 闭区间，total_amount 合计）；
-     * 数量=已审核单据明细 quantity 合计。金额 bcdiv(,100,2) 输出元（2 位字符串）。
+     * 数量=已审核单据明细 quantity 合计。金额输出整数分（total_amount 已为 bigint 分列，
+     * 无需换算；元展示由前端负责）。
      * totals=全区间 SQL 聚合（KPI 口径，不受分桶剪枝影响）；分桶按时间升序遍历 + 500 周期
      * 预剪枝——第 501 个周期出现即置截断并 break（与旧「全量装载+ksort+截断」语义等价，
      * 同 movementsSummary 先例；区间内单据/明细传输量受控，不再全量装载）。
@@ -386,44 +399,45 @@ class ReportService
         // totals 下推 SQL：单行聚合取全区间合计（跨层口径与剪枝前一致；SUM 标准 SQL 无方言差异，
         // 空集返回 null 统一归 '0'，与旧实现空区间输出 '0' 的契约一致）
         $totals = [
-            'purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0',
+            'purchase_amount' => 0, 'sales_amount' => 0, 'purchase_qty' => '0', 'sales_qty' => '0',
         ];
         $amount = PurchaseInbound::query()
-            ->where('status', 1)
+            ->where('status', PurchaseInbound::STATUS_APPROVED)
             ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('inbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(total_amount) as a')
             ->value('a');
         $qty = PurchaseInboundItem::query()
             ->join('purchase_inbounds', 'purchase_inbounds.id', '=', 'purchase_inbound_items.inbound_id')
-            ->where('purchase_inbounds.status', 1)
+            ->where('purchase_inbounds.status', PurchaseInbound::STATUS_APPROVED)
             ->where('purchase_inbounds.inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('purchase_inbounds.inbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(purchase_inbound_items.quantity) as q')
             ->value('q');
         // 金额/数量各自独立判空：存在单据但无明细行时金额非空而数量 SUM 为 null（归 '0'，与旧实现一致）
         if ($amount !== null) {
-            // 金额分→元（与分桶口径一致）；bcmath 归一跨库 SUM 形态
-            $totals['purchase_amount'] = bcdiv(bcadd((string) $amount, '0', 2), '100', 2);
+            // total_amount 已为 bigint 分整数（MySQL SUM(bigint) 返回 decimal 字符串/SQLite 返回 int，统一 int 归一）
+            $totals['purchase_amount'] = (int) $amount;
         }
         if ($qty !== null) {
             $totals['purchase_qty'] = bcadd((string) $qty, '0', 2);
         }
         $amount = SalesOutbound::query()
-            ->where('status', 1)
+            ->where('status', SalesOutbound::STATUS_APPROVED)
             ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('outbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(total_amount) as a')
             ->value('a');
         $qty = SalesOutboundItem::query()
             ->join('sales_outbounds', 'sales_outbounds.id', '=', 'sales_outbound_items.outbound_id')
-            ->where('sales_outbounds.status', 1)
+            ->where('sales_outbounds.status', SalesOutbound::STATUS_APPROVED)
             ->where('sales_outbounds.outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('sales_outbounds.outbound_at', '<=', $dateTo.' 23:59:59')
             ->selectRaw('SUM(sales_outbound_items.quantity) as q')
             ->value('q');
         if ($amount !== null) {
-            $totals['sales_amount'] = bcdiv(bcadd((string) $amount, '0', 2), '100', 2);
+            // total_amount 已为 bigint 分整数，直接整数分口径输出
+            $totals['sales_amount'] = (int) $amount;
         }
         if ($qty !== null) {
             $totals['sales_qty'] = bcadd((string) $qty, '0', 2);
@@ -433,7 +447,7 @@ class ReportService
         // 会退化为逐单懒加载 N+1，故用 lazy）；明细数量合计保留 PHP 侧分桶（跨库方言无关）
         $inbounds = PurchaseInbound::query()
             ->with('items')
-            ->where('status', 1)
+            ->where('status', PurchaseInbound::STATUS_APPROVED)
             ->where('inbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('inbound_at', '<=', $dateTo.' 23:59:59')
             ->orderBy('inbound_at')
@@ -446,10 +460,10 @@ class ReportService
                     $truncated = true;
                     break;
                 }
-                $groups[$period] = ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+                $groups[$period] = ['purchase_amount' => 0, 'sales_amount' => 0, 'purchase_qty' => '0', 'sales_qty' => '0'];
             }
-            $yuan = bcdiv($in->total_amount, '100', 2);
-            $groups[$period]['purchase_amount'] = bcadd($groups[$period]['purchase_amount'], $yuan, 2);
+            // total_amount 为 bigint 分整数，整数累加（R2：与 totals 同口径）
+            $groups[$period]['purchase_amount'] += (int) $in->total_amount;
             $qty = '0';
             foreach ($in->items as $item) {
                 $qty = bcadd($qty, $item->quantity, 2);
@@ -460,7 +474,7 @@ class ReportService
         // 销售侧：同构（升序 + 500 周期预剪枝；截断标志两侧共用，任一侧触及即置位）
         $outbounds = SalesOutbound::query()
             ->with('items')
-            ->where('status', 1)
+            ->where('status', SalesOutbound::STATUS_APPROVED)
             ->where('outbound_at', '>=', $dateFrom.' 00:00:00')
             ->where('outbound_at', '<=', $dateTo.' 23:59:59')
             ->orderBy('outbound_at')
@@ -473,10 +487,10 @@ class ReportService
                     $truncated = true;
                     break;
                 }
-                $groups[$period] = ['purchase_amount' => '0', 'sales_amount' => '0', 'purchase_qty' => '0', 'sales_qty' => '0'];
+                $groups[$period] = ['purchase_amount' => 0, 'sales_amount' => 0, 'purchase_qty' => '0', 'sales_qty' => '0'];
             }
-            $yuan = bcdiv($out->total_amount, '100', 2);
-            $groups[$period]['sales_amount'] = bcadd($groups[$period]['sales_amount'], $yuan, 2);
+            // total_amount 为 bigint 分整数，整数累加（R2：与 totals 同口径）
+            $groups[$period]['sales_amount'] += (int) $out->total_amount;
             $qty = '0';
             foreach ($out->items as $item) {
                 $qty = bcadd($qty, $item->quantity, 2);

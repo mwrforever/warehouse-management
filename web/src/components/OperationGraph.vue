@@ -90,8 +90,8 @@ function nodeById(id: unknown): OperationGraphNode | undefined {
   return props.graph.nodes.find((n) => String(n.id) === id)
 }
 
-/** 数值口径：后端 decimal 可能序列化为字符串，统一 Number 后展示 */
-function num(v: number | undefined): number {
+/** 数值口径：后端 decimal:2 字符串，统一 Number 后展示 */
+function num(v: string | undefined): number {
   return Number(v ?? 0)
 }
 
@@ -219,7 +219,7 @@ function onOutsourceClick(id: unknown) {
   padding: 0 6px;
   border-radius: var(--r-full);
   background: var(--warn);
-  color: #fff;
+  color: var(--surface);
   font-size: 11px;
   line-height: 18px;
 }
@@ -230,7 +230,7 @@ function onOutsourceClick(id: unknown) {
   border: none;
   border-radius: var(--r-sm);
   background: var(--warn);
-  color: #fff;
+  color: var(--surface);
   font-size: 11px;
   line-height: 18px;
   cursor: pointer;

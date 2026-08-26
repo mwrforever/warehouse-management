@@ -17,7 +17,7 @@ use Illuminate\Support\Carbon;
  * @property int $warehouse_id
  * @property int $status
  * @property string|null $checker
- * @property Carbon|null $check_time
+ * @property Carbon|null $checked_at
  * @property string|null $remark
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
@@ -28,13 +28,13 @@ class InventoryCheck extends Model
 
     public const STATUS_APPROVED = 1;
 
-    protected $fillable = ['no', 'warehouse_id', 'status', 'checker', 'check_time', 'remark'];
+    protected $fillable = ['no', 'warehouse_id', 'status', 'checker', 'checked_at', 'remark'];
 
     protected function casts(): array
     {
         return [
             'status' => 'integer',
-            'check_time' => 'datetime',
+            'checked_at' => 'datetime',
         ];
     }
 

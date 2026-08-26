@@ -1,19 +1,17 @@
 // 编号自动生成 E2E（Spec 2）：TC-NUM-01 商品编码/条码自动生成；TC-NUM-02 采购订单新格式单号；
 // TC-NUM-03 编号规则页改 seq_length → 预览变化 → 新单号按新位宽（用例自建自清，结束恢复配置）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（跨页导航后仍有效）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（跨页导航后仍有效）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -21,9 +19,8 @@ async function apiPost(page: Page, url: string, body?: unknown) {
 // 认证 PUT 辅助：配置恢复等更新类接口（如 document-number-configs/{id}）只接受 PUT，
 // 复用 apiPost 会因方法不符收到 405（响应体无 code 字段），恢复动作静默失效
 async function apiPut(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.put(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -54,7 +51,7 @@ test.describe('编号自动生成', () => {
       prefix: po.prefix,
       date_format: po.date_format,
       seq_length: 3,
-      enabled: po.enabled,
+      is_enabled: po.is_enabled,
       remark: po.remark,
     })
     expect(res.code).toBe(0)

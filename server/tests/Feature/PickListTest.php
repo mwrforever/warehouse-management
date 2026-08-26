@@ -19,6 +19,7 @@ use App\Models\Warehouse;
 use App\Services\InventoryService;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class PickListTest extends TestCase
@@ -241,6 +242,30 @@ class PickListTest extends TestCase
         $this->assertDatabaseMissing('inventory_movements', ['source_no' => $no]);
         $this->assertSame(PickList::STATUS_DRAFT, $pick->refresh()->status);
         $this->assertSame('0.00', $this->order->materials()->find($this->materialId)->issued_qty);
+    }
+
+    public function test_approve_insufficient_balance_error_uses_batch_fetched_product_code(): void
+    {
+        // 异常路径（D-10 回归）：库存不足 1515 错误消息含商品编码（业务结果不变），
+        // 且取码走循环前批量预取（in 查询）——错误分支不再 Product::find 循环内单查
+        $no = $this->createPick($this->payload(['items' => [
+            ['product_id' => $this->mat->id, 'pick_qty' => 20],
+        ]]));
+        $pick = PickList::where('no', $no)->first();
+        // 草稿创建后库存被消耗至 10（模拟并发消耗），审核期触发 1515 错误分支
+        $balance = InventoryBalance::where('product_id', $this->mat->id)->first();
+        $balance->quantity = 10;
+        $balance->save();
+
+        DB::enableQueryLog();
+        $this->withToken($this->token)->postJson("/api/v1/production/picks/{$pick->id}/approve")
+            ->assertJsonPath('code', 1515)
+            ->assertJsonPath('message', '商品[MAT-001]库存不足');
+        $productQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $q) => str_contains($q['query'], 'from "products"'));
+        // 批量预取契约：商品信息循环前 whereIn 一次取齐（in 批量形态），错误分支 map 取码零额外查询
+        $this->assertCount(1, $productQueries);
+        $this->assertStringContainsString(' in (', $productQueries->first()['query']);
     }
 
     public function test_approve_idempotent_with_1516(): void

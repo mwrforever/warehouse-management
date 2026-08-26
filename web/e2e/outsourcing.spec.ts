@@ -12,19 +12,17 @@
 // 用例串行（后续用例复用 TC-OS-01 建的单据/库存基线）：主数据幂等自建（OS2- 前缀）+ 串行复用；
 //   已审核单据不可删，跨 spec 残留由 production/purchase 用例的 .first() 口径规避（CI migrate:fresh 兜底）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 production.spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 production.spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -668,5 +666,7 @@ test.describe('委外加工模块 E2E（TC-OS-01~04）', () => {
     await expect(page).toHaveURL(/\/production\/outsourcings\?keyword=/)
     const listRow = page.locator('.el-table__row', { hasText: osNo })
     await expect(listRow).toContainText('已关闭')
+    // BF-1 回归：委外页消费 keyword 参数——按单号过滤后列表仅剩目标单（此前不消费参数展示全量列表，定位名存实亡）
+    await expect(page.locator('.el-table__row')).toHaveCount(1)
   })
 })
