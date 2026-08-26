@@ -13,7 +13,6 @@ use App\Models\OutsourcingOrder;
 use App\Models\OutsourcingReceipt;
 use App\Models\OutsourcingReturn;
 use App\Models\ProductionOrder;
-use App\Models\RoutingHeader;
 use App\Models\RoutingNode;
 use App\Models\WorkOrderOperation;
 use App\Models\WorkOrderOperationEdge;
@@ -731,8 +730,15 @@ class OutsourcingService
         if ((int) $op->status === WorkOrderOperation::STATUS_DONE) {
             throw new ProductionException('该工序已完成，不可委外', 422);
         }
-        $routing = RoutingHeader::with('nodes.materials.material', 'nodes.materials.unit')->findOrFail($order->routing_id);
-        $node = $routing->nodes->firstWhere('node_no', $op->node_no);
+        // 委外节点取数改单节点直查（P1-D-2）：不再预载整条路线的全部节点材料明细——点查
+        // uniq_routing_nodes_node_no 索引命中单节点，传输行数从全路线降为单节点材料集；
+        // outputProduct 并入预载（返回值消费，消除原懒加载点查）。
+        // 路由头缺失（外键约束下理论不可达）与原节点缺失统一收敛为 422，与报告 D-2 方案 a 口径一致
+        $node = RoutingNode::query()
+            ->where('routing_id', $order->routing_id)
+            ->where('node_no', $op->node_no)
+            ->with('materials.material', 'materials.unit', 'outputProduct')
+            ->first();
         if (! $node) {
             throw new ProductionException('工艺路线节点不存在', 422);
         }
@@ -778,11 +784,13 @@ class OutsourcingService
         if (! $order->routing_id || ! $op->node_no) {
             throw new ProductionException('该工单没有工艺路线，不可委外', 422);
         }
-        $routing = RoutingHeader::with('nodes.materials.material', 'nodes.materials.unit')->find($order->routing_id);
-        if (! $routing) {
-            throw new ProductionException('工艺路线节点不存在', 422);
-        }
-        $node = $routing->nodes->firstWhere('node_no', $op->node_no);
+        // 同 fromOperation 的 P1-D-2 取数：单节点直查替代全路线预载——调用方仅消费节点材料
+        // 与 output_product_id 列，无需预载 outputProduct 关系
+        $node = RoutingNode::query()
+            ->where('routing_id', $order->routing_id)
+            ->where('node_no', $op->node_no)
+            ->with('materials.material', 'materials.unit')
+            ->first();
         if (! ($node instanceof RoutingNode)) {
             throw new ProductionException('工艺路线节点不存在', 422);
         }
