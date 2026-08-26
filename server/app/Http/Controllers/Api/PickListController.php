@@ -1,36 +1,24 @@
 <?php
 
-// 领料单控制器：草稿 CRUD + from-order 预填 + 审核（核心：事务内锁物料需求行防超领 1513 + 锁余额行防超卖 1515）+ 发料
+// 领料单控制器：分页列表/从工单预填/详情 读取 + 草稿 CRUD/审核/发料 薄壳（写流程全部下沉 PickListService）
 
 namespace App\Http\Controllers\Api;
 
-use App\Exceptions\InventoryException;
-use App\Exceptions\ProductionException;
 use App\Http\Controllers\Controller;
-use App\Models\DocumentSequence;
-use App\Models\InventoryBalance;
+use App\Http\Requests\Production\SavePickListRequest;
 use App\Models\PickList;
 use App\Models\PickListItem;
-use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\ProductionOrderMaterial;
-use App\Services\DocumentSequenceService;
-use App\Services\InventoryService;
+use App\Services\PickListService;
 use App\Support\ApiResponse;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class PickListController extends Controller
 {
     use ApiResponse;
 
-    public function __construct(
-        private InventoryService $inventoryService,
-        private DocumentSequenceService $sequenceService,
-    ) {}
+    public function __construct(private PickListService $pickListService) {}
 
     /** 分页列表：单号/仓库/状态/日期范围 筛选；含工单单号/仓库名/状态与发料标签 */
     public function index(Request $request)
@@ -118,59 +106,9 @@ class PickListController extends Controller
     }
 
     /** 新建草稿：明细非空/重复商品/数量>0 走 422；超需求剩余 1513（草稿期即拦截） */
-    public function store(Request $request)
+    public function store(SavePickListRequest $request)
     {
-        $data = $this->validatePayload($request);
-        // 明细业务校验（422 格式层：空明细/重复商品/数量≤0/仓库库位缺失）
-        if ($fail = $this->validateBusinessItems($data)) {
-            return $fail;
-        }
-        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-            return $this->fail(422, '仓库与库位不能为空');
-        }
-        // 工单状态校验：spec §5.1 生产中→领料（草稿/已下达/已完成/已关闭工单不可领料；1513 领料族码段）
-        $order = ProductionOrder::find($data['order_id']);
-        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
-            return $this->fail(1513, '工单当前状态不可领料');
-        }
-        // 工单物料行一次预取：草稿期剩余校验 + 明细需求快照共用（消除逐商品 2N 查询，P1-4）
-        $materialMap = $this->materialMap((int) $data['order_id']);
-        // 草稿期校验：逐行 ≤ 需求剩余（1513）
-        if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
-            return $this->fail(1513, $msg);
-        }
-
-        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
-        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-        $pick = DB::transaction(function () use ($data, $materialMap) {
-            $pick = $this->sequenceService->nextNoByConfig(
-                DocumentSequence::TYPE_PL,
-                fn (string $no) => PickList::create([
-                    'no' => $no,
-                    'order_id' => $data['order_id'],
-                    'status' => PickList::STATUS_DRAFT,
-                    'issue_status' => PickList::ISSUE_NONE,
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'remark' => $data['remark'] ?? null,
-                ]),
-                // legacyMax 只取当日最大单号一行（orderByDesc+value 单查，P1-5：同日前缀字典序=序号序）
-                fn (string $prefix, string $dateKey) => ($no = PickList::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-            );
-            // 明细行：需求快照 + 本次领用量（需求快照取自预取 map，P1-4）
-            $pick->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
-                'pick_qty' => $i['pick_qty'],
-                'issued_qty' => 0,
-            ], $data['items']));
-
-            return $pick;
-        }, 2);
-
-        // 单据创建审计日志（事务提交后记）：单号 + 来源工单 + 操作人
-        Log::info('领料单创建成功', ['no' => $pick->no, 'order_id' => $pick->order_id, 'created_by' => auth()->id()]);
+        $pick = $this->pickListService->create($request->validated());
 
         return $this->ok(['no' => $pick->no]);
     }
@@ -207,50 +145,9 @@ class PickListController extends Controller
     }
 
     /** 更新草稿：仅草稿（1514）；校验同 store；事务内锁行复查防并发 */
-    public function update(Request $request, PickList $pick)
+    public function update(SavePickListRequest $request, PickList $pick)
     {
-        if ($pick->status !== PickList::STATUS_DRAFT) {
-            return $this->fail(1514, '已审核单据不可修改');
-        }
-        $data = $this->validatePayload($request);
-        if ($fail = $this->validateBusinessItems($data)) {
-            return $fail;
-        }
-        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-            return $this->fail(422, '仓库与库位不能为空');
-        }
-        // 工单状态校验：spec §5.1 生产中→领料（同 store 口径）
-        $order = ProductionOrder::find($data['order_id']);
-        if (! $order || $order->status !== ProductionOrder::STATUS_PRODUCING) {
-            return $this->fail(1513, '工单当前状态不可领料');
-        }
-        // 工单物料行一次预取（同 store 口径，P1-4）
-        $materialMap = $this->materialMap((int) $data['order_id']);
-        if ($msg = $this->validateRemaining($data['items'], $materialMap)) {
-            return $this->fail(1513, $msg);
-        }
-
-        DB::transaction(function () use ($pick, $data, $materialMap) {
-            // 锁领料单行复查状态：与审核并发时防止改到正在审核的单（幂等 1514）
-            $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PickList::STATUS_DRAFT) {
-                throw new ProductionException('已审核单据不可修改', 1514);
-            }
-            $locked->update([
-                'order_id' => $data['order_id'],
-                'warehouse_id' => $data['warehouse_id'],
-                'location_id' => $data['location_id'],
-                'remark' => $data['remark'] ?? $locked->remark,
-            ]);
-            // 明细全量替换（草稿单无流水引用，直接重建；需求快照取自预取 map，P1-4）
-            $locked->items()->delete();
-            $locked->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'required_qty' => $this->requiredQty($materialMap, (int) $i['product_id']),
-                'pick_qty' => $i['pick_qty'],
-                'issued_qty' => 0,
-            ], $data['items']));
-        });
+        $this->pickListService->update($pick, $request->validated());
 
         return $this->ok();
     }
@@ -258,20 +155,7 @@ class PickListController extends Controller
     /** 删除草稿：仅草稿（1514）；事务内锁行复查防并发 */
     public function destroy(PickList $pick)
     {
-        if ($pick->status !== PickList::STATUS_DRAFT) {
-            return $this->fail(1514, '已审核单据不可删除');
-        }
-        DB::transaction(function () use ($pick) {
-            // 锁领料单行复查状态（幂等 1514）
-            $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PickList::STATUS_DRAFT) {
-                throw new ProductionException('已审核单据不可删除', 1514);
-            }
-            $locked->delete();
-        });
-
-        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
-        Log::info('领料单草稿删除', ['no' => $pick->no, 'operator' => auth()->id()]);
+        $this->pickListService->delete($pick);
 
         return $this->ok();
     }
@@ -282,208 +166,12 @@ class PickListController extends Controller
      */
     public function approve(PickList $pick)
     {
-        try {
-            $result = null;
-            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
-            DB::transaction(function () use ($pick, &$result) {
-                // 锁领料单行：同一单据重复审核在此判重（幂等 1516）
-                $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === PickList::STATUS_APPROVED) {
-                    throw new ProductionException('该领料单已审核', 1516);
-                }
-                // 锁工单行校验状态：spec §5.1 生产中→领料；锁序 单据行→工单行→物料行→余额行
-                // （全局无「物料→工单」反向路径，与委外发出/成品入库的 单据→工单 锁序一致，无 ABBA 环）
-                $order = ProductionOrder::whereKey($locked->order_id)->lockForUpdate()->firstOrFail();
-                if ($order->status !== ProductionOrder::STATUS_PRODUCING) {
-                    throw new ProductionException('工单当前状态不可领料', 1516);
-                }
-                $movements = [];
-                $issueMap = []; // [material_id => 本次领用累计] 待回写
-                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：物料需求行/余额行按唯一索引序一次锁定，
-                // 循环内查 map——明细 N 行时查询次数从 ~2N 降为常数；批量锁按索引序获取与逐行等价，
-                // 且消除「两单明细顺序相反」时的交叉锁窗口（同索引序获取，无 ABBA 新方向）
-                $productIds = $locked->items->pluck('product_id');
-                /** @var Collection<int, ProductionOrderMaterial> $pmMap 已锁定的物料需求行（回写复用，免二次查询） */
-                $pmMap = ProductionOrderMaterial::query()
-                    ->where('order_id', $locked->order_id)
-                    ->whereIn('material_id', $productIds)
-                    ->lockForUpdate()
-                    ->get()
-                    ->keyBy('material_id');
-                /** @var Collection<int, InventoryBalance> $balanceMap 已锁定的余额行（防超卖校验复用） */
-                $balanceMap = InventoryBalance::query()
-                    ->whereIn('product_id', $productIds)
-                    ->where('warehouse_id', $locked->warehouse_id)
-                    ->where('location_id', $locked->location_id)
-                    ->lockForUpdate()
-                    ->get()
-                    ->keyBy('product_id');
-                /** @var Collection<int, Product> $productMap 商品编码映射（1515 错误消息取码用；
-                    循环前批量预取，错误分支不再 Product::find 循环内单查） */
-                $productMap = Product::query()->whereIn('id', $productIds)->get()->keyBy('id');
-                /** @var PickListItem $item */
-                foreach ($locked->items as $item) {
-                    // 复核物料需求行：防并发超领（并发审核同一物料已在上方批量锁定串行化）
-                    $pm = $pmMap->get($item->product_id);
-                    if (! $pm) {
-                        throw new ProductionException('领料数量超过需求数量', 1513);
-                    }
-                    // 剩余 = 需求 - 已领；本次超剩余 → 1513 整体回滚（防超领）
-                    $remaining = bcsub((string) $pm->required_qty, (string) $pm->issued_qty, 2);
-                    if (bccomp((string) $item->pick_qty, $remaining, 2) > 0) {
-                        throw new ProductionException('领料数量超过需求数量', 1513);
-                    }
-                    $issueMap[$item->product_id] = bcadd((string) ($issueMap[$item->product_id] ?? '0'), (string) $item->pick_qty, 2);
-                    // 防超卖：余额行已批量锁定，校验余额充足（并发审核同一商品在此串行化；消息含商品编码与精确库存快照）
-                    $balance = $balanceMap->get($item->product_id);
-                    $current = $balance ? (string) $balance->quantity : '0';
-                    if (bccomp((string) $item->pick_qty, $current, 2) > 0) {
-                        // 1515 消息契约不含库存快照，仅含商品编码（E2E 断言 MAT-001）
-                        // ?? 左值天然 null 安全（map 未命中时回退 #id 展示），nullsafe 显式多余故用 ->
-                        $code = $productMap->get($item->product_id)->code ?? ('#'.$item->product_id);
-                        throw new ProductionException("商品[{$code}]库存不足", 1515);
-                    }
-                    $movements[] = [
-                        'product_id' => $item->product_id,
-                        'warehouse_id' => $locked->warehouse_id,
-                        'location_id' => $locked->location_id,
-                        'direction' => -1,
-                        'quantity' => $item->pick_qty,
-                        'source_type' => 'pick',
-                        'source_id' => $locked->id,
-                        'source_no' => $locked->no,
-                        'remark' => '生产领料',
-                    ];
-                }
-                // 统一引擎写流水+扣余额（同事务双写；余额行已被本事务锁定，引擎内重复加锁幂等）
-                $this->inventoryService->apply($movements, auth()->id());
-                // 回写工单物料需求 issued_qty（bcmath 累加）：复用第一循环已锁定的行对象——
-                // 行已被本事务锁定且期间无人可改，二次查询纯属多余（N 条明细省 N 次查询）
-                foreach ($issueMap as $materialId => $qty) {
-                    $pm = $pmMap[$materialId];
-                    $pm->issued_qty = bcadd((string) $pm->issued_qty, $qty, 2);
-                    $pm->save();
-                }
-                // 置已审核 + 审核人/时间
-                $locked->status = PickList::STATUS_APPROVED;
-                $locked->operator = auth()->user()->name ?? '';
-                $locked->approved_at = now();
-                $locked->save();
-                $result = ['no' => $locked->no];
-            }, 2);
-        } catch (InventoryException $e) {
-            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）；走到此分支说明预校验与引擎
-            // 判定不一致，记 warn 便于排查数据不一致
-            Log::warning('领料审核被余额引擎兜底拒绝（预校验未拦截，疑似数据不一致）', [
-                'no' => $pick->no, 'reason' => $e->getMessage(),
-            ]);
-
-            return $this->fail(1515, '库存不足，领料被拒绝');
-        }
-
-        // 状态变更审计日志（事务提交后记）：审核即材料扣减出库 + 工单已领量回写，属库存关键节点
-        Log::info('领料单审核通过', ['no' => $result['no'], 'order_id' => $pick->order_id, 'operator' => auth()->id()]);
-
-        return $this->ok($result);
+        return $this->ok($this->pickListService->approve($pick));
     }
 
     /** 发料：仅已审核可发（422）；V1 一次发完——issue_status 置「全部发料」，明细行 issued_qty 回写 */
     public function issue(PickList $pick)
     {
-        if ($pick->status !== PickList::STATUS_APPROVED) {
-            return $this->fail(422, '请先审核领料单');
-        }
-        DB::transaction(function () use ($pick) {
-            // 锁领料单行复查状态（并发审核/发料串行化）
-            $locked = PickList::whereKey($pick->id)->lockForUpdate()->firstOrFail();
-            // 幂等判重移入事务：锁行后复查 issue_status，防并发双请求同时越过外部判重
-            // （结果写入相同故无正确性影响，此处消除竞态窗口）
-            if ($locked->issue_status === PickList::ISSUE_ALL) {
-                return;
-            }
-            if ($locked->status !== PickList::STATUS_APPROVED) {
-                throw new ProductionException('请先审核领料单', 422);
-            }
-            $locked->issue_status = PickList::ISSUE_ALL;
-            $locked->save();
-            // 明细行已发量 = 本次领用（一次发完语义）
-            foreach ($locked->items as $item) {
-                $item->issued_qty = $item->pick_qty;
-                $item->save();
-            }
-        });
-
-        // 状态变更审计日志（事务提交后记）：发料即领料单实物出库确认（V1 一次发完）
-        Log::info('领料单发料完成', ['no' => $pick->no, 'operator' => auth()->id()]);
-
-        return $this->ok(['issue_status' => PickList::ISSUE_LABELS[PickList::ISSUE_ALL]]);
-    }
-
-    // 载荷格式校验（422 仅格式层）；业务码在方法内检查
-    private function validatePayload(Request $request): array
-    {
-        return $request->validate([
-            'order_id' => 'required|integer|exists:production_orders,id',
-            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
-            'location_id' => 'nullable|integer|exists:locations,id',
-            'remark' => 'nullable|string|max:200',
-            'items' => 'array',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            // 数量限两位小数（正则防科学计数法；负值形态放行到方法内 422）
-            'items.*.pick_qty' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
-        ]);
-    }
-
-    // 明细业务校验（store/update 共用）：空明细/数量≤0/重复商品 → 422（格式层；spec 码段满）
-    private function validateBusinessItems(array $data): ?JsonResponse
-    {
-        $items = $data['items'] ?? [];
-        if (empty($items)) {
-            return $this->fail(422, '请至少添加一条明细');
-        }
-        $seen = [];
-        foreach ($items as $item) {
-            // 数量正负校验走 bccomp（D-3 铁律：禁浮点参与数量比较；正则已保证入参为两位小数十进制）
-            if (bccomp((string) $item['pick_qty'], '0', 2) <= 0) {
-                return $this->fail(422, '领料数量必须大于 0');
-            }
-            if (isset($seen[$item['product_id']])) {
-                return $this->fail(422, '明细存在重复商品');
-            }
-            $seen[$item['product_id']] = true;
-        }
-
-        return null;
-    }
-
-    // 工单物料行预取（P1-4）：store/update 的草稿期校验与明细需求快照共用一次查询，消除逐商品 N+1
-    private function materialMap(int $orderId): Collection
-    {
-        return ProductionOrderMaterial::where('order_id', $orderId)->get()->keyBy('material_id');
-    }
-
-    // 草稿期剩余量校验：逐行 ≤ 需求剩余（1513），返回错误文案或 null（物料行取自预取 map）
-    private function validateRemaining(array $items, Collection $materialMap): ?string
-    {
-        foreach ($items as $item) {
-            $pm = $materialMap->get($item['product_id']);
-            if (! $pm) {
-                return '领料数量超过需求数量';
-            }
-            $remaining = bcsub((string) $pm->required_qty, (string) $pm->issued_qty, 2);
-            if (bccomp((string) $item['pick_qty'], $remaining, 2) > 0) {
-                return '领料数量超过需求数量';
-            }
-        }
-
-        return null;
-    }
-
-    // 物料需求数量（明细行快照：生成时点工单物料需求；取自预取 map）
-    private function requiredQty(Collection $materialMap, int $productId): string
-    {
-        $pm = $materialMap->get($productId);
-
-        return $pm ? (string) $pm->required_qty : '0';
+        return $this->ok($this->pickListService->issue($pick));
     }
 }
