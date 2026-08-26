@@ -32,8 +32,12 @@ http.interceptors.response.use(
     return res
   },
   (err) => {
-    // HTTP 层错误：401 跳登录页（登录页自身探测会话的 401 不跳转，防重载循环；会话失效后服务端吊销 cookie 即完成登出）
-    if (err.response?.status === 401 && window.location.pathname !== '/login') {
+    // HTTP 层错误：401 未认证与 419 CSRF mismatch 均跳登录页（419=会话已失效但 CSRF 校验先行失败，
+    // 继续停留只会反复失败；登录页自身探测会话的 401/419 不跳转，防重载循环）
+    if (
+      (err.response?.status === 401 || err.response?.status === 419) &&
+      window.location.pathname !== '/login'
+    ) {
       window.location.href = '/login'
     }
     // 其余错误：解出统一响应体中的后端 message 抛出（如 422 重复用户名 1002、403 无权限操作），
