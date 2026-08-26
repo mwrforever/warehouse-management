@@ -1,4 +1,4 @@
-// 统计报表 API 封装：4 类只读聚合接口（金额/数量/比率均为后端输出的字符串，前端仅千分位格式化）
+// 统计报表 API 封装：4 类只读聚合接口（数量/比率为后端字符串；金额字段为整数分——R2 契约，展示统一 formatYuan）
 import { http } from './http'
 
 export type ReportGroupBy = 'category' | 'warehouse' | 'type'
@@ -8,13 +8,13 @@ export interface InventorySummaryItem {
   group_name: string
   quantity_total: string
   product_count: number
-  amount_total: string | null
+  amount_total: number | null
 }
 
 export interface InventorySummaryTotal {
   quantity_total: string
   product_count: number
-  amount_total: string | null
+  amount_total: number | null
 }
 
 export interface MovementsSummaryItem {
@@ -66,15 +66,15 @@ export interface ProductionTotal {
 
 export interface PurchaseSalesItem {
   period: string
-  purchase_amount: string
-  sales_amount: string
+  purchase_amount: number
+  sales_amount: number
   purchase_qty: string
   sales_qty: string
 }
 
 export interface PurchaseSalesTotal {
-  purchase_amount: string
-  sales_amount: string
+  purchase_amount: number
+  sales_amount: number
   purchase_qty: string
   sales_qty: string
 }
@@ -108,7 +108,7 @@ export const reportApi = {
     const { data } = await http.get('/reports/production', { params })
     return data.data as { items: ProductionStatItem[]; totals: ProductionTotal; truncated: boolean }
   },
-  // 采购销售汇总：已审核单据金额/数量按审核时间分桶（金额已转元）
+  // 采购销售汇总：已审核单据金额/数量按审核时间分桶（金额整数分）
   async purchaseSales(params: {
     date_from: string
     date_to: string

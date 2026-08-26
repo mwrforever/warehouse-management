@@ -19,7 +19,7 @@ import { useListQuery } from '../../composables/useListQuery'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
-import { formatThousand, formatYuan } from '../../utils/format'
+import { fenToYuan, formatYuan, multiplyCents, yuanToFen } from '../../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -100,19 +100,16 @@ function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
 }
 
-// 明细行金额（元，实时计算：数量×单价，保留 2 位小数）
-function lineAmountYuan(item: { quantity: number; price: number }): number {
-  return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
+// 行金额实时计算（元展示）：元价先精确转分，再经 multiplyCents 求积（与后端 Cents::multiply 同口径 half-up），禁浮点乘法
+function rowAmount(item: { quantity: number; price: number }): string {
+  return formatYuan(multiplyCents(item.quantity, yuanToFen(item.price)))
 }
 
-// 明细合计（元，实时计算；千分位展示统一走 utils/format——D-16）
-function totalYuan(): string {
-  return formatThousand(form.items.reduce((sum, i) => sum + lineAmountYuan(i), 0))
-}
-
-// 行金额（分→元展示，仅读列）
-function rowAmountFen(item: { quantity: number; price: number }): string {
-  return formatYuan(Math.round(Number(item.quantity) * Number(item.price) * 100))
+// 明细合计（元展示）：Σ 行金额按分整数累加（无精度损失），统一 formatYuan 分转元展示
+function totalAmount(): string {
+  return formatYuan(
+    form.items.reduce((sum, i) => sum + multiplyCents(i.quantity, yuanToFen(i.price)), 0),
+  )
 }
 
 // 从订单生成：选订单 → 预填供应商+明细（剩余量）
@@ -126,7 +123,8 @@ async function onOrderChange(orderId: number | undefined) {
     form.items = data.items.map((i: FromOrderItem) => ({
       product_id: i.product_id,
       quantity: Number(i.remaining_qty),
-      price: Number(i.price) / 100,
+      // 订单价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+      price: fenToYuan(i.price),
       order_item_id: i.order_item_id,
     }))
   } catch (e) {
@@ -238,7 +236,8 @@ async function openEdit(row: PurchaseInboundItem) {
       items: d.items.map((i) => ({
         product_id: i.product_id,
         quantity: Number(i.quantity),
-        price: Number(i.price) / 100,
+        // 详情价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+        price: fenToYuan(i.price),
         order_item_id: i.order_item_id ?? undefined,
       })),
     })
@@ -313,7 +312,8 @@ async function save() {
     items: keepRows.map((i) => ({
       product_id: i.product_id!,
       quantity: i.quantity,
-      price: Math.round(Number(i.price) * 100),
+      // 价格 元 → 分：yuanToFen 字符串精确换算（满足后端整数分校验），禁 Math.round(元×100) 浮点路径
+      price: yuanToFen(i.price),
       ...(i.order_item_id ? { order_item_id: i.order_item_id } : {}),
     })),
   }
@@ -625,7 +625,7 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="金额" width="130" align="right">
             <template #default="{ row }">
-              <span class="amount-cell">¥{{ rowAmountFen(row) }}</span>
+              <span class="amount-cell">¥{{ rowAmount(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column v-if="mode === 'standalone'" label="" width="60">
@@ -638,7 +638,7 @@ onMounted(async () => {
           <el-button link type="primary" @click="addRow">+ 添加明细行</el-button>
         </div>
         <div class="total-bar">
-          合计：<span class="total-amount">¥{{ totalYuan() }}</span>
+          合计：<span class="total-amount">¥{{ totalAmount() }}</span>
         </div>
       </el-form>
       <template #footer>

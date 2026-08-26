@@ -1,9 +1,9 @@
-// 仪表盘 API 封装：4 个只读聚合接口（无参数；金额/数量/进度均为后端输出的字符串，前端仅格式化）
+// 仪表盘 API 封装：4 个只读聚合接口（无参数；数量/进度为后端字符串，inventory_value 为整数分——R2 契约）
 import { http } from './http'
 
 export interface DashboardSummary {
   inventory_total_qty: string
-  inventory_value: string | null
+  inventory_value: number | null
   today_inbound_qty: string
   today_outbound_qty: string
   pending_approvals: number

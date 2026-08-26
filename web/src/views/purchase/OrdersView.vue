@@ -14,7 +14,13 @@ import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
-import { formatThousand, formatYuan, toLocalDateString } from '../../utils/format'
+import {
+  fenToYuan,
+  formatYuan,
+  multiplyCents,
+  toLocalDateString,
+  yuanToFen,
+} from '../../utils/format'
 
 const auth = useAuthStore()
 const saving = ref(false)
@@ -52,18 +58,16 @@ function statusTagType(status: number) {
   return 'danger'
 }
 
-// 明细合计（元，实时计算：Σ 数量×单价元）
-function lineAmountYuan(item: { quantity: number; price: number }): number {
-  return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
-}
-function totalYuan(): string {
-  // 合计展示千分位统一走 utils/format（D-16）；行金额折算（lineAmountYuan）属计算逻辑保持本地
-  return formatThousand(form.items.reduce((sum, i) => sum + lineAmountYuan(i), 0))
+// 行金额实时计算（元展示）：元价先精确转分，再经 multiplyCents 求积（与后端 Cents::multiply 同口径 half-up），禁浮点乘法
+function rowAmount(item: { quantity: number; price: number }): string {
+  return formatYuan(multiplyCents(item.quantity, yuanToFen(item.price)))
 }
 
-// 行金额（分→元展示，仅读列）
-function rowAmountFen(item: { product_id?: number; quantity: number; price: number }): string {
-  return formatYuan(Math.round(Number(item.quantity) * Number(item.price) * 100))
+// 明细合计（元展示）：Σ 行金额按分整数累加（无精度损失），统一 formatYuan 分转元展示
+function totalAmount(): string {
+  return formatYuan(
+    form.items.reduce((sum, i) => sum + multiplyCents(i.quantity, yuanToFen(i.price)), 0),
+  )
 }
 
 // 添加明细行
@@ -131,7 +135,8 @@ async function openEdit(row: PurchaseOrderItem) {
       items: d.items.map((i) => ({
         product_id: i.product_id,
         quantity: Number(i.quantity),
-        price: Number(i.price) / 100,
+        // 详情价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+        price: fenToYuan(i.price),
       })),
     })
     dialogVisible.value = true
@@ -161,7 +166,7 @@ async function save() {
     ElMessage.warning('价格不能为负数')
     return
   }
-  // 载荷：价格 元 → 分（×100 取整）；数量原样（2 位小数）
+  // 载荷：价格 元 → 分（yuanToFen 字符串精确换算，满足后端整数分校验）；数量原样（2 位小数）
   const payload = {
     supplier_id: form.supplier_id!,
     order_date: form.order_date,
@@ -170,7 +175,7 @@ async function save() {
     items: form.items.map((i) => ({
       product_id: i.product_id!,
       quantity: i.quantity,
-      price: Math.round(Number(i.price) * 100),
+      price: yuanToFen(i.price),
     })),
   }
   saving.value = true
@@ -463,7 +468,7 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="金额" width="130" align="right">
             <template #default="{ row }">
-              <span class="amount-cell">¥{{ rowAmountFen(row) }}</span>
+              <span class="amount-cell">¥{{ rowAmount(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="" width="60">
@@ -476,7 +481,7 @@ onMounted(async () => {
           <el-button link type="primary" @click="addRow">+ 添加明细行</el-button>
         </div>
         <div class="total-bar">
-          合计：<span class="total-amount">¥{{ totalYuan() }}</span>
+          合计：<span class="total-amount">¥{{ totalAmount() }}</span>
         </div>
       </el-form>
       <template #footer>

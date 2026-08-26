@@ -20,16 +20,16 @@
     <div class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-label">采购金额（元）</div>
-        <div class="kpi-value font-code">{{ formatThousand(totals.purchase_amount) }}</div>
+        <div class="kpi-value font-code">{{ formatYuan(totals.purchase_amount) }}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">销售金额（元）</div>
-        <div class="kpi-value font-code">{{ formatThousand(totals.sales_amount) }}</div>
+        <div class="kpi-value font-code">{{ formatYuan(totals.sales_amount) }}</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">差额（销售-采购）</div>
-        <div class="kpi-value font-code" :class="{ negative: Number(diff) < 0 }">
-          {{ formatThousand(diff) }}
+        <div class="kpi-value font-code" :class="{ negative: diff < 0 }">
+          {{ formatYuan(diff) }}
         </div>
       </div>
     </div>
@@ -45,12 +45,12 @@
         <el-table-column prop="period" label="周期" min-width="140" />
         <el-table-column label="采购金额（元）" min-width="150" align="right">
           <template #default="{ row }">
-            <span class="font-code">{{ formatThousand(row.purchase_amount) }}</span>
+            <span class="font-code">{{ formatYuan(row.purchase_amount) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="销售金额（元）" min-width="150" align="right">
           <template #default="{ row }">
-            <span class="font-code">{{ formatThousand(row.sales_amount) }}</span>
+            <span class="font-code">{{ formatYuan(row.sales_amount) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="采购数量" min-width="120" align="right">
@@ -69,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-// 采购销售汇总：金额已后端分转元；差额=销售-采购（可负红色）；分组柱状图双系列（采购蓝/销售绿，值标签可见）
+// 采购销售汇总：金额为后端整数分（R2 契约），展示统一 formatYuan 分转元；差额=销售-采购（分整数相减可负红色）；分组柱状图双系列（采购蓝/销售绿，值标签可见）
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { EChartsOption } from 'echarts'
@@ -80,7 +80,7 @@ import {
   type ReportGranularity,
 } from '../../api/report'
 import ReportChart from '../../components/ReportChart.vue'
-import { formatThousand, toLocalDateString } from '../../utils/format'
+import { fenToYuan, formatThousand, formatYuan, toLocalDateString } from '../../utils/format'
 
 const dateRange = ref<[string, string]>([
   toLocalDateString(new Date(Date.now() - 29 * 86400000)),
@@ -89,8 +89,8 @@ const dateRange = ref<[string, string]>([
 const granularity = ref<ReportGranularity>('day')
 const items = ref<PurchaseSalesItem[]>([])
 const totals = ref<PurchaseSalesTotal>({
-  purchase_amount: '0',
-  sales_amount: '0',
+  purchase_amount: 0,
+  sales_amount: 0,
   purchase_qty: '0',
   sales_qty: '0',
 })
@@ -102,10 +102,8 @@ const dateShortcuts = [
   { text: '近 30 天', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] },
 ]
 
-// 差额 = 销售金额 - 采购金额（可负，红色展示；展示格式化在模板统一走 formatThousand，本地不再预格式化——D-16）
-const diff = computed(
-  () => Number(totals.value.sales_amount) - Number(totals.value.purchase_amount),
-)
+// 差额 = 销售金额 - 采购金额（分整数相减精确无误差；可负红色；展示统一走 formatYuan——D-16）
+const diff = computed(() => totals.value.sales_amount - totals.value.purchase_amount)
 
 // 分组柱状图：采购蓝 / 销售绿，值标签默认可见（chart 域 AAA 可访问性要求）
 const chartOption = computed<EChartsOption>(() => ({
@@ -118,14 +116,15 @@ const chartOption = computed<EChartsOption>(() => ({
     {
       name: '采购金额',
       type: 'bar',
-      data: items.value.map((i) => Number(i.purchase_amount)),
+      // 图表按元口径取值（与坐标轴/值标签的金额（元）语义一致）：分 → 元精确换算
+      data: items.value.map((i) => fenToYuan(i.purchase_amount)),
       itemStyle: { color: '#3B82F6' },
       label: { show: true, fontSize: 10 },
     },
     {
       name: '销售金额',
       type: 'bar',
-      data: items.value.map((i) => Number(i.sales_amount)),
+      data: items.value.map((i) => fenToYuan(i.sales_amount)),
       itemStyle: { color: '#059669' },
       label: { show: true, fontSize: 10 },
     },

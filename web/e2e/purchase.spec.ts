@@ -424,7 +424,7 @@ test.describe('采购管理模块', () => {
     })
     expect(neg.code).toBe(1311)
     expect(neg.message).toBe('价格不能为负数')
-    // 小数价格无误差：0.10×3 → ¥0.30（price=10 分，total_amount 分单位 → 30.00）
+    // 小数价格无误差：0.10×3 → ¥0.30（price=10 分，total_amount 为整数分 → 30）
     const gift = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supplierId,
       order_date: '2026-08-12',
@@ -434,7 +434,7 @@ test.describe('采购管理模块', () => {
     const giftList = await apiGet(page, '/api/v1/purchase/orders', {
       keyword: (gift.data as { no: string }).no,
     })
-    expect(giftList.items[0].total_amount).toBe('30.00')
+    expect(giftList.items[0].total_amount).toBe(30)
     // 空明细双端拦截 → 1301
     const empty = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supplierId,

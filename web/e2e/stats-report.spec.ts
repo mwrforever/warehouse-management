@@ -309,7 +309,7 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
 
     const today = todayStr()
     const firstOfMonth = `${today.slice(0, 7)}-01`
-    // 1. 页面选本月、粒度「按月」：本月行 purchase_amount = pa/100 元、sales_amount = sa/100 元
+    // 1. 页面选本月、粒度「按月」：报表 totals 金额为整数分（R2 契约），与列表累加分值精确相等
     await page.goto('/reports/purchase-sales')
     await clickRadio(page, '按月')
     const rep = await apiGet(page, '/api/v1/reports/purchase-sales', {
@@ -317,11 +317,11 @@ test.describe('统计报表模块 E2E（TC-RPT-01~06）', () => {
       date_to: today,
       granularity: 'month',
     })
-    // 本月行可能因审核时间跨月不存在 → 用 totals 断言（分转元无误差：两位小数）
-    expect(Number(rep.totals.purchase_amount)).toBeCloseTo(pa / 100, 2)
-    expect(Number(rep.totals.sales_amount)).toBeCloseTo(sa / 100, 2)
-    // 2. 差额 KPI = 销售-采购（页面文本，千分位；可为负红色）
-    const diffText = (sa / 100 - pa / 100).toFixed(2)
+    // 本月行可能因审核时间跨月不存在 → 用 totals 断言（整数分无舍入，可直接全等）
+    expect(rep.totals.purchase_amount).toBe(pa)
+    expect(rep.totals.sales_amount).toBe(sa)
+    // 2. 差额 KPI = 销售-采购（分→元两位小数展示，千分位；可为负红色）
+    const diffText = ((sa - pa) / 100).toFixed(2)
     expect(page.locator('.kpi-card').nth(2)).toContainText(thousand(diffText))
     // 3. 切粒度「按日」：totals 不变（月度粒度聚合不改变全区间合计）
     const repDay = await apiGet(page, '/api/v1/reports/purchase-sales', {

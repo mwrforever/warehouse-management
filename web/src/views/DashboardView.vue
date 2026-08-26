@@ -32,9 +32,7 @@
           <div class="kpi-label">库存总量</div>
           <div ref="kpiVal1" class="kpi-value num">0</div>
           <div v-if="summary.data.inventory_value === null" class="kpi-sub">未启用成本核算</div>
-          <div v-else class="kpi-sub">
-            库存总值 ¥{{ formatThousand(summary.data.inventory_value) }}
-          </div>
+          <div v-else class="kpi-sub">库存总值 ¥{{ formatYuan(summary.data.inventory_value) }}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-top">
@@ -197,7 +195,7 @@ import {
   type WorkOrderProgressItem,
 } from '../api/dashboard'
 import { useAuthStore } from '../stores/auth'
-import { formatThousand } from '../utils/format'
+import { formatThousand, formatYuan } from '../utils/format'
 
 const auth = useAuthStore()
 const router = useRouter()
