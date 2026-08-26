@@ -1,18 +1,20 @@
 <?php
 
-// 商品分类控制器：树形列表 + CRUD + 删除保护（子分类/被商品引用）
+// 商品分类控制器：树形列表 读取 + CRUD 薄壳（写流程全部下沉 CategoryService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Master\SaveCategoryRequest;
 use App\Models\Category;
-use App\Models\Product;
+use App\Services\CategoryService;
 use App\Support\ApiResponse;
-use Illuminate\Http\Request;
 
 class CategoryController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(private CategoryService $categoryService) {}
 
     /** 树形列表：顶级分类 + 各自 children（全部层级，管理页直接渲染） */
     public function index()
@@ -45,64 +47,17 @@ class CategoryController extends Controller
         return $node;
     }
 
-    /** 新建分类：最多两级（parent 必须是顶级或空，否则 1124） */
-    public function store(Request $request)
+    /** 新建分类：最多两级（父级必须是顶级或空，否则 1124） */
+    public function store(SaveCategoryRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'parent_id' => 'nullable|integer|min:0',
-            'sort' => 'nullable|integer',
-            'status' => 'nullable|in:0,1',
-        ]);
-
-        $parentId = (int) ($data['parent_id'] ?? 0);
-        // 父级存在性 + 两级限制：父级必须是顶级分类
-        if ($parentId > 0) {
-            $parent = Category::find($parentId);
-            if (! $parent || $parent->parent_id !== 0) {
-                return $this->fail(1124, '分类最多支持两级');
-            }
-        }
-
-        $category = Category::create([
-            'name' => $data['name'], 'parent_id' => $parentId,
-            'sort' => $data['sort'] ?? 0, 'status' => $data['status'] ?? Category::STATUS_ENABLED,
-        ]);
-
-        return $this->ok(['id' => $category->id]);
+        // 写流程下沉 CategoryService（两级限制/防环/删除保护业务码 1124/1101/1102 由其抛出）
+        return $this->ok(['id' => $this->categoryService->create($request->validated())->id]);
     }
 
     /** 更新分类：同名两级限制 + 防移动到自己子级下（防环） */
-    public function update(Request $request, Category $category)
+    public function update(SaveCategoryRequest $request, Category $category)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'parent_id' => 'nullable|integer|min:0',
-            'sort' => 'nullable|integer',
-            'status' => 'nullable|in:0,1',
-        ]);
-
-        $parentId = (int) ($data['parent_id'] ?? 0);
-        if ($parentId > 0) {
-            // 含子分类的分类只能保持顶级：移动会使子分类成为第三级，违反「分类最多两级」1124
-            if ($category->children()->exists()) {
-                return $this->fail(1124, '分类最多支持两级');
-            }
-            // 防环：不能挂到自身或自身子分类下
-            $hasSelfDescendant = Category::where('parent_id', $category->id)->where('id', $parentId)->exists();
-            if ($parentId === $category->id || $hasSelfDescendant) {
-                return $this->fail(1124, '不能将分类移动到自身或子分类下');
-            }
-            $parent = Category::find($parentId);
-            if (! $parent || $parent->parent_id !== 0) {
-                return $this->fail(1124, '分类最多支持两级');
-            }
-        }
-
-        $category->update([
-            'name' => $data['name'], 'parent_id' => $parentId,
-            'sort' => $data['sort'] ?? $category->sort, 'status' => $data['status'] ?? $category->status,
-        ]);
+        $this->categoryService->update($category, $request->validated());
 
         return $this->ok();
     }
@@ -110,13 +65,7 @@ class CategoryController extends Controller
     /** 删除分类：含子分类 1101；被商品引用 1102 */
     public function destroy(Category $category)
     {
-        if (Category::where('parent_id', $category->id)->exists()) {
-            return $this->fail(1101, '存在子分类，不可删除');
-        }
-        if (Product::where('category_id', $category->id)->exists()) {
-            return $this->fail(1102, '分类已被商品使用，不可删除');
-        }
-        $category->delete();
+        $this->categoryService->delete($category);
 
         return $this->ok();
     }

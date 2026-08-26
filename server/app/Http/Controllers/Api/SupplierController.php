@@ -1,18 +1,21 @@
 <?php
 
-// 供应商控制器：CRUD + 搜索 + 编码唯一 + 被采购单据引用保护
+// 供应商控制器：分页搜索 读取 + CRUD 薄壳（写流程全部下沉 SupplierService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Master\SaveSupplierRequest;
 use App\Models\Supplier;
+use App\Services\SupplierService;
 use App\Support\ApiResponse;
-use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
 
 class SupplierController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(private SupplierService $supplierService) {}
 
     /** 分页列表：名称/编码/联系人模糊搜索 + 状态过滤 */
     public function index(Request $request)
@@ -38,49 +41,16 @@ class SupplierController extends Controller
     }
 
     /** 新建供应商：编码重复 1108 */
-    public function store(Request $request)
+    public function store(SaveSupplierRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:100',
-            'code' => 'required|string|max:50',
-            'contact' => 'nullable|string|max:50',
-            'phone' => 'nullable|string|max:30',
-            'address' => 'nullable|string',
-            'remark' => 'nullable|string',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Supplier::where('code', $data['code'])->exists()) {
-            return $this->fail(1108, '供应商编码已存在');
-        }
-        $supplier = Supplier::create([
-            'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? null,
-            'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
-            'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? Supplier::STATUS_ENABLED,
-        ]);
-
-        return $this->ok(['id' => $supplier->id]);
+        // 写流程下沉 SupplierService（编码唯一 1108、删除引用保护 1109 由其抛出）
+        return $this->ok(['id' => $this->supplierService->create($request->validated())->id]);
     }
 
     /** 更新供应商：编码唯一（排除自身） */
-    public function update(Request $request, Supplier $supplier)
+    public function update(SaveSupplierRequest $request, Supplier $supplier)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:100',
-            'code' => 'required|string|max:50',
-            'contact' => 'nullable|string|max:50',
-            'phone' => 'nullable|string|max:30',
-            'address' => 'nullable|string',
-            'remark' => 'nullable|string',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Supplier::where('code', $data['code'])->where('id', '!=', $supplier->id)->exists()) {
-            return $this->fail(1108, '供应商编码已存在');
-        }
-        $supplier->update([
-            'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? $supplier->contact,
-            'phone' => $data['phone'] ?? $supplier->phone, 'address' => $data['address'] ?? $supplier->address,
-            'remark' => $data['remark'] ?? $supplier->remark, 'status' => $data['status'] ?? $supplier->status,
-        ]);
+        $this->supplierService->update($supplier, $request->validated());
 
         return $this->ok();
     }
@@ -88,15 +58,7 @@ class SupplierController extends Controller
     /** 删除供应商：被采购订单/入库单或委外加工单引用 1109（生产表未建自动放行，建后自动生效） */
     public function destroy(Supplier $supplier)
     {
-        // 采购订单/采购入库单/委外加工单引用均受保护（同码 1109）
-        if (
-            DeletionGuard::referenced('purchase_orders', 'supplier_id', $supplier->id)
-            || DeletionGuard::referenced('purchase_inbounds', 'supplier_id', $supplier->id)
-            || DeletionGuard::referenced('outsourcing_orders', 'supplier_id', $supplier->id)
-        ) {
-            return $this->fail(1109, '供应商已被采购单据使用，不可删除');
-        }
-        $supplier->delete();
+        $this->supplierService->delete($supplier);
 
         return $this->ok();
     }
