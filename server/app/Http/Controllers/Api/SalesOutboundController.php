@@ -1,39 +1,23 @@
 <?php
 
-// 销售出库单控制器：草稿 CRUD + from-order 预填 + 审核（核心：事务内锁余额行防超卖 + InventoryService 扣库存 + 订单联动）
+// 销售出库单控制器：草稿 CRUD + from-order 预填 + 今日汇总 + 审核（写操作全部下沉 SalesOutboundService）
 
 namespace App\Http\Controllers\Api;
 
-use App\Exceptions\InventoryException;
-use App\Exceptions\SalesException;
 use App\Http\Controllers\Controller;
-use App\Models\DocumentSequence;
-use App\Models\InventoryBalance;
-use App\Models\Product;
+use App\Http\Requests\Sales\SaveSalesOutboundRequest;
 use App\Models\SalesOrder;
-use App\Models\SalesOrderItem;
 use App\Models\SalesOutbound;
 use App\Models\SalesOutboundItem;
-use App\Services\DocumentSequenceService;
-use App\Services\InventoryService;
-use App\Services\SalesOrderService;
+use App\Services\SalesOutboundService;
 use App\Support\ApiResponse;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class SalesOutboundController extends Controller
 {
     use ApiResponse;
 
-    public function __construct(
-        private InventoryService $inventoryService,
-        private SalesOrderService $orderService,
-        private DocumentSequenceService $sequenceService,
-    ) {}
+    public function __construct(private SalesOutboundService $outboundService) {}
 
     /** 分页列表：单号/仓库/状态/日期范围 筛选；含客户/仓库/库位名与来源订单单号 */
     public function index(Request $request)
@@ -164,62 +148,10 @@ class SalesOutboundController extends Controller
         ]);
     }
 
-    /** 新建草稿：仓库/库位必填 1406；关联订单行剩余量校验 1407；客户一致性 1407；重复商品 1412 */
-    public function store(Request $request)
+    /** 新建草稿：仓库/库位必填 1406；关联订单行剩余量校验 1407；客户一致性 1407；重复商品 1412（写流程在 Service） */
+    public function store(SaveSalesOutboundRequest $request)
     {
-        $data = $this->validatePayload($request);
-        // 业务码校验（仓库/库位必填走业务码而非 422，与 spec 1406 一致）
-        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-            return $this->fail(1406, '仓库与库位不能为空');
-        }
-        if ($fail = $this->validateBusinessItems($data['items'])) {
-            return $fail;
-        }
-        // 明细带订单行引用但未携带 order_id → 1407（防绕过订单状态联动）
-        if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
-            return $this->fail(1407, '出库明细与订单行不一致');
-        }
-        // 关联订单行校验：行归属/订单可出库/客户一致/不超剩余量（草稿期即拦截，审核期再锁行复核）
-        if ($orderId = $data['order_id'] ?? null) {
-            $check = $this->validateOrderItems($orderId, (int) $data['customer_id'], $data['items']);
-            if ($check !== null) {
-                return $this->fail(1407, $check);
-            }
-        }
-
-        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
-        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-        $outbound = DB::transaction(function () use ($data) {
-            $outbound = $this->sequenceService->nextNoByConfig(
-                DocumentSequence::TYPE_SOUT,
-                fn (string $no) => SalesOutbound::create([
-                    'no' => $no,
-                    'customer_id' => $data['customer_id'],
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'order_id' => $data['order_id'] ?? null,
-                    'status' => SalesOutbound::STATUS_DRAFT,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
-                    'remark' => $data['remark'] ?? null,
-                ]),
-                fn (string $prefix, string $dateKey) => ($no = SalesOutbound::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-            );
-            $outbound->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'quantity' => $i['quantity'],
-                'price' => $i['price'],
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
-                'order_item_id' => $i['order_item_id'] ?? null,
-            ], $data['items']));
-
-            return $outbound;
-        }, 2);
-
-        // 单据创建审计日志（事务提交后记）：单号 + 操作人
-        Log::info('销售出库单创建成功', [
-            'no' => $outbound->no, 'order_id' => $outbound->order_id, 'created_by' => auth()->id(),
-        ]);
+        $outbound = $this->outboundService->create($request->validated());
 
         return $this->ok(['no' => $outbound->no]);
     }
@@ -257,299 +189,31 @@ class SalesOutboundController extends Controller
         ]);
     }
 
-    /** 更新草稿：仅草稿（1408）；items 全量替换；订单行校验同 store；事务内锁行复查防并发 */
-    public function update(Request $request, SalesOutbound $outbound)
+    /** 更新草稿：仅草稿（1408）；items 全量替换；订单行校验同 store；事务内锁行复查防并发（写流程在 Service） */
+    public function update(SaveSalesOutboundRequest $request, SalesOutbound $outbound)
     {
-        if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
-            return $this->fail(1408, '已审核单据不可修改');
-        }
-        $data = $this->validatePayload($request);
-        if (! $request->filled('warehouse_id') || ! $request->filled('location_id')) {
-            return $this->fail(1406, '仓库与库位不能为空');
-        }
-        if ($fail = $this->validateBusinessItems($data['items'])) {
-            return $fail;
-        }
-        if (empty($data['order_id']) && $this->hasOrderItemRef($data['items'])) {
-            return $this->fail(1407, '出库明细与订单行不一致');
-        }
-        if ($orderId = $data['order_id'] ?? null) {
-            $check = $this->validateOrderItems($orderId, (int) $data['customer_id'], $data['items']);
-            if ($check !== null) {
-                return $this->fail(1407, $check);
-            }
-        }
-
-        DB::transaction(function () use ($outbound, $data) {
-            // 锁出库单行复查状态：与审核并发时防止改到正在审核的单（幂等 1408）
-            $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
-                throw new SalesException('已审核单据不可修改', 1408);
-            }
-            $locked->update([
-                'customer_id' => $data['customer_id'],
-                'warehouse_id' => $data['warehouse_id'],
-                'location_id' => $data['location_id'],
-                'order_id' => $data['order_id'] ?? null,
-                'total_amount' => $this->orderService->calculateTotal($data['items']),
-                'remark' => $data['remark'] ?? $locked->remark,
-            ]);
-            // 明细全量替换（草稿单无流水引用，直接重建）
-            $locked->items()->delete();
-            $locked->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'quantity' => $i['quantity'],
-                'price' => $i['price'],
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
-                'order_item_id' => $i['order_item_id'] ?? null,
-            ], $data['items']));
-        });
+        $this->outboundService->update($outbound, $request->validated());
 
         return $this->ok();
     }
 
-    /** 删除草稿：仅草稿（1408）；事务内锁行复查防并发 */
+    /** 删除草稿：仅草稿（1408）；事务内锁行复查防并发（写流程在 Service） */
     public function destroy(SalesOutbound $outbound)
     {
-        if ($outbound->status !== SalesOutbound::STATUS_DRAFT) {
-            return $this->fail(1408, '已审核单据不可删除');
-        }
-        DB::transaction(function () use ($outbound) {
-            // 锁出库单行复查状态：与审核并发时防止删到正在审核的单（幂等 1408）
-            $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== SalesOutbound::STATUS_DRAFT) {
-                throw new SalesException('已审核单据不可删除', 1408);
-            }
-            $locked->delete();
-        });
-
-        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
-        Log::info('销售出库单草稿删除', ['no' => $outbound->no, 'operator' => auth()->id()]);
+        $this->outboundService->delete($outbound);
 
         return $this->ok();
     }
 
     /**
-     * 审核（核心）：事务内「锁单幂等 1410 → 批量预锁订单行验剩余量 1407 → 批量预锁订单头验状态
+     * 审核：事务内「锁单幂等 1410 → 批量预锁订单行验剩余量 1407 → 批量预锁订单头验状态
      * → 批量预锁余额行校验余额充足 1409 → InventoryService 扣库存 → 回写 shipped_qty
-     * → syncStatus 重算订单状态」任一步失败整体回滚
+     * → syncStatus 重算订单状态」任一步失败整体回滚（写流程在 Service）
      */
     public function approve(SalesOutbound $outbound)
     {
-        try {
-            $result = null;
-            // attempts=2：死锁自动重试一次（B-3 纵深防御；余额行锁序已由 InventoryService 排序规范化统一）
-            DB::transaction(function () use ($outbound, &$result) {
-                // 锁出库单行：同一单据重复审核在此判重（幂等 1410）
-                $locked = SalesOutbound::whereKey($outbound->id)->lockForUpdate()->firstOrFail();
-                if ($locked->status === SalesOutbound::STATUS_APPROVED) {
-                    throw new SalesException('该出库单已审核', 1410);
-                }
-                $movements = [];
-                $shipped = []; // [order_item_id => 本次累计出库量] 待回写
-                // 循环前批量预锁（P1-2，宪法 §4.2.4 建议）：订单行按 id 一次锁定、订单头按去重
-                // order_id 批量锁一次（同订单多明细不再重复锁同一行）、余额行按商品一次锁定；
-                // 锁序保持「订单行→订单头→余额」全局方向，批量按索引序获取还消除了
-                // 「两单明细顺序相反」时的交叉锁窗口（无 ABBA 新方向）
-                $orderItemIds = $locked->items->pluck('order_item_id')->filter()->values()->all();
-                /** @var Collection<int, SalesOrderItem> $oiMap 已锁定的订单行（回写复用，免二次查询） */
-                $oiMap = $orderItemIds === []
-                    ? collect()
-                    : SalesOrderItem::query()->whereIn('id', $orderItemIds)->lockForUpdate()->get()->keyBy('id');
-                $orderIds = $oiMap->pluck('order_id')->unique()->values()->all();
-                /** @var Collection<int, SalesOrder> $orderMap 已锁定的订单头（状态复核复用） */
-                $orderMap = $orderIds === []
-                    ? collect()
-                    : SalesOrder::query()->whereIn('id', $orderIds)->lockForUpdate()->get()->keyBy('id');
-                /** @var Collection<int, InventoryBalance> $balanceMap 已锁定的余额行（防超卖校验复用） */
-                $balanceMap = InventoryBalance::query()
-                    ->whereIn('product_id', $locked->items->pluck('product_id'))
-                    ->where('warehouse_id', $locked->warehouse_id)
-                    ->where('location_id', $locked->location_id)
-                    ->lockForUpdate()
-                    ->get()
-                    ->keyBy('product_id');
-                /** @var SalesOutboundItem $item */
-                foreach ($locked->items as $item) {
-                    if ($item->order_item_id) {
-                        // 复核订单行：防并发超收（并发审核同一行已在上方批量锁定串行化）
-                        $oi = $oiMap->get($item->order_item_id);
-                        // 防御：订单行已被删除或商品不一致（数据完整性，归 1407 语义族）
-                        if (! $oi || $oi->product_id !== $item->product_id) {
-                            throw new SalesException('出库明细与订单行不一致', 1407);
-                        }
-                        // 复核订单头状态：关闭/已完成/草稿均不可出库（1407）；
-                        // 头缺失（FK cascade 下不可达的防御路径）与 firstOrFail 同 404 语义
-                        $order = $orderMap->get($oi->order_id);
-                        if (! $order) {
-                            throw (new ModelNotFoundException)->setModel(SalesOrder::class, $oi->order_id);
-                        }
-                        if (! in_array($order->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
-                            throw new SalesException('该订单当前不可出库', 1407);
-                        }
-                        // 剩余量 = 订购数 - 已出库累计；本次出库量超剩余 → 1407 整体回滚（防超收）
-                        $remaining = bcsub((string) $oi->quantity, (string) $oi->shipped_qty, 2);
-                        if (bccomp((string) $item->quantity, $remaining, 2) > 0) {
-                            throw new SalesException('出库数量超过订单剩余数量', 1407);
-                        }
-                        $shipped[$oi->id] = bcadd((string) ($shipped[$oi->id] ?? '0'), (string) $item->quantity, 2);
-                    }
-                    // 防超卖：余额行已批量锁定，校验余额充足（并发审核同一商品在此串行化；消息含商品名与当前库存快照）
-                    $balance = $balanceMap->get($item->product_id);
-                    $current = $balance ? (string) $balance->quantity : '0';
-                    if (bccomp((string) $item->quantity, $current, 2) > 0) {
-                        // 库存快照去掉小数尾零展示（14.00 → 14；0.00/缺行 → 0）
-                        $qtyText = str_contains($current, '.') ? rtrim(rtrim($current, '0'), '.') : $current;
-                        // 商品名取不到时回退商品 id（商品被删的兜底展示）
-                        $product = Product::find($item->product_id);
-                        $name = $product ? $product->name : ('#'.$item->product_id);
-                        throw new SalesException("商品[{$name}]库存不足，当前库存 {$qtyText}", 1409);
-                    }
-                    $movements[] = [
-                        'product_id' => $item->product_id,
-                        'warehouse_id' => $locked->warehouse_id,
-                        'location_id' => $locked->location_id,
-                        'direction' => -1,
-                        'quantity' => $item->quantity,
-                        'source_type' => 'sales_outbound',
-                        'source_id' => $locked->id,
-                        'source_no' => $locked->no,
-                        'remark' => '销售出库',
-                    ];
-                }
-                // 统一引擎写流水+扣余额（同事务双写，恒等式由 InventoryService 保证；余额行已被本事务锁定，引擎内重复加锁幂等）
-                $this->inventoryService->apply($movements, auth()->id());
-                // 回写订单行累计出库量（bcmath 累加）并重算订单状态（全部出完 → 已完成）：
-                // 复用第一循环已锁定的行对象——行已被本事务锁定且期间无人可改，
-                // 二次查询纯属多余（N 条订单行省 N 次查询；与采购入库/领退料审核回写同构）
-                foreach ($shipped as $oiId => $addQty) {
-                    $oi = $oiMap[$oiId];
-                    $oi->shipped_qty = bcadd((string) $oi->shipped_qty, $addQty, 2);
-                    $oi->save();
-                }
-                $this->orderService->syncStatus($locked->order_id);
-                // 置已审核 + 审核人/时间
-                $locked->status = SalesOutbound::STATUS_APPROVED;
-                $locked->operator = auth()->user()->name ?? '';
-                $locked->outbound_at = now();
-                $locked->save();
-                $result = ['no' => $locked->no];
-            }, 2);
-        } catch (InventoryException $e) {
-            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径；消息不含商品名时用通用文案）；
-            // 走到此分支说明预校验与引擎判定不一致，记 warn 便于排查数据不一致
-            Log::warning('销售出库审核被余额引擎兜底拒绝（预校验未拦截，疑似数据不一致）', [
-                'no' => $outbound->no, 'reason' => $e->getMessage(),
-            ]);
-
-            return $this->fail(1409, '库存不足，出库被拒绝');
-        }
-
-        // 状态变更审计日志（事务提交后记）：审核即库存扣减 + 订单回写生效，属库存关键节点
-        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
-        Log::info('销售出库单审核通过', ['no' => $result['no'], 'order_id' => $outbound->order_id, 'operator' => auth()->id()]);
+        $result = $this->outboundService->approve($outbound);
 
         return $this->ok($result);
-    }
-
-    // 载荷格式校验（422 仅格式层）；仓库/库位/数量/价格业务码在方法内检查
-    private function validatePayload(Request $request): array
-    {
-        return $request->validate([
-            'customer_id' => 'required|integer|exists:customers,id',
-            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
-            'location_id' => 'nullable|integer|exists:locations,id',
-            'order_id' => 'nullable|integer|exists:sales_orders,id',
-            'remark' => 'nullable|string|max:200',
-            // 注意：items 不加 required——空数组 [] 走 1401 业务码（422 仅拦缺失字段与类型错误）
-            'items' => 'array',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            // 数量限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError；允许负号形态，负值由业务层拦截 422）；
-            // 单价为分单位整数（R2：bigint 分列），integer 校验拦截小数分与科学计数法形态（负值仍由业务层拦截 1411）
-            'items.*.quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
-            'items.*.price' => 'required|integer',
-            'items.*.order_item_id' => 'nullable|integer|exists:sales_order_items,id',
-        ]);
-    }
-
-    // 明细查重：同商品+同订单行 只允许一行（独立行按商品查重；订单行按 商品+订单行 查重）
-    private function hasDuplicateItem(array $items): bool
-    {
-        $seen = [];
-        foreach ($items as $item) {
-            $key = ($item['order_item_id'] ?? 0).'-'.$item['product_id'];
-            if (isset($seen[$key])) {
-                return true;
-            }
-            $seen[$key] = true;
-        }
-
-        return false;
-    }
-
-    // 明细是否带订单行引用（order_item_id 非空）
-    private function hasOrderItemRef(array $items): bool
-    {
-        return collect($items)->contains(fn ($i) => ! empty($i['order_item_id'] ?? null));
-    }
-
-    // 明细业务校验（store/update 共用）：空明细 1401 / 数量≤0 422 / 原料禁售 422 / 负价 1411 / 重复商品 1412
-    // 校验通过返回 null，未通过返回对应业务码/422 的 fail 响应（JSON 信封，由调用方直接 return）
-    private function validateBusinessItems(array $items): ?JsonResponse
-    {
-        if (empty($items)) {
-            return $this->fail(1401, '请至少添加一条明细');
-        }
-        // 商品批量预取（B-105）：一次 whereIn 拉全明细商品，替代循环内逐行 Product::find 的 N+1 查询
-        $products = Product::whereIn('id', collect($items)->pluck('product_id')->unique())->get()->keyBy('id');
-        foreach ($items as $item) {
-            // 数量/价格正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）
-            if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
-                return $this->fail(422, '数量必须大于 0');
-            }
-            // 单价经 integer 校验后为整数分，直接整数比较（无浮点参与）
-            if ((int) $item['price'] < 0) {
-                return $this->fail(1411, '价格不能为负数');
-            }
-            // 原料禁售（SAL-10）：仅成品/半成品可销售（前端下拉已过滤，后端防御性兜底）
-            $product = $products->get($item['product_id']);
-            if ($product && $product->type === 'raw_material') {
-                return $this->fail(422, '原料商品不可销售');
-            }
-        }
-        if ($this->hasDuplicateItem($items)) {
-            return $this->fail(1412, '明细存在重复商品');
-        }
-
-        return null;
-    }
-
-    // 订单行校验：行必须属于该订单、商品一致、客户一致、订单可出库、不超剩余量（返回错误文案或 null）
-    private function validateOrderItems(int $orderId, int $customerId, array $items): ?string
-    {
-        $order = SalesOrder::with('items')->find($orderId);
-        if (! $order || ! in_array($order->status, [SalesOrder::STATUS_APPROVED, SalesOrder::STATUS_PARTIAL], true)) {
-            return '该订单当前不可出库';
-        }
-        // 出库单客户必须与来源订单一致（防跨客户挂单，前端禁用选择器仅 UI 层）
-        if ((int) $order->customer_id !== $customerId) {
-            return '客户与来源订单不一致';
-        }
-        foreach ($items as $item) {
-            if (! isset($item['order_item_id'])) {
-                continue; // 独立行不受订单约束
-            }
-            $oi = $order->items->firstWhere('id', $item['order_item_id']);
-            if (! $oi || $oi->product_id !== $item['product_id']) {
-                return '出库明细与订单行不一致';
-            }
-            // 剩余量 = 订购数 - 已出库累计；超量拒绝（草稿期即拦截）
-            $remaining = bcsub((string) $oi->quantity, (string) $oi->shipped_qty, 2);
-            if (bccomp((string) $item['quantity'], $remaining, 2) > 0) {
-                return '出库数量超过订单剩余数量';
-            }
-        }
-
-        return null;
     }
 }
