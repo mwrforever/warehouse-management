@@ -234,6 +234,40 @@ class OutsourcingTest extends TestCase
         $this->assertDatabaseCount('outsourcing_orders', 1);
     }
 
+    public function test_update_rejects_reassign_to_draft_order_with_1523(): void
+    {
+        // 异常路径（B-1b）：编辑改挂草稿工单 → 1523（与 store 的 B-1 校验同口径）——修复前 update
+        // 无工单状态校验，可把工单 A 建的委外草稿改挂草稿工单 B（B 建单即快照 DAG 工序含委外节点），
+        // 绕过 store 源头拦截，令 B 的编辑/删除被草稿委外单 1504 冻结
+        $this->baseDag();
+        $no = $this->createOutsourcing($this->payload());
+        $os = OutsourcingOrder::where('no', $no)->firstOrFail();
+        // 草稿工单 B：同成品直接建单（默认草稿态，快照工序 OP30 为待开工委外节点）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $this->dag['fin']->id, 'quantity' => 5, 'plan_date' => now()->toDateString(),
+        ]);
+        $res->assertJsonPath('code', 0);
+        $draftOrder = ProductionOrder::where('id', $res->json('data.id'))->firstOrFail();
+        $this->assertSame(ProductionOrder::STATUS_DRAFT, $draftOrder->status);
+        $draftOp = $draftOrder->operations()->where('is_outsourced', 1)->firstOrFail();
+        // 改挂草稿工单 B 被拒：业务码 1523 + HTTP 200 统一信封（非 500）
+        $this->withToken($this->token)->putJson("/api/v1/production/outsourcings/{$os->id}", $this->payload([
+            'order_id' => $draftOrder->id, 'operation_id' => $draftOp->id,
+        ]))
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1523)
+            ->assertJsonPath('message', '工单当前状态不可委外');
+        // 拒绝时单据保持原工单归属（未半改）
+        $this->assertDatabaseHas('outsourcing_orders', ['id' => $os->id, 'order_id' => $this->order->id]);
+        // 回归路径：工单 B 下达后改挂放行（B 计划 5 = 载荷数量 5，未超剩余计划量）
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$draftOrder->id}/release")
+            ->assertJsonPath('code', 0);
+        $this->withToken($this->token)->putJson("/api/v1/production/outsourcings/{$os->id}", $this->payload([
+            'order_id' => $draftOrder->id, 'operation_id' => $draftOp->id,
+        ]))->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('outsourcing_orders', ['id' => $os->id, 'order_id' => $draftOrder->id]);
+    }
+
     // 核心不变式（发出，默认载荷 5）：组件余额 12→2、6→1，分量 outsourcing_out 流水（direction=-1、
     // 商品=发料组件）+ 操作人/时间落库
     public function test_approve_deducts_default_payload_components_and_writes_movement(): void
