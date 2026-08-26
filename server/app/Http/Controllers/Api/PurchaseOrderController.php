@@ -1,31 +1,23 @@
 <?php
 
-// 采购订单控制器：草稿 CRUD + 审核 + 关闭 + 可入库订单列表 + 订单入库记录
+// 采购订单控制器：草稿 CRUD + 审核 + 关闭 + 可入库订单列表 + 订单入库记录（写操作全部下沉 PurchaseOrderService）
 
 namespace App\Http\Controllers\Api;
 
-use App\Exceptions\PurchaseException;
 use App\Http\Controllers\Controller;
-use App\Models\DocumentSequence;
+use App\Http\Requests\Purchase\SaveOrderRequest;
 use App\Models\PurchaseInbound;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
-use App\Services\DocumentSequenceService;
 use App\Services\PurchaseOrderService;
 use App\Support\ApiResponse;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class PurchaseOrderController extends Controller
 {
     use ApiResponse;
 
-    public function __construct(
-        private PurchaseOrderService $orderService,
-        private DocumentSequenceService $sequenceService,
-    ) {}
+    public function __construct(private PurchaseOrderService $orderService) {}
 
     /** 分页列表：单号/供应商/状态/日期范围 筛选；含供应商名与状态中文标签 */
     public function index(Request $request)
@@ -127,47 +119,10 @@ class PurchaseOrderController extends Controller
         ]);
     }
 
-    /** 新建草稿：单号持久序列；金额分单位整数（half-up 到整数分）；明细非空 1301 / 数量>0 1302 / 负价 1311 / 重复商品 1312 */
-    public function store(Request $request)
+    /** 新建草稿：单号持久序列；金额分单位整数（half-up 到整数分）；明细非空 1301 / 数量>0 1302 / 负价 1311 / 重复商品 1312（写流程在 Service） */
+    public function store(SaveOrderRequest $request)
     {
-        $data = $this->validatePayload($request);
-        // 业务码校验（422 仅格式层，业务冲突走业务码；明细校验逻辑见 validateBusinessItems）
-        if ($fail = $this->validateBusinessItems($data['items'])) {
-            return $fail;
-        }
-
-        // 事务第 2 参数为死锁(1213)重试次数（机理同 BomController::store：序列行首建间隙锁
-        // 死锁败方整体回滚后重跑闭包重新取号，幂等安全）
-        $order = DB::transaction(function () use ($data) {
-            // 单号走持久序列（撞号自动换号；删除不回退；老库 max 衔接）
-            $order = $this->sequenceService->nextNoByConfig(
-                DocumentSequence::TYPE_PO,
-                fn (string $no) => PurchaseOrder::create([
-                    'no' => $no,
-                    'supplier_id' => $data['supplier_id'],
-                    'order_date' => $data['order_date'],
-                    'expected_date' => $data['expected_date'] ?? null,
-                    'status' => PurchaseOrder::STATUS_DRAFT,
-                    'total_amount' => $this->orderService->calculateTotal($data['items']),
-                    'remark' => $data['remark'] ?? null,
-                    'created_by' => auth()->id(),
-                ]),
-                fn (string $prefix, string $dateKey) => ($no = PurchaseOrder::where('no', 'like', $prefix.date('Ymd').'%')
-                    ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
-            );
-            $order->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'quantity' => $i['quantity'],
-                'price' => $i['price'],
-                'received_qty' => 0,
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
-            ], $data['items']));
-
-            return $order;
-        }, 2);
-
-        // 单据创建审计日志（事务提交后记）：单号 + 操作人
-        Log::info('采购订单创建成功', ['no' => $order->no, 'created_by' => auth()->id()]);
+        $order = $this->orderService->create($request->validated());
 
         return $this->ok(['no' => $order->no]);
     }
@@ -202,109 +157,34 @@ class PurchaseOrderController extends Controller
         ]);
     }
 
-    /** 更新草稿：仅草稿（1303）；items 全量替换；金额重算；事务内锁行复查防并发 */
-    public function update(Request $request, PurchaseOrder $order)
+    /** 更新草稿：仅草稿（1303）；items 全量替换；金额重算；事务内锁行复查防并发（写流程在 Service） */
+    public function update(SaveOrderRequest $request, PurchaseOrder $order)
     {
-        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-            return $this->fail(1303, '已审核订单不可修改');
-        }
-        $data = $this->validatePayload($request);
-        // 明细业务校验与 store 共用同一 helper，保证两处校验口径一致（见 validateBusinessItems）
-        if ($fail = $this->validateBusinessItems($data['items'])) {
-            return $fail;
-        }
-
-        DB::transaction(function () use ($order, $data) {
-            // 锁订单行复查状态：与审核并发时防止改到正在审核的单（幂等 1303）
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                throw new PurchaseException('已审核订单不可修改', 1303);
-            }
-            $locked->update([
-                'supplier_id' => $data['supplier_id'],
-                'order_date' => $data['order_date'],
-                'expected_date' => $data['expected_date'] ?? null,
-                'total_amount' => $this->orderService->calculateTotal($data['items']),
-                'remark' => $data['remark'] ?? $locked->remark,
-            ]);
-            // 明细全量替换（草稿单无流水引用，直接重建）
-            $locked->items()->delete();
-            $locked->items()->createMany(array_map(fn ($i) => [
-                'product_id' => $i['product_id'],
-                'quantity' => $i['quantity'],
-                'price' => $i['price'],
-                'received_qty' => 0,
-                'amount' => $this->orderService->lineAmount((string) $i['quantity'], $i['price']),
-            ], $data['items']));
-        });
+        $this->orderService->update($order, $request->validated());
 
         return $this->ok();
     }
 
-    /** 删除草稿：仅草稿（1304）；事务内锁行复查防并发 */
+    /** 删除草稿：仅草稿（1304）；事务内锁行复查防并发（写流程在 Service） */
     public function destroy(PurchaseOrder $order)
     {
-        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-            return $this->fail(1304, '已审核订单不可删除');
-        }
-        DB::transaction(function () use ($order) {
-            // 锁订单行复查状态：与审核并发时防止删到正在审核的单（幂等 1304）
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                throw new PurchaseException('已审核订单不可删除', 1304);
-            }
-            $locked->delete();
-        });
-
-        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
-        Log::info('采购订单草稿删除', ['no' => $order->no, 'operator' => auth()->id()]);
+        $this->orderService->delete($order);
 
         return $this->ok();
     }
 
-    /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人；锁内复查抛错转业务码 */
+    /** 审核：仅草稿（幂等 1305）；置已审核 + approved_at + 创建人；锁内复查抛错转业务码（写流程在 Service） */
     public function approve(PurchaseOrder $order)
     {
-        if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
-            return $this->fail(1305, '该订单已审核');
-        }
-        DB::transaction(function () use ($order) {
-            // 锁订单行：同一订单重复审核在此判重（幂等）
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== PurchaseOrder::STATUS_DRAFT) {
-                throw new PurchaseException('该订单已审核', 1305);
-            }
-            $locked->status = PurchaseOrder::STATUS_APPROVED;
-            $locked->approved_at = now();
-            $locked->created_by = $locked->created_by ?? auth()->id();
-            $locked->save();
-        });
-
-        // 状态变更审计日志（事务提交后记）：审核是订单生效节点，后续可生成入库单
-        Log::info('采购订单审核通过', ['no' => $order->no, 'operator' => auth()->id()]);
+        $this->orderService->approve($order);
 
         return $this->ok(['no' => $order->no]);
     }
 
-    /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单；锁内复查抛错转业务码 */
+    /** 关闭：仅已审核/部分入库（1306）；置关闭 + closed_at；关闭后不可再生成入库单（写流程在 Service） */
     public function close(PurchaseOrder $order)
     {
-        if (! in_array($order->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-            return $this->fail(1306, '当前状态不可关闭');
-        }
-        DB::transaction(function () use ($order) {
-            // 锁订单行复查状态：与入库审核并发时防止关闭正在入库的订单
-            $locked = PurchaseOrder::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if (! in_array($locked->status, [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL], true)) {
-                throw new PurchaseException('当前状态不可关闭', 1306);
-            }
-            $locked->status = PurchaseOrder::STATUS_CLOSED;
-            $locked->closed_at = now();
-            $locked->save();
-        });
-
-        // 状态变更审计日志（事务提交后记）：关闭后订单不可再生成入库单，属不可逆业务节点
-        Log::info('采购订单关闭', ['no' => $order->no, 'operator' => auth()->id()]);
+        $this->orderService->close($order);
 
         return $this->ok();
     }
@@ -326,61 +206,5 @@ class PurchaseOrderController extends Controller
                 'total_amount' => $i->total_amount,
             ]),
         ]);
-    }
-
-    // 载荷格式校验（422 仅格式层）；业务码在方法内检查
-    private function validatePayload(Request $request): array
-    {
-        return $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'order_date' => 'required|date',
-            'expected_date' => 'nullable|date',
-            'remark' => 'nullable|string|max:200',
-            // 注意：items 不加 required——空数组 [] 走 1301 业务码（422 仅拦缺失字段与类型错误）
-            'items' => 'array',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            // 数量限两位小数（正则按字符串形态校验，拦截 1e2 科学计数法避免 bcmul ValueError；允许负号形态，负值由业务层拦截 1302）；
-            // 单价为分单位整数（R2：bigint 分列），integer 校验拦截小数分与科学计数法形态（负值仍由业务层拦截 1311）
-            'items.*.quantity' => 'required|numeric|regex:/^-?\d+(\.\d{1,2})?$/',
-            'items.*.price' => 'required|integer',
-        ]);
-    }
-
-    // 明细查重：同商品只允许一行
-    private function hasDuplicateProduct(array $items): bool
-    {
-        $seen = [];
-        foreach ($items as $item) {
-            if (isset($seen[$item['product_id']])) {
-                return true;
-            }
-            $seen[$item['product_id']] = true;
-        }
-
-        return false;
-    }
-
-    // 明细业务校验（store/update 共用）：空明细 1301 / 数量≤0 1302 / 负价 1311 / 重复商品 1312
-    // 校验通过返回 null，未通过返回对应业务码的 fail 响应（JSON 信封，由调用方直接 return）
-    private function validateBusinessItems(array $items): ?JsonResponse
-    {
-        if (empty($items)) {
-            return $this->fail(1301, '请至少添加一条明细');
-        }
-        foreach ($items as $item) {
-            // 数量正负校验走 bccomp（D-3 铁律：禁浮点参与数量与金额比较；正则已保证入参为两位小数十进制）；
-            // 单价经 integer 校验后为整数分，直接整数比较（无浮点参与）
-            if (bccomp((string) $item['quantity'], '0', 2) <= 0) {
-                return $this->fail(1302, '数量必须大于 0');
-            }
-            if ((int) $item['price'] < 0) {
-                return $this->fail(1311, '价格不能为负数');
-            }
-        }
-        if ($this->hasDuplicateProduct($items)) {
-            return $this->fail(1312, '明细存在重复商品');
-        }
-
-        return null;
     }
 }

@@ -12,6 +12,7 @@ use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use App\Models\Supplier;
 use App\Models\Unit;
+use App\Services\DocumentSequenceService;
 use App\Services\PurchaseOrderService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -31,7 +32,8 @@ class PurchaseOrderServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = new PurchaseOrderService;
+        // D-1 下沉后 Service 构造需注入取号服务（本单测仅测纯计算与 syncStatus，取号依赖无状态直传）
+        $this->service = new PurchaseOrderService(new DocumentSequenceService);
         // 主数据自建（sqlite 外键开启，不依赖种子）：分类/单位/商品/供应商
         $category = Category::create(['name' => '分类', 'code' => 'CAT-PO']);
         $unit = Unit::create(['name' => '个', 'code' => 'PCS-PO', 'status' => 1]);
