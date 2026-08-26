@@ -23,6 +23,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // 权限中间件别名：permission:user.list
         $middleware->alias(['permission' => EnsurePermission::class]);
 
+        // 未认证请求统一 JSON 401：框架默认 redirectGuestsTo(route('login'))，本项目为 SPA 无
+        // 「login」命名路由，Accept 非 JSON 的请求（监控探测/curl/浏览器直访 API）会抛
+        // RouteNotFoundException 变 500，破坏统一响应约定并刷 error 日志；
+        // 覆盖为 null → Authenticate 抛 AuthenticationException → 全局渲染器按 is('api/*') 转 401。
+        // 本项目无受保护的 web 页面（auth:sanctum 仅挂 API 路由），web 侧不受影响
+        $middleware->redirectGuestsTo(fn (Request $request) => null);
+
         // Sanctum SPA 会话鉴权（R4-3）：对来自 SANCTUM_STATEFUL_DOMAINS 前端源的请求，
         // 动态注入 cookie 加密/StartSession/CSRF 校验/会话认证中间件链（服务端注入，非手写 token 刷新）；
         // 无 Referer/Origin 的纯 API 客户端（token 通道）不受影响，保持既有行为

@@ -96,6 +96,16 @@ class AuthTest extends TestCase
         $this->getJson('/api/v1/auth/me')->assertStatus(401);
     }
 
+    public function test_me_without_token_non_json_accept_returns_401_not_500(): void
+    {
+        // 异常路径：Accept 非 JSON（监控探测/curl/浏览器直访）的未认证 API 请求必须 401 而非 500
+        // （框架默认 redirectGuestsTo(route('login')) 在本项目无 login 命名路由时抛
+        // RouteNotFoundException 变 500；已覆盖为 null 统一走 401 渲染）
+        $this->withHeaders(['Accept' => '*/*'])->get('/api/v1/auth/me')
+            ->assertStatus(401)
+            ->assertJsonPath('code', 401);
+    }
+
     public function test_logout_revokes_token(): void
     {
         // 正常路径：登出后 token 失效
