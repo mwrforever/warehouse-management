@@ -475,8 +475,9 @@ class OutsourcingController extends Controller
      * 回收：事务内「锁委外单（状态 ∈ [已发出,已回收]，草稿/已关闭 422；累计+本次 ≤ 委外量 1524，已回收单再回收必超收）
      * → 回收品一致性校验（回收商品=委外单 output_product_id 节点输出；为空数据异常或与请求 product_id 不符 →
      * 1529「回收商品与委外工序产出不一致」）→ 锁同单全部工序行（id 升序，含委外工序：DAG 后继就绪判定需读其它前驱状态，
-     * 与报工/完工在行级全序上单调同向）→ 锁工单行校验状态 → InventoryService 写 outsourcing_in 流水(+qty，
-     * 商品=output_product_id) → 创建回收单（创建即审核）→ 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成 +
+     * 与报工/完工在行级全序上单调同向）→ 锁工单行校验状态 → 创建回收单（创建即审核，
+     * 先取号建单再写流水 PF-2）→ InventoryService 写 outsourcing_in 流水(+qty，
+     * 商品=output_product_id，source=回收单) → 累计 ≥ 委外量 → 委外单已回收 + 工序标记完成 +
      * 推进「直接后继中全部前驱已完成」的待开工节点（并行分支独立推进，与 OperationReportController::store
      * 同口径）」任一步失败整体回滚；
      * 锁序 outsourcing→全部工序(升序)→order 与报工（op 全集→order）/完工（全工序→order）行级单调同向，
@@ -529,19 +530,10 @@ class OutsourcingController extends Controller
                 if (! in_array($order->status, [ProductionOrder::STATUS_RELEASED, ProductionOrder::STATUS_PRODUCING], true)) {
                     throw new ProductionException('工单当前状态不可委外', 1523);
                 }
-                // 统一引擎写流水+加余额（同事务双写；商品=回收品节点输出）
-                $this->inventoryService->apply([[
-                    'product_id' => $outputProductId,
-                    'warehouse_id' => $data['warehouse_id'],
-                    'location_id' => $data['location_id'],
-                    'direction' => 1,
-                    'quantity' => $data['quantity'],
-                    'source_type' => 'outsourcing_in',
-                    'source_id' => $locked->id,
-                    'source_no' => '',
-                    'remark' => '委外回收',
-                ]], auth()->id());
-                // 创建回收单（创建即审核）：单号 OSR 先占号再补流水单号（先建单号引用唯一）
+                // 先取号创建回收单（创建即审核），再写库存流水（PF-2 重排）：流水创建时回收单已落库，
+                // source_id/source_no 直接携带回收单 id/单号（与全项目「流水来源=承载单据本身」口径一致）——
+                // 消除旧「先 apply 空串占位、事后 UPDATE 回补 source_no」的 inventory_movements
+                // 单列索引范围扫描回补与并发事务间的 movements 行锁等待窗口；锁序「单据头 → 库存」天然全序
                 $receipt = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_OSR,
                     fn (string $no) => OutsourcingReceipt::create([
@@ -559,12 +551,18 @@ class OutsourcingController extends Controller
                     fn (string $prefix, string $dateKey) => ($no = OutsourcingReceipt::where('no', 'like', $prefix.date('Ymd').'%')
                         ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
-                // 流水单号回补（流水创建时回收单号未定，先以委外单号占位后回补——审计链完整）
-                DB::table('inventory_movements')
-                    ->where('source_type', 'outsourcing_in')
-                    ->where('source_id', $locked->id)
-                    ->where('source_no', '')
-                    ->update(['source_no' => $receipt->no]);
+                // 统一引擎写流水+加余额（同事务双写；商品=回收品节点输出，流水来源=回收单，审计链完整）
+                $this->inventoryService->apply([[
+                    'product_id' => $outputProductId,
+                    'warehouse_id' => $data['warehouse_id'],
+                    'location_id' => $data['location_id'],
+                    'direction' => 1,
+                    'quantity' => $data['quantity'],
+                    'source_type' => 'outsourcing_in',
+                    'source_id' => $receipt->id,
+                    'source_no' => $receipt->no,
+                    'remark' => '委外回收',
+                ]], auth()->id());
 
                 // 累计回收 ≥ 委外量 → 委外单已回收 + 委外工序标记完成（spec §6；回收只对未完成工序生效）；
                 // 追加推进：直接后继中「全部前驱已完成」的待开工节点置进行中（并行分支独立推进，与报工控制器同口径；
@@ -651,9 +649,9 @@ class OutsourcingController extends Controller
     /**
      * 余料退回：事务内「锁委外单（状态 ∈ [已发出,已回收]，草稿/已关闭 422「当前委外单不可退回」）→ 锁同单组件行
      * （单语句获取，锁序 单据头 → 明细）→ 逐行校验组件归属与退回量 ≤ 已发−已退（bcmath，
-     * 422「退回数量超过已发未退数量」）→ 按 material_id 升序写 outsourcing_return 流水(+qty，
-     * source_no 空串占位后续回补——库存行锁序与发出 approve 同向) → 创建退回单（TYPE_OSRT 取号 ORT、创建即审核；
-     * 多行提交仅记首行——偏离记录③，明细以流水逐行留痕）→ 流水单号回补 → returned_qty 回写（bcadd 累计）→
+     * 422「退回数量超过已发未退数量」）→ 创建退回单（TYPE_OSRT 取号 ORT、创建即审核，先取号建单再写流水 PF-2；
+     * 多行提交仅记首行——偏离记录③，明细以流水逐行留痕）→ 按 material_id 升序写 outsourcing_return 流水(+qty，
+     * source=退回单——库存行锁序与发出 approve 同向) → returned_qty 回写（bcadd 累加）→
      * 全部组件 returned==issued → 委外单已关闭」任一步失败整体回滚
      */
     public function storeReturn(Request $request, OutsourcingOrder $outsourcing)
@@ -688,27 +686,10 @@ class OutsourcingController extends Controller
                     }
                     $lines[] = ['item' => $item, 'quantity' => $line['quantity']];
                 }
-                // 按 material_id 升序写流水（余额行锁序与发出 approve 同向，多组件并发退回串行化）
-                $movements = [];
-                foreach (collect($lines)->sortBy(fn (array $l) => $l['item']->material_id) as $l) {
-                    $movements[] = [
-                        'product_id' => $l['item']->material_id,
-                        'warehouse_id' => $data['warehouse_id'],
-                        'location_id' => $data['location_id'],
-                        'direction' => 1,
-                        // 引擎 quantity 契约：两位小数十进制字符串（D-3 bcmath 化，原 float 契约/偏离记录⑤已消除）
-                        'quantity' => (string) $l['quantity'],
-                        'source_type' => 'outsourcing_return',
-                        'source_id' => $locked->id,
-                        'source_no' => '',
-                        'remark' => '余料退回',
-                    ];
-                }
-                // 全部行校验通过后统一写流水（余额行升序加锁；初建无退货单号，先以空串占位后回补）
-                if ($movements !== []) {
-                    $this->inventoryService->apply($movements, auth()->id());
-                }
-                // 创建退回单（创建即审核）：单号 ORT 占号后统一回补流水单号（多行提交仅记首行——偏离记录③）
+                // 先取号创建退回单（创建即审核），再写库存流水（PF-2 重排）：流水创建时退回单已落库，
+                // source_id/source_no 直接携带退回单 id/单号（与全项目「流水来源=承载单据本身」口径一致）——
+                // 消除旧「先 apply 空串占位、事后 UPDATE 回补 source_no」的 inventory_movements
+                // 单列索引范围扫描回补与并发事务间的 movements 行锁等待窗口；锁序「单据头 → 明细 → 库存」天然全序
                 $return = $this->sequenceService->nextNoByConfig(
                     DocumentSequence::TYPE_OSRT,
                     fn (string $no) => OutsourcingReturn::create([
@@ -728,12 +709,27 @@ class OutsourcingController extends Controller
                     fn (string $prefix, string $dateKey) => ($no = OutsourcingReturn::where('no', 'like', $prefix.date('Ymd').'%')
                         ->orderByDesc('no')->value('no')) ? DocumentSequenceService::seqFromNo($no, $prefix, $dateKey) : 0,
                 );
-                // 流水单号回补（流水创建时退回单号未定，空串占位后统一回补——审计链完整）
-                DB::table('inventory_movements')
-                    ->where('source_type', 'outsourcing_return')
-                    ->where('source_id', $locked->id)
-                    ->where('source_no', '')
-                    ->update(['source_no' => $return->no]);
+                // 按 material_id 升序写流水（余额行锁序与发出 approve 同向，多组件并发退回串行化；
+                // 流水来源=退回单，审计链完整）
+                $movements = [];
+                foreach (collect($lines)->sortBy(fn (array $l) => $l['item']->material_id) as $l) {
+                    $movements[] = [
+                        'product_id' => $l['item']->material_id,
+                        'warehouse_id' => $data['warehouse_id'],
+                        'location_id' => $data['location_id'],
+                        'direction' => 1,
+                        // 引擎 quantity 契约：两位小数十进制字符串（D-3 bcmath 化，原 float 契约/偏离记录⑤已消除）
+                        'quantity' => (string) $l['quantity'],
+                        'source_type' => 'outsourcing_return',
+                        'source_id' => $return->id,
+                        'source_no' => $return->no,
+                        'remark' => '余料退回',
+                    ];
+                }
+                // 全部行校验通过后统一写流水（余额行升序加锁）
+                if ($movements !== []) {
+                    $this->inventoryService->apply($movements, auth()->id());
+                }
 
                 // returned_qty 回写 = 已退累计（bcmath 累加，防覆盖历史退回）
                 foreach ($lines as $l) {
