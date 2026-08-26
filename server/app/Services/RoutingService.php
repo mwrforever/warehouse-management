@@ -235,6 +235,10 @@ class RoutingService
             }
 
             $nodeIdByNo = [];
+            // 节点逐行 INSERT（需回填自增 id 供下方边映射，不可批量）；材料/边为无 id 依赖段改批量插入（P1-D-1）：
+            // Relation::createMany 底层逐模型 save 仍是逐行 INSERT，故走查询构造器 insert 单语句多行落库，
+            // 行内显式携带外键与时间戳（查询构造器不自动补 Eloquent 时间戳），与逐行 create 落库字节等价
+            $now = now();
             foreach ($data['nodes'] as $n) {
                 $node = $routing->nodes()->create([
                     'node_no' => $n['node_no'], 'process_id' => $n['process_id'], 'name' => $n['name'],
@@ -242,12 +246,33 @@ class RoutingService
                     'is_outsourced' => $n['is_outsourced'], 'remark' => $n['remark'],
                 ]);
                 $nodeIdByNo[$n['node_no']] = $node->id;
-                foreach ($n['materials'] as $m) {
-                    $node->materials()->create($m);
+                // 节点材料批量落库（每节点 1 条 INSERT，替代逐材料 N 条）
+                if ($n['materials'] !== []) {
+                    RoutingNodeMaterial::query()->insert(array_map(
+                        fn (array $m) => [
+                            'node_id' => $node->id,
+                            'material_id' => $m['material_id'],
+                            'qty_per_unit' => $m['qty_per_unit'],
+                            'unit_id' => $m['unit_id'],
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ],
+                        $n['materials'],
+                    ));
                 }
             }
-            foreach ($data['edges'] as $e) {
-                $routing->edges()->create(['from_node_id' => $nodeIdByNo[$e['from']], 'to_node_id' => $nodeIdByNo[$e['to']]]);
+            // 边批量落库（1 条 INSERT，替代逐边 N 条）
+            if ($data['edges'] !== []) {
+                RoutingEdge::query()->insert(array_map(
+                    fn (array $e) => [
+                        'routing_id' => $routing->id,
+                        'from_node_id' => $nodeIdByNo[$e['from']],
+                        'to_node_id' => $nodeIdByNo[$e['to']],
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ],
+                    $data['edges'],
+                ));
             }
 
             return $routing;

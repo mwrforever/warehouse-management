@@ -16,6 +16,7 @@ use App\Models\User;
 use Database\Seeders\DocumentNumberConfigSeeder;
 use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -124,6 +125,26 @@ class RoutingTest extends TestCase
         $op10 = $routing->nodes()->where('node_no', 'OP10')->first();
         $this->assertSame(1, $op10->materials()->count());
         $this->assertSame('3.00', (string) $op10->materials()->first()->qty_per_unit);
+    }
+
+    public function test_routing_store_batches_material_and_edge_inserts(): void
+    {
+        // 性能契约（P1-D-1）：材料/边逐行 INSERT 改批量插入——本载荷 5 节点 7 材料 6 边，
+        // routing_node_materials 仅按节点批 5 条 INSERT、routing_edges 仅 1 条 INSERT（非逐行）
+        $materialInserts = 0;
+        $edgeInserts = 0;
+        DB::listen(function ($q) use (&$materialInserts, &$edgeInserts) {
+            if (str_starts_with($q->sql, 'insert into "routing_node_materials"')) {
+                $materialInserts++;
+            }
+            if (str_starts_with($q->sql, 'insert into "routing_edges"')) {
+                $edgeInserts++;
+            }
+        });
+        $res = $this->postRouting($this->routingPayload());
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(5, $materialInserts);
+        $this->assertSame(1, $edgeInserts);
     }
 
     public function test_routing_graph_returns_full_dag(): void
