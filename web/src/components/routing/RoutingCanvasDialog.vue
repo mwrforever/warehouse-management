@@ -18,13 +18,16 @@
             <el-select
               v-model="header.product_id"
               filterable
-              placeholder="选择成品商品"
+              remote
+              :remote-method="searchFinished"
+              :loading="finishedLoading"
+              placeholder="搜索成品编码/名称"
               :disabled="readonly"
             >
               <el-option
-                v-for="p in finishedProducts"
+                v-for="p in finishedOptions"
                 :key="p.id"
-                :label="`${p.code} ${p.name}`"
+                :label="productLabel(p)"
                 :value="p.id"
               />
             </el-select>
@@ -160,13 +163,16 @@
                     v-model="selectedNode.output_product_id"
                     filterable
                     clearable
-                    placeholder="半成品或成品"
+                    remote
+                    :remote-method="searchOutput"
+                    :loading="outputLoading"
+                    placeholder="搜索半成品/成品"
                     :disabled="readonly"
                   >
                     <el-option
                       v-for="p in outputOptions"
                       :key="p.id"
-                      :label="`${p.code} ${p.name}`"
+                      :label="productLabel(p)"
                       :value="p.id"
                     />
                   </el-select>
@@ -202,14 +208,17 @@
                     <el-select
                       v-model="row.material_id"
                       filterable
-                      placeholder="原料/半成品"
+                      remote
+                      :remote-method="searchMaterial"
+                      :loading="materialLoading"
+                      placeholder="搜索原料/半成品"
                       :disabled="readonly"
                       @change="(id: number) => applyMaterialUnit(row, id)"
                     >
                       <el-option
                         v-for="m in materialOptions"
                         :key="m.id"
-                        :label="`${m.code} ${m.name}`"
+                        :label="productLabel(m)"
                         :value="m.id"
                       />
                     </el-select>
@@ -315,9 +324,10 @@ import { VueFlow, Handle, Position } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { routingApi, type RoutingPayload } from '../../api/routing'
-import { productApi, type ProductItem } from '../../api/product'
+import { productApi, type ProductType } from '../../api/product'
 import { processApi, type ProcessItem } from '../../api/process'
 import { hasCycle, layoutPositions, nextNodeNo } from '../../utils/dag'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 
 // Vue Flow 样式在弹窗组件引入一次（style 基础样式 + theme-default 默认主题）
 
@@ -379,13 +389,82 @@ const selectedNodeNo = ref<string | null>(null)
 /** 画布点选的连线 id（`${from}->${to}`），供「删除连线」 */
 const selectedEdgeKey = ref<string | null>(null)
 
-// 下拉数据源：工序全量；输出产品=半成品+成品；材料=原料+半成品（spec §2.3 商品类型约束）
-const processes = ref<ProcessItem[]>([])
-const finishedProducts = ref<ProductItem[]>([])
-const outputOptions = ref<ProductItem[]>([])
-const materialOptions = ref<ProductItem[]>([])
+// 下拉数据源：工序全量（小主数据，维持本地过滤不动）；商品三路走远程搜索（BF-3）
 // 商品名称/单位缓存：graph 回显的商品可能不在下拉前 100 条内，卡片展示优先查缓存
+const processes = ref<ProcessItem[]>([])
+
+/** 画布商品下拉选项：搜索结果为完整商品档案；回显 pin 项仅有 id/名称/单位（graph 历史数据，code 可缺） */
+interface CanvasProduct {
+  id: number
+  code: string
+  name: string
+  unit_id: number | null
+  unit_name: string | null
+  type?: ProductType
+}
+
+/** 商品下拉单页容量：初载与关键字搜索共用（后端 per_page 硬钳制上限 100） */
+const PRODUCT_PAGE_SIZE = 100
+
+// 成品下拉（单路 finished）：remote 服务端搜索，初载取前 100 条
+const {
+  options: finishedOptions,
+  loading: finishedLoading,
+  load: loadFinished,
+  search: searchFinished,
+  pin: pinFinished,
+  reset: resetFinished,
+} = useRemoteOptions<CanvasProduct>({
+  fetch: (kw) =>
+    productApi
+      .list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'finished', keyword: kw })
+      .then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 输出产品下拉（双路合并：半成品 + 成品，spec §2.3 输出类型约束）
+const {
+  options: outputOptions,
+  loading: outputLoading,
+  load: loadOutput,
+  search: searchOutput,
+  pin: pinOutput,
+  reset: resetOutput,
+} = useRemoteOptions<CanvasProduct>({
+  fetch: (kw) =>
+    Promise.all([
+      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'semi_finished', keyword: kw }),
+      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'finished', keyword: kw }),
+    ]).then(([semi, fin]) => [...semi.items, ...fin.items]),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 材料下拉（双路合并：原料 + 半成品，spec §2.3 材料类型约束）
+const {
+  options: materialOptions,
+  loading: materialLoading,
+  load: loadMaterial,
+  search: searchMaterial,
+  pin: pinMaterial,
+  reset: resetMaterial,
+} = useRemoteOptions<CanvasProduct>({
+  fetch: (kw) =>
+    Promise.all([
+      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'raw_material', keyword: kw }),
+      productApi.list({ page: 1, per_page: PRODUCT_PAGE_SIZE, type: 'semi_finished', keyword: kw }),
+    ]).then(([raw, semi]) => [...raw.items, ...semi.items]),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
 const productCache = ref(new Map<number, { name: string; unit_name?: string }>())
+
+/** 下拉选项文案：编码+名称；回显 pin 项无编码时仅展示名称（避免前导空格） */
+function productLabel(p: CanvasProduct): string {
+  return p.code ? `${p.code} ${p.name}` : p.name
+}
 
 // 工具栏与连线表单
 const toolbarProcessId = ref<number | null>(null)
@@ -449,23 +528,19 @@ watch(
     resetEditor()
     loadingGraph.value = true
     try {
-      const [procs, fin, semi, raw] = await Promise.all([
-        processApi.list(),
-        productApi.list({ page: 1, per_page: 100, type: 'finished' }),
-        productApi.list({ page: 1, per_page: 100, type: 'semi_finished' }),
-        productApi.list({ page: 1, per_page: 100, type: 'raw_material' }),
-      ])
+      const procs = await processApi.list()
       if (session !== sessionSeq) return
       processes.value = procs.items
-      finishedProducts.value = fin.items
-      // 输出产品：半成品 +（终点工序的）成品；材料：原料 + 半成品
-      outputOptions.value = [...semi.items, ...fin.items]
-      materialOptions.value = [...raw.items, ...semi.items]
+      // 商品三路下拉初载（BF-3 remote 模式保留前 100 条初始选项）：不阻塞弹窗打开，
+      // 失败由各自 onError 提示且保持空列表可继续搜索，不再整体关窗中断编辑
+      void loadFinished()
+      void loadOutput()
+      void loadMaterial()
       if (props.routingId != null) await loadGraph(props.routingId, session)
     } catch (e) {
       // 迟到守卫：会话已作废（关窗/重开）时丢弃失败提示与关窗动作，避免过期报错打扰新会话
       if (session !== sessionSeq) return
-      // 下拉或图数据加载失败：提示并关闭弹窗，避免半初始化编辑器
+      // 工序或图数据加载失败：提示并关闭弹窗，避免半初始化编辑器
       ElMessage.error((e as Error).message)
       emit('update:visible', false)
     } finally {
@@ -492,6 +567,10 @@ function resetEditor() {
   linkTo.value = null
   routingCode.value = ''
   productCache.value.clear()
+  // 商品下拉选项集与 pin 集一并清空并作废在途，防止上一会话（编辑 A）的回显项串入下一会话
+  resetFinished()
+  resetOutput()
+  resetMaterial()
 }
 
 /** 编辑回显：单头 + 节点/材料/边还原；历史商品名称入缓存供卡片展示 */
@@ -522,6 +601,37 @@ async function loadGraph(id: number, session: number) {
     })),
   }))
   editorEdges.value = g.edges.map((e) => ({ from: e.from_node_no, to: e.to_node_no }))
+  // 回显商品并入下拉选项集（pin）：历史商品可能不在初载前 100 条内，不 pin 则下拉只能显示裸 id；
+  // 名称/单位缓存仍供节点卡片展示
+  if (g.routing.product_id) {
+    pinFinished({
+      id: g.routing.product_id,
+      code: '',
+      name: g.routing.product_name,
+      unit_id: null,
+      unit_name: null,
+    })
+  }
+  for (const n of g.nodes) {
+    if (n.output_product_id) {
+      pinOutput({
+        id: n.output_product_id,
+        code: '',
+        name: n.output_product_name,
+        unit_id: null,
+        unit_name: null,
+      })
+    }
+    for (const m of n.materials) {
+      pinMaterial({
+        id: m.material_id,
+        code: '',
+        name: m.material_name,
+        unit_id: m.unit_id,
+        unit_name: m.unit_name,
+      })
+    }
+  }
   // 回显商品（含不在下拉列表的历史商品）入名称缓存
   for (const n of g.nodes) {
     if (n.output_product_id)
@@ -531,12 +641,14 @@ async function loadGraph(id: number, session: number) {
   }
 }
 
-/** 商品名（卡片/产出展示）：缓存 → 下拉列表，未知返回空 */
+/** 商品名（卡片/产出展示）：缓存 → 下拉选项，未知返回空 */
 function productName(id: number | null | undefined): string {
   if (!id) return ''
   return (
     productCache.value.get(id)?.name ??
-    [...outputOptions.value, ...materialOptions.value].find((p) => p.id === id)?.name ??
+    [...outputOptions.value, ...materialOptions.value, ...finishedOptions.value].find(
+      (p) => p.id === id,
+    )?.name ??
     ''
   )
 }

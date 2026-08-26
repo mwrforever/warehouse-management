@@ -12,23 +12,43 @@ import {
   type OutsourcingReceiptRecord,
   type OutsourcingReturnRecord,
   type ProductionOperation,
-  type ProductionOrderItem,
 } from '../../api/production'
 import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 import { formatThousand } from '../../utils/format'
 
 const auth = useAuthStore()
 const route = useRoute()
 const saving = ref(false)
-// 生产中工单下拉（label 单号+成品，仅 status=2 可委外）
-const orders = ref<ProductionOrderItem[]>([])
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
+
+// 工单下拉选项（BF-3 remote）：label 单号+成品；仅 status=2 生产中工单可委外
+interface OrderOption {
+  id: number
+  no: string
+  product_name: string
+}
+
+// 工单下拉（BF-3）：生产中工单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: orders,
+  loading: ordersLoading,
+  load: loadOrders,
+  search: searchOrders,
+  pin: pinOrder,
+  reset: resetOrders,
+} = useRemoteOptions<OrderOption>({
+  fetch: (kw) =>
+    productionApi.orders({ status: 2, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
 // 当前工单的委外工序（仅 is_outsourced=1 且未完成的节点可选，label 含节点号与产出）
 const processOptions = ref<ProductionOperation[]>([])
 // 选中工序的节点预填（组件清单/回收品/剩余可委外量）
@@ -130,8 +150,14 @@ let sessionSeq = 0
 
 // 关窗即作废在途：任一弹窗关闭后迟到的预填/详情/流水响应禁止回写与重开弹窗
 //（弹窗已关，回写无意义且污染重开时的 reset）
+// 新建/编辑弹窗开关同时是工单下拉的 remote 会话边界（BF-3）：打开初载前 100 条，关闭清空选项与 pin 集
 watch(dialogVisible, (open) => {
   if (!open) sessionSeq++
+  if (open) {
+    loadOrders()
+  } else {
+    resetOrders()
+  }
 })
 watch(returnVisible, (open) => {
   if (!open) sessionSeq++
@@ -151,6 +177,8 @@ async function onOrderChange(orderId: number | undefined, session: number = ++se
     const d = await productionApi.orderDetail(orderId)
     // 迟到守卫：会话已作废（工序切换/关窗重开）时丢弃过期下拉回写
     if (session !== sessionSeq) return
+    // 工单回显 pin：详情携带单号/成品名，工单可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id
+    pinOrder({ id: d.id, no: d.no, product_name: d.product_name })
     // 委外对象=工艺路线节点：仅 is_outsourced=1 且未完成（status 2 已完成）的节点可委外（spec 5 §4 规则定义）
     processOptions.value = d.operations.filter((op) => op.is_outsourced === 1 && op.status !== 2)
   } catch (e) {
@@ -614,8 +642,6 @@ onMounted(async () => {
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
     suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
-    // 仅生产中工单可委外（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -745,8 +771,11 @@ onMounted(async () => {
           <el-form-item label="工单" required>
             <el-select
               v-model="form.order_id"
-              placeholder="选择生产中工单"
+              placeholder="输入单号搜索生产中工单"
               filterable
+              remote
+              :remote-method="searchOrders"
+              :loading="ordersLoading"
               style="width: 100%"
               @change="onOrderChange"
             >

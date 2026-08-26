@@ -69,13 +69,16 @@
           <el-select
             v-model="form.product_id"
             filterable
+            remote
+            :remote-method="searchFinished"
+            :loading="finishedLoading"
             style="width: 100%"
-            placeholder="仅成品类型商品"
+            placeholder="搜索成品编码/名称"
           >
             <el-option
               v-for="p in finishedProducts"
               :key="p.id"
-              :label="`${p.code} ${p.name}`"
+              :label="productLabel(p)"
               :value="p.id"
             />
           </el-select>
@@ -98,14 +101,17 @@
               <el-select
                 v-model="row.material_id"
                 filterable
-                placeholder="物料（原料/半成品）"
+                remote
+                :remote-method="searchMaterials"
+                :loading="materialLoading"
+                placeholder="搜索物料（原料/半成品）编码/名称"
                 style="width: 260px"
                 @change="(id: number) => applyMaterialUnit(row, id)"
               >
                 <el-option
                   v-for="m in materialProducts"
                   :key="m.id"
-                  :label="`${m.code} ${m.name}`"
+                  :label="productLabel(m)"
                   :value="m.id"
                 />
               </el-select>
@@ -144,14 +150,15 @@
 
 <script setup lang="ts">
 // BOM 管理页：单头+明细一次保存/全量替换；启用切换自动停用同成品其他版本（后端 1120 兜底）
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { bomApi, type BomItem, type BomRow } from '../../api/bom'
-import { productApi, type ProductItem } from '../../api/product'
+import { productApi } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 
 const auth = useAuthStore()
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
@@ -190,12 +197,56 @@ const form = reactive<BomForm>({
   status: 1,
   items: [],
 })
-const finishedProducts = ref<ProductItem[]>([])
-const materialProducts = ref<ProductItem[]>([])
+// 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑回显 pin 项缺编码/单位时仅保证展示与带出
+interface ProductOption {
+  id: number
+  name: string
+  code: string
+  unit_id: number
+}
+
+// 成品下拉（BF-3）：成品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
+const {
+  options: finishedProducts,
+  loading: finishedLoading,
+  load: loadFinished,
+  search: searchFinished,
+  pin: pinFinished,
+  reset: resetFinished,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) =>
+    productApi.list({ page: 1, per_page: 100, type: 'finished', keyword: kw }).then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 物料下拉（BF-3）：原料+半成品双路合并（成品嵌套由后端 1119 兜底），超 100 条后服务端搜索
+const {
+  options: materialProducts,
+  loading: materialLoading,
+  load: loadMaterials,
+  search: searchMaterials,
+  pin: pinMaterial,
+  reset: resetMaterials,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) =>
+    Promise.all([
+      productApi.list({ page: 1, per_page: 100, type: 'raw_material', keyword: kw }),
+      productApi.list({ page: 1, per_page: 100, type: 'semi_finished', keyword: kw }),
+    ]).then(([raw, semi]) => [...raw.items, ...semi.items]),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
 const units = ref<UnitItem[]>([])
 const itemsVisible = ref(false)
 const currentBom = ref<BomRow | null>(null)
 const itemsRows = ref<BomItem[]>([])
+
+// 下拉选项文案：编码+名称；编辑回显 pin 项无编码时仅展示名称（避免前导空格）
+function productLabel(p: ProductOption): string {
+  return p.code ? `${p.code} ${p.name}` : p.name
+}
 
 // 单位名映射（明细行显示；unit_id 未选时为空）
 function unitName(id: number | null) {
@@ -229,6 +280,11 @@ async function openEdit(row: BomRow) {
   try {
     // 明细请求成功后组装行数据并打开弹窗，请求期间表单不会被旧数据回写
     const res = await bomApi.items(row.id)
+    // 回显 pin：成品/物料可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id（物料需带 unit_id 供单位带出）
+    pinFinished({ id: row.product_id, name: row.product_name ?? '', code: '', unit_id: 0 })
+    for (const i of res.items) {
+      pinMaterial({ id: i.material_id, name: i.material_name, code: '', unit_id: i.unit_id })
+    }
     form.items = res.items.map((i) => ({
       material_id: i.material_id,
       quantity: i.quantity,
@@ -240,6 +296,18 @@ async function openEdit(row: BomRow) {
     ElMessage.error((e as Error).message)
   }
 }
+
+// 弹窗开关边界（BF-3 remote 会话）：打开初载下拉前 100 条，关闭清空选项与 pin 集并作废在途，
+// 防止上一张 BOM 的回显成品/物料串入下一张新单的下拉
+watch(dialogVisible, (open) => {
+  if (open) {
+    loadFinished()
+    loadMaterials()
+  } else {
+    resetFinished()
+    resetMaterials()
+  }
+})
 
 // 动态行：默认单位取第一个单位（选择物料后由 applyMaterialUnit 带出该物料单位）
 function newRow() {
@@ -333,16 +401,8 @@ async function remove(row: BomRow) {
 onMounted(async () => {
   search()
   try {
-    // 三路下拉数据互不依赖，并行加载缩短首屏等待
-    const [fin, mat, unit] = await Promise.all([
-      productApi.list({ page: 1, per_page: 100, type: 'finished' }),
-      productApi.list({ page: 1, per_page: 100 }),
-      unitApi.list({ page: 1, per_page: 100 }),
-    ])
-    finishedProducts.value = fin.items
-    // 物料下拉：仅原料/半成品（成品嵌套由后端 1119 兜底，前端直接过滤）
-    materialProducts.value = mat.items.filter((p) => p.type !== 'finished')
-    units.value = unit.items
+    // 单位下拉（小主数据，维持本地装载）
+    units.value = (await unitApi.list({ page: 1, per_page: 100 })).items
   } catch {
     // 下拉加载失败不阻塞主流程（对齐 InboundsView 兜底；主列表由 useListQuery 独立提示）
   }

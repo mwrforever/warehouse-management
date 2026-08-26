@@ -1,7 +1,7 @@
 // 工艺路线画布编辑器组件测试：环路本地预检拦截（1701 同口径）、保存载荷结构、删节点连带删边、自动编号
 // 画布依赖 @vue-flow/core，单测将其 stub 为占位组件（真实画布交互由 Playwright E2E TC-RTG-* 覆盖），
 // 组件行为经可见控件驱动：工序下拉+添加节点 / 节点面板配置 / 添加连线双下拉 / 校验 DAG / 保 存
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus, { ElMessage } from 'element-plus'
@@ -100,6 +100,7 @@ vi.mock('../api/process', () => ({
   },
 }))
 import { routingApi, type RoutingListItem } from '../api/routing'
+import { productApi } from '../api/product'
 
 describe('工艺路线画布编辑器', () => {
   let pinia: ReturnType<typeof createPinia>
@@ -455,6 +456,94 @@ describe('工艺路线画布编辑器', () => {
     expect(wrapper.find('.el-dialog__title').text()).toBe('编辑工艺路线 - RTG-002')
     expect(headerVersion(wrapper)).toBe('v2')
     expect(document.querySelector('.canvas-empty')).toBeNull()
+    wrapper.unmount()
+  })
+})
+
+describe('画布商品下拉远程搜索（BF-3：超 100 商品可选）', () => {
+  let pinia: ReturnType<typeof createPinia>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    document.querySelectorAll('.el-message').forEach((m) => m.remove())
+    pinia = createPinia()
+    setActivePinia(pinia)
+    useAuthStore().permissions = ['routing.list', 'routing.create', 'routing.update']
+    vi.useFakeTimers()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  function mountView() {
+    return mount(RoutingsView, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus, pinia] },
+    })
+  }
+
+  it('成品下拉输入关键字后以 keyword 调商品接口并替换选项（远程搜索替代本地前 100 条过滤）', async () => {
+    // 正常路径：商品档案超 100 条时第 101 个成品必须可搜可选——remote 模式下调 productApi.list({ keyword })
+    const wrapper = mountView()
+    await flushPromises()
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
+    await newBtn!.trigger('click')
+    await flushPromises()
+
+    // 表头成品下拉：el-select remote 模式（remote prop 为 true，remote-method 即 EP 内部输入回调）
+    const select = wrapper.find('.header-product').findComponent({ name: 'ElSelect' })
+    expect(select.exists(), '成品下拉应存在').toBe(true)
+    expect(select.props('remote'), '成品下拉应为 remote 服务端搜索模式').toBe(true)
+    const remoteMethod = select.props('remoteMethod') as (q: string) => void
+    expect(typeof remoteMethod).toBe('function')
+
+    // 输入关键字：300ms 防抖后以 keyword 请求商品接口
+    vi.clearAllMocks() // 清掉初载调用，聚焦搜索调用参数
+    remoteMethod('桌')
+    expect(vi.mocked(productApi.list), '防抖窗口内不得发请求').not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(300)
+    expect(productApi.list).toHaveBeenCalledWith(expect.objectContaining({ keyword: '桌' }))
+    wrapper.unmount()
+  })
+
+  it('材料下拉输入关键字后同时搜原料与半成品（type 双路合并同现一个下拉）', async () => {
+    // 正常路径：材料 = 原料 + 半成品两类合并；搜索须两路都带 keyword（后端 type 单值过滤）
+    const wrapper = mountView()
+    await flushPromises()
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
+    await newBtn!.trigger('click')
+    await flushPromises()
+
+    // 先加一个节点展开材料配置区（材料行在节点面板内）
+    const toolbarSelect = wrapper.find('.toolbar-process')
+    await toolbarSelect.find('.el-select__wrapper').trigger('click')
+    await flushPromises()
+    const opt = [...document.querySelectorAll('.el-select-dropdown__item')].find(
+      (o) => (o as HTMLElement).textContent!.trim() === '下料',
+    )
+    ;(opt as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    // 等一个宏任务（本 describe 启用假定时器，setTimeout 不会自触发，改由推进假时钟达成同语义）
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+    const addBtn = wrapper.findAll('button').find((b) => b.text().trim() === '添加节点')
+    await addBtn!.trigger('click')
+    await flushPromises()
+
+    // 添加一行材料，取材料行 el-select 断言 remote 搜索双路 keyword
+    const addMat = wrapper.findAll('button').find((b) => b.text().trim() === '添加材料')
+    await addMat!.trigger('click')
+    await flushPromises()
+    const select = wrapper.find('.mat-row').findComponent({ name: 'ElSelect' })
+    expect(select.exists(), '材料行下拉应存在').toBe(true)
+    expect(select.props('remote'), '材料下拉应为 remote 服务端搜索模式').toBe(true)
+    vi.clearAllMocks()
+    ;(select.props('remoteMethod') as (q: string) => void)('铝')
+    await vi.advanceTimersByTimeAsync(300)
+    const calls = vi.mocked(productApi.list).mock.calls.map((c) => c[0])
+    expect(
+      calls.filter((p) => p?.keyword === '铝'),
+      '原料与半成品两路都应携带 keyword',
+    ).toHaveLength(2)
+    expect(calls.some((p) => p?.type === 'raw_material')).toBe(true)
+    expect(calls.some((p) => p?.type === 'semi_finished')).toBe(true)
     wrapper.unmount()
   })
 })

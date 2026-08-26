@@ -194,10 +194,15 @@ export const purchaseApi = {
   async closeOrder(id: number) {
     await http.post(`/purchase/orders/${id}/close`)
   },
-  // 可入库订单列表（从订单生成下拉数据源）
-  async availableOrders() {
-    const { data } = await http.get('/purchase/orders/available')
-    return data.data as { items: AvailableOrder[]; total: number }
+  // 可入库订单列表（从订单生成下拉数据源；BF-3 后端支持单号 keyword 模糊搜索与 per_page 分页钳制 100）
+  async availableOrders(params?: { keyword?: string; per_page?: number }) {
+    const { data } = await http.get('/purchase/orders/available', { params })
+    return data.data as {
+      items: AvailableOrder[]
+      total: number
+      page: number
+      per_page: number
+    }
   },
   // 该订单的入库记录（详情页 tab）
   async orderInbounds(id: number) {

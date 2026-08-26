@@ -3,15 +3,11 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  productionApi,
-  type PickDetail,
-  type PickItem,
-  type ProductionOrderItem,
-} from '../../api/production'
+import { productionApi, type PickDetail, type PickItem } from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
@@ -19,8 +15,28 @@ const route = useRoute()
 const saving = ref(false)
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
-// 生产中工单下拉（label 单号+成品，仅 status=2 可领料）
-const orders = ref<ProductionOrderItem[]>([])
+
+// 工单下拉选项（BF-3 remote）：label 单号+成品；仅 status=2 生产中工单可领料
+interface OrderOption {
+  id: number
+  no: string
+  product_name: string
+}
+
+// 工单下拉（BF-3）：生产中工单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: orders,
+  loading: ordersLoading,
+  load: loadOrders,
+  search: searchOrders,
+  pin: pinOrder,
+  reset: resetOrders,
+} = useRemoteOptions<OrderOption>({
+  fetch: (kw) =>
+    productionApi.orders({ status: 2, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
 
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
 const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
@@ -59,8 +75,14 @@ const detail = ref<PickDetail | null>(null)
 let sessionSeq = 0
 
 // 关窗即作废在途：弹窗关闭后迟到的预填/详情响应禁止回写（弹窗已关，回写无意义且污染重开时的 reset）
+// 弹窗开关同时是工单下拉的 remote 会话边界（BF-3）：打开初载前 100 条，关闭清空选项与 pin 集
 watch(dialogVisible, (open) => {
   if (!open) sessionSeq++
+  if (open) {
+    loadOrders()
+  } else {
+    resetOrders()
+  }
 })
 
 // 领料单状态标签语义色（production.md：草稿灰/已审核绿）
@@ -83,6 +105,8 @@ async function onOrderChange(orderId: number | undefined, session: number = ++se
     // 迟到守卫：旧工单的慢预填丢弃，防覆盖新单明细与 order_id（快速切单 A→B 所见非所选）
     if (session !== sessionSeq) return
     form.order_id = data.order_id
+    // 工单回显 pin：预填响应携带单号/成品名，工单可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id
+    pinOrder({ id: data.order_id, no: data.order_no, product_name: data.product_name })
     fromOrderNo.value = data.order_no
     form.items = data.items.map((i) => ({
       product_id: i.product_id,
@@ -296,8 +320,6 @@ onMounted(async () => {
   search()
   try {
     warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    // 仅生产中工单可领料（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -414,8 +436,11 @@ onMounted(async () => {
           <el-form-item label="工单" required>
             <el-select
               v-model="form.order_id"
-              placeholder="选择生产中工单"
+              placeholder="输入单号搜索生产中工单"
               filterable
+              remote
+              :remote-method="searchOrders"
+              :loading="ordersLoading"
               style="width: 100%"
               @change="onOrderChange"
             >

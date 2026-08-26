@@ -1,6 +1,6 @@
 <!-- 采购入库单页：筛选列表 + 双入口新建弹窗（从订单生成/独立新建）+ 详情弹窗 + 审核（加库存） -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -16,6 +16,7 @@ import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
 import { calcMaxQuantity } from '../../composables/useScanInbound'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import { formatThousand, formatYuan } from '../../utils/format'
@@ -27,8 +28,41 @@ const saving = ref(false)
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
-const availableOrders = ref<AvailableOrder[]>([])
-const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
+
+// 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑/扫码回显 pin 项仅保证 id/名称/编码展示
+interface ProductOption {
+  id: number
+  name: string
+  code: string
+}
+
+// 来源订单下拉（BF-3/B-106）：可入库订单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: availableOrders,
+  loading: availableOrdersLoading,
+  load: loadAvailableOrders,
+  search: searchAvailableOrders,
+  pin: pinAvailableOrder,
+  reset: resetAvailableOrders,
+} = useRemoteOptions<AvailableOrder>({
+  fetch: (kw) => purchaseApi.availableOrders({ keyword: kw, per_page: 100 }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 商品下拉（BF-3）：商品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
+const {
+  options: products,
+  loading: productsLoading,
+  load: loadProducts,
+  search: searchProducts,
+  pin: pinProduct,
+  reset: resetProducts,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) => productApi.list({ page: 1, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
 
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
 const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
@@ -146,8 +180,10 @@ function scanMaxQuantity(it: ScanItem): number {
 
 // 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；
 // 订单场景超量已在弹窗内按剩余量拦截；扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+// 扫到的商品并入商品下拉（pin）：扫码结果可能不在下拉前 100 条内，不 pin 则明细行只显示裸 id
 function onScanItems(items: ScanItem[]) {
   for (const it of items) {
+    pinProduct({ id: it.product_id, name: it.name, code: it.code })
     const existing = form.items.find((i) => i.product_id === it.product_id)
     if (existing) {
       existing.quantity = Number((existing.quantity + it.quantity).toFixed(2))
@@ -183,6 +219,16 @@ async function openEdit(row: PurchaseInboundItem) {
     mode.value = d.order_id ? 'from-order' : 'standalone'
     editingId.value = row.id
     fromOrderId.value = d.order_id ?? undefined
+    // 来源订单回显 pin：草稿关联的订单可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id；
+    // 草稿供应商即来源订单供应商（从订单生成预填），借其名称拼回显 label
+    if (d.order_id) {
+      pinAvailableOrder({
+        id: d.order_id,
+        no: d.order_no ?? '',
+        supplier_name: d.supplier_name,
+        order_date: '',
+      })
+    }
     orderRemaining.value = new Map() // 详情接口无剩余量字段：扫码不设上限，保存时后端 1308 兜底
     Object.assign(form, {
       supplier_id: d.supplier_id,
@@ -196,12 +242,28 @@ async function openEdit(row: PurchaseInboundItem) {
         order_item_id: i.order_item_id ?? undefined,
       })),
     })
+    // 明细商品回显 pin：历史商品可能不在下拉前 100 条内，保证明细行显示名称而非裸 id
+    for (const i of d.items) {
+      pinProduct({ id: i.product_id, name: i.product_name, code: i.product_code })
+    }
     locations.value = (await warehouseApi.locations(d.warehouse_id)).items
     dialogVisible.value = true
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
 }
+
+// 弹窗开关边界（BF-3 remote 会话）：打开初载下拉前 100 条，关闭清空选项与 pin 集并作废在途，
+// 防止上一张单据的回显商品/订单串入下一张新单的下拉
+watch(dialogVisible, (open) => {
+  if (open) {
+    loadAvailableOrders()
+    loadProducts()
+  } else {
+    resetAvailableOrders()
+    resetProducts()
+  }
+})
 
 // 保存（载荷：价格 元→分；从订单生成模式带 order_id 与 order_item_id；编辑走更新接口）
 async function save() {
@@ -322,18 +384,17 @@ async function openDetail(row: PurchaseInboundItem) {
 
 onMounted(async () => {
   search()
+  // 订单/商品下拉初载（BF-3 remote 模式保留前 100 条）：失败由各自 onError 提示，不阻塞主列表
+  void loadAvailableOrders()
+  void loadProducts()
   try {
-    // 四路下拉数据互不依赖，并行加载缩短首屏等待（对齐 BomsView 写法）
-    const [sup, wh, orders, prods] = await Promise.all([
+    // 供应商/仓库两路下拉互不依赖，并行加载缩短首屏等待
+    const [sup, wh] = await Promise.all([
       supplierApi.list({ per_page: 100, status: 1 }),
       warehouseApi.list({ per_page: 100, status: 1 }),
-      purchaseApi.availableOrders(),
-      productApi.list({ per_page: 100 }),
     ])
     suppliers.value = sup.items
     warehouses.value = wh.items
-    availableOrders.value = orders.items
-    products.value = prods.items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -460,8 +521,11 @@ onMounted(async () => {
           <el-form-item v-if="mode === 'from-order'" label="来源订单" required>
             <el-select
               v-model="fromOrderId"
-              placeholder="选择已审核/部分入库订单"
+              placeholder="输入单号搜索已审核/部分入库订单"
               filterable
+              remote
+              :remote-method="searchAvailableOrders"
+              :loading="availableOrdersLoading"
               style="width: 100%"
               @change="onOrderChange"
             >
@@ -516,8 +580,11 @@ onMounted(async () => {
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.product_id"
-                placeholder="选择商品"
+                placeholder="搜索商品编码/名称"
                 filterable
+                remote
+                :remote-method="searchProducts"
+                :loading="productsLoading"
                 style="width: 100%"
                 :disabled="mode === 'from-order'"
                 @change="onProductChange(row, $index)"

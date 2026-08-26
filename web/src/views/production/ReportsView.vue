@@ -7,8 +7,8 @@ import {
   productionApi,
   type ProductionOperation,
   type ProductionOrderDetail,
-  type ProductionOrderItem,
 } from '../../api/production'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 import UserSelect from '../../components/UserSelect.vue'
 
@@ -16,8 +16,28 @@ const auth = useAuthStore()
 const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
-// 生产中工单下拉（label 单号+成品）
-const orders = ref<ProductionOrderItem[]>([])
+
+// 工单下拉选项（BF-3 remote）：label 单号+成品；仅 status=2 生产中工单可报工
+interface OrderOption {
+  id: number
+  no: string
+  product_name: string
+}
+
+// 工单下拉（BF-3）：生产中工单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: orders,
+  loading: ordersLoading,
+  load: loadOrders,
+  search: searchOrders,
+  pin: pinOrder,
+} = useRemoteOptions<OrderOption>({
+  fetch: (kw) =>
+    productionApi.orders({ status: 2, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
 const selectedOrder = ref<number | null>(null)
 const detail = ref<ProductionOrderDetail | null>(null)
 const operations = ref<ProductionOperation[]>([])
@@ -76,6 +96,8 @@ async function loadOperations() {
     if (seq !== loadSeq) return
     detail.value = d
     operations.value = d.operations
+    // 工单回显 pin：详情携带单号/成品名，工单可能不在下拉前 100 条内（含路由直达场景），不 pin 则下拉只显示裸 id
+    pinOrder({ id: d.id, no: d.no, product_name: d.product_name })
     // 切换工单后重置报工表单（新工序从零报工）；操作人保留预填的当前登录用户，不被切换清空
     Object.assign(reportForm, {
       qualified_qty: null,
@@ -168,12 +190,8 @@ async function submitReport() {
 onMounted(async () => {
   // 操作人默认预填当前登录用户（spec §4.3 应用点，可改选）
   reportForm.operator = auth.user?.name ?? ''
-  try {
-    // 仅生产中工单可报工（status=2，per_page 100 覆盖全量）
-    orders.value = (await productionApi.orders({ status: 2, per_page: 100 })).items
-  } catch (e) {
-    ElMessage.error((e as Error).message)
-  }
+  // 工单下拉初载（BF-3 remote 模式保留前 100 条）：失败由 onError 提示，不阻塞路由直达预填
+  void loadOrders()
   // 路由直达：工单列表「报 工」跳转携带 order_id
   const orderId = Number(route.query.order_id)
   if (orderId) {
@@ -188,8 +206,11 @@ onMounted(async () => {
       <span class="page-title">工序报工</span>
       <el-select
         v-model="selectedOrder"
-        placeholder="选择工单"
+        placeholder="输入单号搜索生产中工单"
         filterable
+        remote
+        :remote-method="searchOrders"
+        :loading="ordersLoading"
         clearable
         style="width: 340px"
         @change="loadOperations"

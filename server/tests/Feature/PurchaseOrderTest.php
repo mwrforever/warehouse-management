@@ -293,6 +293,34 @@ class PurchaseOrderTest extends TestCase
         $this->assertSame(1, $res2->json('data.total'));
     }
 
+    public function test_available_supports_keyword_search_and_pagination(): void
+    {
+        // BF-3/B-106：可入库订单下拉数据源支持单号关键字搜索与分页
+        // （原实现全量装载订单头+全部明细行再集合过滤，订单量增长后下拉不可选且响应线性膨胀）
+        $no1 = $this->createOrder($this->payload());
+        $this->approveOrder($no1);
+        $no2 = $this->createOrder($this->payload());
+        $this->approveOrder($no2);
+        $no3 = $this->createOrder($this->payload());
+        $this->approveOrder($no3);
+
+        // 正常路径：关键字按单号模糊，完整单号唯一命中 no2
+        $res = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?keyword='.$no2);
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(1, $res->json('data.total'));
+        $this->assertSame($no2, $res->json('data.items.0.no'));
+
+        // 边界路径：分页 per_page=2 → 首页 2 条、total=3、响应带分页元数据（与 index 同结构）
+        $page = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?per_page=2');
+        $this->assertSame(3, $page->json('data.total'));
+        $this->assertCount(2, $page->json('data.items'));
+        $this->assertSame(2, $page->json('data.per_page'));
+
+        // 边界路径：per_page 超上限钳制 100（与其他列表接口同口径，防大 per_page 绕过）
+        $clamp = $this->withToken($this->token)->getJson('/api/v1/purchase/orders/available?per_page=999');
+        $this->assertSame(100, $clamp->json('data.per_page'));
+    }
+
     public function test_orders_requires_purchase_order_permission(): void
     {
         // 异常路径：无 purchase.order.list 权限的角色被拒（403 JSON 信封）

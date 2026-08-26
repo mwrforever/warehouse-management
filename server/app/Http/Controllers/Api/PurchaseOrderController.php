@@ -87,28 +87,42 @@ class PurchaseOrderController extends Controller
         ]);
     }
 
-    /** 可入库订单列表：已审核/部分入库、未关闭、有剩余量（「从订单生成」下拉数据源） */
-    public function available()
+    /** 可入库订单列表：已审核/部分入库、未关闭、有剩余量（「从订单生成」下拉数据源）；keyword 单号模糊 + 分页（B-106） */
+    public function available(Request $request)
     {
-        $orders = PurchaseOrder::query()
-            ->whereIn('status', [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL])
-            ->with(['supplier', 'items'])
-            ->orderByDesc('id')
-            ->get()
-            // 过滤：必须存在未入完的明细行（剩余量 > 0）
-            ->filter(fn ($o) => $o->items->contains(
-                fn ($i) => bccomp((string) $i->received_qty, (string) $i->quantity, 2) < 0
-            ))
-            ->values();
+        $query = PurchaseOrder::query()
+            ->join('suppliers', 'suppliers.id', '=', 'purchase_orders.supplier_id')
+            ->select(
+                // 显式列出下拉所需列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'purchase_orders.id',
+                'purchase_orders.no',
+                'purchase_orders.order_date',
+                'suppliers.name as supplier_name',
+            )
+            ->whereIn('purchase_orders.status', [PurchaseOrder::STATUS_APPROVED, PurchaseOrder::STATUS_PARTIAL])
+            // 有剩余量判定下推 SQL（exists 子查询，B-106）：存在「已入库累计 < 订购数」明细行的订单才可入库；
+            // 两列均为 decimal(12,2)，数据库按精确十进制比较，与原 bccomp 集合过滤语义一致，
+            // 且免全量装载订单头+全部明细行再集合过滤（订单量增长后旧实现响应线性膨胀、下拉不可选）
+            ->whereHas('items', fn ($q) => $q->whereColumn('received_qty', '<', 'quantity'));
+
+        if ($keyword = $request->input('keyword')) {
+            // 单号关键字模糊搜索（% 在绑定值内参数绑定，禁止拼接）
+            $query->where('purchase_orders.no', 'like', "%{$keyword}%");
+        }
+
+        // 下拉数据源默认 50 条/页、上限钳制 100（与其他列表接口同口径，防大 per_page 绕过）
+        $rows = $query->orderByDesc('purchase_orders.id')
+            ->paginate(max(1, min(100, (int) $request->input('per_page', 50))));
 
         return $this->ok([
-            'items' => $orders->map(fn ($o) => [
+            // join 别名列经 getAttribute 读取（PHPStan 静态分析可识别）
+            'items' => $rows->map(fn (PurchaseOrder $o) => [
                 'id' => $o->id,
                 'no' => $o->no,
-                'supplier_name' => $o->supplier?->name,
+                'supplier_name' => $o->getAttribute('supplier_name'),
                 'order_date' => $o->order_date,
             ]),
-            'total' => $orders->count(),
+            'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
         ]);
     }
 
