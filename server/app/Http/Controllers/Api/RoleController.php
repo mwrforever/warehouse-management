@@ -1,6 +1,7 @@
 <?php
 
-// 角色管理控制器：CRUD + 权限分配 + 删除保护（被引用/最后一个 admin 角色）
+// 角色管理控制器：列表/权限清单 读取 + 写流程薄壳（创建/更新/删除全部下沉 RoleService）
+// 删除保护由 RoleService 执行：被用户引用的角色拒绝删除（1004）、唯一 admin 编码角色拒绝删除（1007）
 
 namespace App\Http\Controllers\Api;
 
@@ -8,21 +9,17 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\RoleRequest;
 use App\Models\Permission;
 use App\Models\Role;
+use App\Services\RoleService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 
-/**
- * 角色管理控制器
- *
- * 负责角色的 CRUD、权限分配与权限清单分组输出，供系统管理-角色管理页使用。
- * 依赖 Role/Permission 模型、RoleRequest 表单校验与 ApiResponse 统一响应；
- * 删除保护：被用户引用的角色拒绝删除（1004），唯一 admin 编码角色拒绝删除（1007）。
- */
 class RoleController extends Controller
 {
     use ApiResponse;
 
-    /** 角色分页列表：每角色带权限 code 集合 */
+    public function __construct(private RoleService $roleService) {}
+
+    /** 角色分页列表：每角色带权限 code 集合（纯读） */
     public function index(Request $request)
     {
         // per_page 钳制到 1-100：防 0 值除零 500 与超大分页拖垮性能
@@ -38,41 +35,29 @@ class RoleController extends Controller
         ]);
     }
 
-    /** 新建角色并分配权限 */
+    /** 新建角色并分配权限（写流程下沉 RoleService） */
     public function store(RoleRequest $request)
     {
-        $role = Role::create($request->safe()->except('permission_ids'));
-        $role->permissions()->sync($request->input('permission_ids', []));
-
-        return $this->ok(['id' => $role->id]);
+        return $this->ok(['id' => $this->roleService->create($request->validated())->id]);
     }
 
-    /** 更新角色并全量重挂权限 */
+    /** 更新角色并全量重挂权限（写流程下沉 RoleService） */
     public function update(RoleRequest $request, Role $role)
     {
-        $role->update($request->safe()->except('permission_ids'));
-        $role->permissions()->sync($request->input('permission_ids', []));
+        $this->roleService->update($role, $request->validated());
 
         return $this->ok();
     }
 
-    /** 删除角色：被用户引用或为唯一 admin 角色时拒绝 */
+    /** 删除角色：被用户引用 1004 或唯一 admin 角色 1007 时拒绝（写流程下沉 RoleService） */
     public function destroy(Role $role)
     {
-        // admin 编码角色若为最后一个：拒绝删除（先于引用检查，保证唯一 admin 保护始终生效）
-        if ($role->code === 'admin' && Role::where('code', 'admin')->count() === 1) {
-            return $this->fail(1007, '至少保留一个管理员角色');
-        }
-        // 角色已分配给用户：拒绝删除
-        if ($role->users()->exists()) {
-            return $this->fail(1004, '该角色已分配给用户，不可删除');
-        }
-        $role->delete();
+        $this->roleService->delete($role);
 
         return $this->ok();
     }
 
-    /** 权限清单（按 group 分组）：角色编辑页权限树数据源 */
+    /** 权限清单（按 group 分组）：角色编辑页权限树数据源（纯读） */
     public function permissions()
     {
         $groups = Permission::orderBy('group')->get()->groupBy('group')
