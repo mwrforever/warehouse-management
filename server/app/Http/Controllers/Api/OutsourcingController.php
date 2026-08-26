@@ -26,6 +26,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OutsourcingController extends Controller
@@ -189,6 +190,12 @@ class OutsourcingController extends Controller
             return $os;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 工单/工序 + 委外量（decimal 原值）+ 操作人
+        Log::info('委外单创建成功', [
+            'no' => $os->no, 'order_id' => $os->order_id, 'operation_id' => $os->operation_id,
+            'quantity' => $os->quantity, 'created_by' => auth()->id(),
+        ]);
+
         return $this->ok(['no' => $os->no]);
     }
 
@@ -333,6 +340,9 @@ class OutsourcingController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('委外单草稿删除', ['no' => $outsourcing->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -445,9 +455,18 @@ class OutsourcingController extends Controller
                 $result = ['no' => $locked->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）
+            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径）；走到此分支说明预校验与引擎
+            // 判定不一致，记 warn 便于排查数据不一致
+            Log::warning('委外发出被余额引擎兜底拒绝（预校验未拦截，疑似数据不一致）', [
+                'no' => $outsourcing->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(1522, '库存不足，委外发出被拒绝');
         }
+
+        // 状态变更审计日志（事务提交后记）：发出即组件扣减出库，属库存关键节点
+        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
+        Log::info('委外单发出', ['no' => $result['no'], 'order_id' => $outsourcing->order_id, 'operator' => auth()->id()]);
 
         return $this->ok($result);
     }
@@ -586,9 +605,20 @@ class OutsourcingController extends Controller
                 $result = ['no' => $receipt->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底（入库方向理论不触发，防御路径）
+            // 余额引擎兜底（入库方向理论不触发，防御路径）；走到此分支说明引擎内出现
+            // 非预期拒绝，记 warn 便于排查数据不一致
+            Log::warning('委外回收被余额引擎兜底拒绝（理论不可达，疑似数据不一致）', [
+                'no' => $outsourcing->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(422, '回收失败，请重试');
         }
+
+        // 单据创建审计日志（事务提交后记）：回收单创建即审核，含本次回收量（decimal 原值）
+        Log::info('委外回收单创建（即审核）', [
+            'no' => $result['no'], 'outsourcing_id' => $outsourcing->id,
+            'quantity' => $data['quantity'], 'operator' => auth()->id(),
+        ]);
 
         return $this->ok($result);
     }
@@ -722,9 +752,21 @@ class OutsourcingController extends Controller
                 $result = ['no' => $return->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底（入库方向理论不触发，防御路径）
+            // 余额引擎兜底（入库方向理论不触发，防御路径）；走到此分支说明引擎内出现
+            // 非预期拒绝，记 warn 便于排查数据不一致
+            Log::warning('委外退回被余额引擎兜底拒绝（理论不可达，疑似数据不一致）', [
+                'no' => $outsourcing->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(422, '退回失败，请重试');
         }
+
+        // 单据创建审计日志（事务提交后记）：退回单创建即审核，余料回库；含退回行数
+        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
+        Log::info('委外退回单创建（即审核）', [
+            'no' => $result['no'], 'outsourcing_id' => $outsourcing->id,
+            'line_count' => count($data['items']), 'operator' => auth()->id(),
+        ]);
 
         return $this->ok($result);
     }

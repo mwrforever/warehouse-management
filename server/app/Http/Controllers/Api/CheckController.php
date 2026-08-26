@@ -15,6 +15,7 @@ use App\Services\InventoryService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class CheckController extends Controller
 {
@@ -146,6 +147,11 @@ class CheckController extends Controller
             return $check;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 盘点行数 + 操作人
+        Log::info('盘点单创建成功', [
+            'no' => $check->no, 'item_count' => count($items), 'created_by' => auth()->id(),
+        ]);
+
         return $this->ok(['no' => $check->no]);
     }
 
@@ -238,6 +244,9 @@ class CheckController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('盘点单草稿删除', ['no' => $check->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -322,6 +331,14 @@ class CheckController extends Controller
                 'decreased_items' => $decreasedItems,
             ];
         }, 2);
+
+        // 状态变更审计日志（事务提交后记）：盘盈/盘亏汇总（循环外聚合一条，禁止逐明细打印；
+        // 数量为 decimal 原值，inventory_movements 流水已逐笔留痕）
+        Log::info('盘点单审核通过', [
+            'no' => $check->no, 'changed_items' => $result['changed_items'],
+            'increased' => $result['increased'], 'decreased' => $result['decreased'],
+            'operator' => auth()->id(),
+        ]);
 
         return $this->ok($result);
     }

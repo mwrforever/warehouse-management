@@ -166,6 +166,8 @@ class RoutingExpansionTest extends TestCase
     {
         // setUp 未建任何路线 → 无启用路线存在；Log mock 须在请求前挂载才能拦截事务内告警
         \Log::shouldReceive('warning')->atLeast()->once();
+        // 创建成功路径的 info 审计日志（D-14）与本用例断言无关，Mockery 窄 mock 下须显式放行
+        \Log::shouldReceive('info');
 
         $res = $this->createOrderViaApi();
         $res->assertJsonPath('code', 0)

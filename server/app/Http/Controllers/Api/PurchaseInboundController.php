@@ -206,6 +206,9 @@ class PurchaseInboundController extends Controller
             return $inbound;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 操作人
+        Log::info('采购入库单创建成功', ['no' => $inbound->no, 'order_id' => $inbound->order_id, 'created_by' => auth()->id()]);
+
         return $this->ok(['no' => $inbound->no]);
     }
 
@@ -328,6 +331,9 @@ class PurchaseInboundController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('采购入库单草稿删除', ['no' => $inbound->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -415,6 +421,9 @@ class PurchaseInboundController extends Controller
             $locked->save();
             $result = ['no' => $locked->no];
         }, 2);
+        // 状态变更审计日志（事务提交后记）：审核即库存入账 + 订单回写生效，属库存关键节点
+        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
+        Log::info('采购入库单审核通过', ['no' => $result['no'], 'order_id' => $inbound->order_id, 'operator' => auth()->id()]);
         // 审核成功（事务已提交）失效成本价缓存：审核是价格集合的唯一变化点（见 CostPriceService 失效契约）；
         // 回滚路径抛异常跳过此处，缓存最多早清（下次访问重建），无脏读风险
         try {

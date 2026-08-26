@@ -14,6 +14,7 @@ use App\Support\ApiResponse;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class OperationReportController extends Controller
 {
@@ -143,6 +144,13 @@ class OperationReportController extends Controller
                 'remark' => $data['remark'] ?? null,
             ]);
         });
+
+        // 生产进度审计日志（事务提交后记）：合格/不良数量为 decimal 原值，报工是产量统计口径来源
+        Log::info('工序报工成功', [
+            'operation_id' => $operation->id, 'order_id' => $operation->order_id,
+            'qualified_qty' => $data['qualified_qty'], 'defective_qty' => $defective,
+            'operator' => auth()->id(),
+        ]);
 
         return $this->ok();
     }

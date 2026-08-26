@@ -16,6 +16,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PurchaseOrderController extends Controller
 {
@@ -165,6 +166,9 @@ class PurchaseOrderController extends Controller
             return $order;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 操作人
+        Log::info('采购订单创建成功', ['no' => $order->no, 'created_by' => auth()->id()]);
+
         return $this->ok(['no' => $order->no]);
     }
 
@@ -252,6 +256,9 @@ class PurchaseOrderController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('采购订单草稿删除', ['no' => $order->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -273,6 +280,9 @@ class PurchaseOrderController extends Controller
             $locked->save();
         });
 
+        // 状态变更审计日志（事务提交后记）：审核是订单生效节点，后续可生成入库单
+        Log::info('采购订单审核通过', ['no' => $order->no, 'operator' => auth()->id()]);
+
         return $this->ok(['no' => $order->no]);
     }
 
@@ -292,6 +302,9 @@ class PurchaseOrderController extends Controller
             $locked->closed_at = now();
             $locked->save();
         });
+
+        // 状态变更审计日志（事务提交后记）：关闭后订单不可再生成入库单，属不可逆业务节点
+        Log::info('采购订单关闭', ['no' => $order->no, 'operator' => auth()->id()]);
 
         return $this->ok();
     }

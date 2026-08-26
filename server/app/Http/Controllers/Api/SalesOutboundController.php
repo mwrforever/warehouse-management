@@ -23,6 +23,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class SalesOutboundController extends Controller
 {
@@ -215,6 +216,11 @@ class SalesOutboundController extends Controller
             return $outbound;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 操作人
+        Log::info('销售出库单创建成功', [
+            'no' => $outbound->no, 'order_id' => $outbound->order_id, 'created_by' => auth()->id(),
+        ]);
+
         return $this->ok(['no' => $outbound->no]);
     }
 
@@ -316,6 +322,9 @@ class SalesOutboundController extends Controller
             }
             $locked->delete();
         });
+
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('销售出库单草稿删除', ['no' => $outbound->no, 'operator' => auth()->id()]);
 
         return $this->ok();
     }
@@ -427,9 +436,18 @@ class SalesOutboundController extends Controller
                 $result = ['no' => $locked->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径；消息不含商品名时用通用文案）
+            // 余额引擎兜底拒绝（理论上被预校验拦截，防御路径；消息不含商品名时用通用文案）；
+            // 走到此分支说明预校验与引擎判定不一致，记 warn 便于排查数据不一致
+            Log::warning('销售出库审核被余额引擎兜底拒绝（预校验未拦截，疑似数据不一致）', [
+                'no' => $outbound->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(1409, '库存不足，出库被拒绝');
         }
+
+        // 状态变更审计日志（事务提交后记）：审核即库存扣减 + 订单回写生效，属库存关键节点
+        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
+        Log::info('销售出库单审核通过', ['no' => $result['no'], 'order_id' => $outbound->order_id, 'operator' => auth()->id()]);
 
         return $this->ok($result);
     }

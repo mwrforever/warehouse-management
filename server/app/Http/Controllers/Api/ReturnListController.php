@@ -20,6 +20,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ReturnListController extends Controller
 {
@@ -138,6 +139,9 @@ class ReturnListController extends Controller
             return $return;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 来源工单 + 操作人
+        Log::info('退料单创建成功', ['no' => $return->no, 'order_id' => $return->order_id, 'created_by' => auth()->id()]);
+
         return $this->ok(['no' => $return->no]);
     }
 
@@ -236,6 +240,9 @@ class ReturnListController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('退料单草稿删除', ['no' => $return->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -313,9 +320,17 @@ class ReturnListController extends Controller
                 $result = ['no' => $locked->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底（入库方向理论不触发，防御路径）
+            // 余额引擎兜底（入库方向理论不触发，防御路径）；走到此分支说明引擎内出现
+            // 非预期拒绝，记 warn 便于排查数据不一致
+            Log::warning('退料审核被余额引擎兜底拒绝（理论不可达，疑似数据不一致）', [
+                'no' => $return->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(1517, '退料失败，请重试');
         }
+
+        // 状态变更审计日志（事务提交后记）：审核即材料回库 + 已领量冲销，属库存关键节点
+        Log::info('退料单审核通过', ['no' => $result['no'], 'order_id' => $return->order_id, 'operator' => auth()->id()]);
 
         return $this->ok($result);
     }

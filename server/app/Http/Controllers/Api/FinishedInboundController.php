@@ -19,6 +19,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class FinishedInboundController extends Controller
 {
@@ -148,6 +149,9 @@ class FinishedInboundController extends Controller
             return $fi;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 来源工单 + 操作人
+        Log::info('成品入库单创建成功', ['no' => $fi->no, 'order_id' => $fi->order_id, 'created_by' => auth()->id()]);
+
         return $this->ok(['no' => $fi->no]);
     }
 
@@ -247,6 +251,9 @@ class FinishedInboundController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('成品入库单草稿删除', ['no' => $finishedInbound->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -318,9 +325,20 @@ class FinishedInboundController extends Controller
                 $result = ['no' => $locked->no];
             }, 2);
         } catch (InventoryException $e) {
-            // 余额引擎兜底（入库方向理论不触发，防御路径）
+            // 余额引擎兜底（入库方向理论不触发，防御路径）；走到此分支说明引擎内出现
+            // 非预期拒绝，记 warn 便于排查数据不一致
+            Log::warning('成品入库审核被余额引擎兜底拒绝（理论不可达，疑似数据不一致）', [
+                'no' => $finishedInbound->no, 'reason' => $e->getMessage(),
+            ]);
+
             return $this->fail(422, '入库失败，请重试');
         }
+
+        // 状态变更审计日志（事务提交后记）：审核即成品入账 + 工单完工量累计，属库存关键节点
+        // （库存笔级明细由 InventoryService 聚合记录，此处仅记单据维度，避免重复）
+        Log::info('成品入库单审核通过', [
+            'no' => $result['no'], 'order_id' => $finishedInbound->order_id, 'operator' => auth()->id(),
+        ]);
 
         return $this->ok($result);
     }

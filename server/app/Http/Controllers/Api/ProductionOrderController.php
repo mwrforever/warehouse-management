@@ -202,6 +202,12 @@ class ProductionOrderController extends Controller
             return $order;
         }, 2);
 
+        // 单据创建审计日志（事务提交后记）：单号 + 成品 + 计划数量（decimal 原值）+ 操作人
+        Log::info('生产工单创建成功', [
+            'no' => $order->no, 'product_id' => $order->product_id,
+            'quantity' => $order->quantity, 'created_by' => auth()->id(),
+        ]);
+
         // 响应含 id：前端新建成功后直接以 id 拉详情打开 BOM 展开弹窗，不依赖列表回查（防刷新失败误报创建失败）
         // routing_warning 仅回退旧逻辑时携带（array_filter 剔除 null 键）
         return $this->ok(array_filter([
@@ -429,6 +435,9 @@ class ProductionOrderController extends Controller
             $locked->delete();
         });
 
+        // 单据删除审计日志（事务提交后记）：内存模型仍持有单号，可用于追溯
+        Log::info('生产工单草稿删除', ['no' => $order->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -493,6 +502,11 @@ class ProductionOrderController extends Controller
             $result = ['warnings' => $warnings];
         });
 
+        // 状态变更审计日志（事务提交后记）：下达后工单可开工/领料，缺料仅警告不阻断
+        Log::info('生产工单下达', [
+            'no' => $order->no, 'shortage_count' => count($result['warnings'] ?? []), 'operator' => auth()->id(),
+        ]);
+
         return $this->ok($result);
     }
 
@@ -534,6 +548,9 @@ class ProductionOrderController extends Controller
             }
         });
 
+        // 状态变更审计日志（事务提交后记）
+        Log::info('生产工单开工', ['no' => $order->no, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -570,6 +587,9 @@ class ProductionOrderController extends Controller
             $locked->save();
         });
 
+        // 状态变更审计日志（事务提交后记）：完工为工单终态前置（关闭前必须完工），含入库累计数量
+        Log::info('生产工单完工', ['no' => $order->no, 'completed_qty' => $order->completed_qty, 'operator' => auth()->id()]);
+
         return $this->ok();
     }
 
@@ -588,6 +608,9 @@ class ProductionOrderController extends Controller
             $locked->closed_at = now();
             $locked->save();
         });
+
+        // 状态变更审计日志（事务提交后记）：关闭为工单生命周期终态，不可逆
+        Log::info('生产工单关闭', ['no' => $order->no, 'operator' => auth()->id()]);
 
         return $this->ok();
     }
