@@ -2,7 +2,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import {
   purchaseApi,
   type AvailableOrder,
@@ -20,6 +26,7 @@ import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import { fenToYuan, formatYuan, multiplyCents, yuanToFen } from '../../utils/format'
+import { priceRule, quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -28,6 +35,9 @@ const saving = ref(false)
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
+
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
 
 // 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑/扫码回显 pin 项仅保证 id/名称/编码展示
 interface ProductOption {
@@ -90,6 +100,22 @@ const form = reactive({
     order_item_id?: number
   }[],
 })
+
+// 表单校验规则（D-17）：表头必填字段（供应商/仓库/库位；「来源订单」为模式专属入口，
+// 其必选校验保留在保存侧手动核对）；明细行字段由行内 :rules 承载（见下方行级规则）
+const rules: FormRules = {
+  supplier_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  warehouse_id: [{ required: true, message: '请选择仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择库位', trigger: 'change' }],
+}
+// 明细行校验：商品必选；数量按模式分置——从订单生成允许 0（0 = 本次不收货，提交前剔除）
+// 且剩余量可为小数，独立建单必须 > 0（防空数量单据）；单价（元口径）≥ 0 且最多 2 位小数
+const itemProductRules: FormItemRule[] = [
+  { required: true, message: '请选择商品', trigger: 'change' },
+]
+const fromOrderQuantityRules: FormItemRule[] = [quantityRule(true, '数量不能小于 0')]
+const standaloneQuantityRules: FormItemRule[] = [quantityRule(false, '数量必须大于 0')]
+const itemPriceRules: FormItemRule[] = [priceRule]
 
 // 订单行剩余量映射（product_id → remaining_qty）：从订单生成时记录，供扫码数量上限计算（BUG-03）；
 // 独立建单与编辑草稿（详情接口无剩余量字段）保持空映射 = 不设上限，保存时后端 1308 兜底
@@ -266,42 +292,26 @@ watch(dialogVisible, (open) => {
 
 // 保存（载荷：价格 元→分；从订单生成模式带 order_id 与 order_item_id；编辑走更新接口）
 async function save() {
+  // 提交前统一 el-form 校验（D-17）：表头必填 + 明细行必选/范围/精度在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (mode.value === 'from-order' && !fromOrderId.value) {
     ElMessage.warning('请选择来源订单')
-    return
-  }
-  if (!form.supplier_id) {
-    ElMessage.warning('请选择供应商')
-    return
-  }
-  if (!form.warehouse_id || !form.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
     return
   }
   if (!form.items.length) {
     ElMessage.warning('请至少添加一条明细')
     return
   }
-  if (form.items.some((i) => !i.product_id)) {
-    ElMessage.warning('请选择商品')
-    return
-  }
-  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤），负数量直接拦截（与后端 1302 同口径）；
-  // 手动新增：仍要求 > 0（防空数量单据）
+  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤，行内规则已允许 0 但拦截负数）；
+  // 手动新增的数量下限已在行内规则拦截
   let keepRows = form.items
   if (mode.value === 'from-order') {
-    if (form.items.some((i) => Number(i.quantity) < 0)) {
-      ElMessage.warning('数量不能小于 0')
-      return
-    }
     keepRows = form.items.filter((i) => Number(i.quantity) > 0)
     if (!keepRows.length) {
       ElMessage.warning('请至少录入一个收货数量大于 0 的商品')
       return
     }
-  } else if (form.items.some((i) => Number(i.quantity) <= 0)) {
-    ElMessage.warning('数量必须大于 0')
-    return
   }
   const payload = {
     supplier_id: form.supplier_id!,
@@ -516,7 +526,7 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <div class="form-grid">
           <el-form-item v-if="mode === 'from-order'" label="来源订单" required>
             <el-select
@@ -537,7 +547,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="供应商" required>
+          <el-form-item label="供应商" prop="supplier_id" required>
             <el-select
               v-model="form.supplier_id"
               placeholder="选择供应商"
@@ -553,7 +563,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="仓库" required>
+          <el-form-item label="仓库" prop="warehouse_id" required>
             <el-select
               v-model="form.warehouse_id"
               placeholder="选择仓库"
@@ -563,7 +573,7 @@ onMounted(async () => {
               <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="库位" required>
+          <el-form-item label="库位" prop="location_id" required>
             <el-select v-model="form.location_id" placeholder="选择库位" style="width: 100%">
               <el-option v-for="l in locations" :key="l.id" :label="l.name" :value="l.id" />
             </el-select>
@@ -578,49 +588,58 @@ onMounted(async () => {
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
             <template #default="{ row, $index }">
-              <el-select
-                v-model="row.product_id"
-                placeholder="搜索商品编码/名称"
-                filterable
-                remote
-                :remote-method="searchProducts"
-                :loading="productsLoading"
-                style="width: 100%"
-                :disabled="mode === 'from-order'"
-                @change="onProductChange(row, $index)"
-              >
-                <el-option
-                  v-for="p in products"
-                  :key="p.id"
-                  :label="`${p.name}（${p.code}）`"
-                  :value="p.id"
-                />
-              </el-select>
+              <el-form-item :prop="`items.${$index}.product_id`" :rules="itemProductRules">
+                <el-select
+                  v-model="row.product_id"
+                  placeholder="搜索商品编码/名称"
+                  filterable
+                  remote
+                  :remote-method="searchProducts"
+                  :loading="productsLoading"
+                  style="width: 100%"
+                  :disabled="mode === 'from-order'"
+                  @change="onProductChange(row, $index)"
+                >
+                  <el-option
+                    v-for="p in products"
+                    :key="p.id"
+                    :label="`${p.name}（${p.code}）`"
+                    :value="p.id"
+                  />
+                </el-select>
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="数量" width="140">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity"
-                :min="mode === 'from-order' ? 0 : 1"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
-              <div v-if="mode === 'from-order' && Number(row.quantity) === 0" class="skip-hint">
-                本次不收货
-              </div>
+            <template #default="{ row, $index }">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="mode === 'from-order' ? fromOrderQuantityRules : standaloneQuantityRules"
+              >
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="mode === 'from-order' ? 0 : 1"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+                <div v-if="mode === 'from-order' && Number(row.quantity) === 0" class="skip-hint">
+                  本次不收货
+                </div>
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="含税单价（元）" width="150">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.price"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item :prop="`items.${$index}.price`" :rules="itemPriceRules">
+                <el-input-number
+                  v-model="row.price"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="金额" width="130" align="right">
