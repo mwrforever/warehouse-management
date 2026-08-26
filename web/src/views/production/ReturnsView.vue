@@ -446,7 +446,11 @@ onMounted(async () => {
           />
           <el-table-column label="本次退回" width="140">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`items.${$index}.quantity`" :rules="quantityRules">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="quantityRules"
+                label-width="0"
+              >
                 <el-input-number
                   v-model="row.quantity"
                   :min="0"

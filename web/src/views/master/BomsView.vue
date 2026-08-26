@@ -98,7 +98,11 @@
         <el-form-item label="物料明细">
           <div class="items-wrap">
             <div v-for="(row, idx) in form.items" :key="idx" class="item-row">
-              <el-form-item :prop="`items.${idx}.material_id`" :rules="itemMaterialRules">
+              <el-form-item
+                :prop="`items.${idx}.material_id`"
+                :rules="itemMaterialRules"
+                label-width="0"
+              >
                 <el-select
                   v-model="row.material_id"
                   filterable
@@ -117,7 +121,11 @@
                   />
                 </el-select>
               </el-form-item>
-              <el-form-item :prop="`items.${idx}.quantity`" :rules="itemQuantityRules">
+              <el-form-item
+                :prop="`items.${idx}.quantity`"
+                :rules="itemQuantityRules"
+                label-width="0"
+              >
                 <el-input-number
                   v-model="row.quantity"
                   :min="0.01"

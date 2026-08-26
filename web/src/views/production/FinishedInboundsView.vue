@@ -441,7 +441,11 @@ onMounted(async () => {
           <el-table-column prop="product_name" label="成品" min-width="180" />
           <el-table-column label="入库数量" width="160">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`items.${$index}.quantity`" :rules="quantityRules">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="quantityRules"
+                label-width="0"
+              >
                 <el-input-number
                   v-model="row.quantity"
                   :min="0"

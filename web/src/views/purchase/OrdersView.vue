@@ -438,7 +438,11 @@ onMounted(async () => {
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`items.${$index}.product_id`" :rules="itemProductRules">
+              <el-form-item
+                :prop="`items.${$index}.product_id`"
+                :rules="itemProductRules"
+                label-width="0"
+              >
                 <el-select
                   v-model="row.product_id"
                   placeholder="选择商品"
@@ -458,7 +462,11 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="数量" width="130">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`items.${$index}.quantity`" :rules="itemQuantityRules">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="itemQuantityRules"
+                label-width="0"
+              >
                 <el-input-number
                   v-model="row.quantity"
                   :min="1"
@@ -471,7 +479,7 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="含税单价（元）" width="150">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`items.${$index}.price`" :rules="itemPriceRules">
+              <el-form-item :prop="`items.${$index}.price`" :rules="itemPriceRules" label-width="0">
                 <el-input-number
                   v-model="row.price"
                   :min="0"

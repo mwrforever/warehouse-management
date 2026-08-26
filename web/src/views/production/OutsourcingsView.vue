@@ -900,7 +900,11 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="应发数量" width="160">
               <template #default="{ row, $index }">
-                <el-form-item :prop="`rows.${$index}.required_qty`" :rules="itemQtyRules">
+                <el-form-item
+                  :prop="`rows.${$index}.required_qty`"
+                  :rules="itemQtyRules"
+                  label-width="0"
+                >
                   <el-input-number
                     v-model="row.required_qty"
                     :min="0"
@@ -1000,7 +1004,11 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="退回量" width="150">
             <template #default="{ row, $index }">
-              <el-form-item :prop="`rows.${$index}.return_qty`" :rules="returnQtyRules">
+              <el-form-item
+                :prop="`rows.${$index}.return_qty`"
+                :rules="returnQtyRules"
+                label-width="0"
+              >
                 <el-input-number
                   v-model="row.return_qty"
                   :min="0"
