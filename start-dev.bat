@@ -61,13 +61,13 @@ cd /d "%ROOT%"
 
 rem ---- 4/6 port pre-check (7000 backend / 4000 frontend) ----
 echo ==^> [4/6] Port pre-check...
-netstat -ano | findstr /R ":7000 " | findstr "LISTENING" >nul 2>&1
+netstat -ano | findstr /R /C:":7000 " | findstr "LISTENING" >nul 2>&1
 if not errorlevel 1 (
     echo [ERROR] Port 7000 is in use service may already be running. Stop it first and retry.
     pause
     exit /b 1
 )
-netstat -ano | findstr /R ":4000 " | findstr "LISTENING" >nul 2>&1
+netstat -ano | findstr /R /C:":4000 " | findstr "LISTENING" >nul 2>&1
 if not errorlevel 1 (
     echo [ERROR] Port 4000 is in use service may already be running. Stop it first and retry.
     pause
