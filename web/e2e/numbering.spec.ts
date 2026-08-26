@@ -54,7 +54,7 @@ test.describe('编号自动生成', () => {
       prefix: po.prefix,
       date_format: po.date_format,
       seq_length: 3,
-      enabled: po.enabled,
+      is_enabled: po.is_enabled,
       remark: po.remark,
     })
     expect(res.code).toBe(0)

@@ -16,8 +16,8 @@
       <el-table-column prop="seq_length" label="序列长度" width="90" />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.enabled ? 'success' : 'info'">{{
-            row.enabled ? '启用' : '停用'
+          <el-tag :type="row.is_enabled ? 'success' : 'info'">{{
+            row.is_enabled ? '启用' : '停用'
           }}</el-tag>
         </template>
       </el-table-column>
@@ -58,7 +58,7 @@
           <el-input-number v-model="form.seq_length" :min="1" :max="10" />
         </el-form-item>
         <el-form-item label="状态"
-          ><el-switch v-model="form.enabled" :active-value="true" :inactive-value="false"
+          ><el-switch v-model="form.is_enabled" :active-value="true" :inactive-value="false"
         /></el-form-item>
         <el-form-item label="备注" prop="remark"
           ><el-input v-model="form.remark" type="textarea" :rows="2" maxlength="255"
@@ -93,7 +93,7 @@ const saving = ref(false)
 const previewNo = ref('')
 // 弹窗表单引用：保存前统一触发 el-form 校验
 const formRef = ref<FormInstance>()
-// 编辑表单（enabled 布尔；原始值快照用于变更确认）
+// 编辑表单（is_enabled 布尔；原始值快照用于变更确认）
 const form = reactive({
   id: 0,
   type: '',
@@ -101,7 +101,7 @@ const form = reactive({
   prefix: '',
   date_format: '',
   seq_length: 3,
-  enabled: true,
+  is_enabled: true,
   remark: '',
 })
 const origin = reactive({ date_format: '', seq_length: 0 })
@@ -145,7 +145,7 @@ function openEdit(row: NumberConfigItem) {
     prefix: row.prefix,
     date_format: row.date_format,
     seq_length: row.seq_length,
-    enabled: row.enabled,
+    is_enabled: row.is_enabled,
     remark: row.remark,
   })
   Object.assign(origin, { date_format: row.date_format, seq_length: row.seq_length })
@@ -209,7 +209,7 @@ async function save() {
       prefix: form.prefix,
       date_format: form.date_format,
       seq_length: form.seq_length,
-      enabled: form.enabled,
+      is_enabled: form.is_enabled,
       remark: form.remark,
     })
     ElMessage.success('已保存')

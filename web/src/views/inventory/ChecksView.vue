@@ -38,7 +38,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="checker" label="审核人" width="100" />
-      <el-table-column prop="check_time" label="审核时间" width="170" />
+      <el-table-column prop="checked_at" label="审核时间" width="170" />
       <el-table-column prop="remark" label="备注" min-width="120" />
       <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">

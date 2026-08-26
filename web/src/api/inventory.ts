@@ -42,7 +42,7 @@ export interface CheckItem {
   warehouse_name: string
   status: number
   checker: string | null
-  check_time: string | null
+  checked_at: string | null
   remark: string | null
   created_at: string
 }
@@ -141,7 +141,7 @@ export const inventoryApi = {
       warehouse_name: string
       status: number
       checker: string | null
-      check_time: string | null
+      checked_at: string | null
       remark: string | null
       created_at: string
       items: CheckDetailItem[]

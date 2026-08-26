@@ -808,7 +808,7 @@ onMounted(async () => {
               class="data-table"
               style="margin-top: 12px"
             >
-              <el-table-column prop="report_time" label="报工时间" width="160" />
+              <el-table-column prop="reported_at" label="报工时间" width="160" />
               <el-table-column prop="operator" label="操作人" width="100">
                 <template #default="{ row }">{{ row.operator ?? '—' }}</template>
               </el-table-column>

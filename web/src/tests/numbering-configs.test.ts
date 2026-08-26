@@ -20,7 +20,7 @@ vi.mock('../api/systemSetting', () => ({
           prefix: 'PO',
           date_format: 'YmdHi',
           seq_length: 3,
-          enabled: true,
+          is_enabled: true,
           remark: '',
         },
       ],
@@ -177,7 +177,7 @@ describe('编号规则页保存反馈与表单校验', () => {
       prefix: 'PO',
       date_format: 'YmdHi',
       seq_length: 3,
-      enabled: true,
+      is_enabled: true,
       remark: '',
     })
     const msg = document.querySelector('.el-message--success')

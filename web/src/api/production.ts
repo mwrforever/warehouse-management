@@ -110,7 +110,7 @@ export interface OperationReportRecord {
   qualified_qty: number
   defective_qty: number
   hours: number
-  report_time: string
+  reported_at: string
   remark: string | null
 }
 
