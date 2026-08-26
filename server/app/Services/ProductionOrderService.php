@@ -21,6 +21,7 @@ use App\Models\ReturnList;
 use App\Models\RoutingHeader;
 use App\Models\WorkOrderOperation;
 use App\Models\WorkOrderOperationEdge;
+use App\Support\Quantity;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -631,10 +632,10 @@ class ProductionOrderService
      */
     public function expandBom(Product $product, string $quantity, BomHeader $bom): array
     {
-        // 物料需求 = 计划数量 ÷ 基准产出 × 用量（bcmath 4 位中间精度防误差，最终 2 位）
+        // 物料需求 = 计划数量 ÷ 基准产出 × 用量（bcmath 4 位中间精度防误差，折算终点 half-up 2 位——B-4 裁决）
         $materials = $bom->items()->get()->map(fn ($i) => [
             'material_id' => $i->material_id,
-            'required_qty' => bcmul(bcdiv($quantity, (string) $bom->quantity, 4), (string) $i->quantity, 2),
+            'required_qty' => Quantity::round(bcmul(bcdiv($quantity, (string) $bom->quantity, 4), (string) $i->quantity, 4)),
         ])->values()->all();
 
         // 工序序列 = 全部启用工序按 sort 升序（V1 设计：BOM 头无工序字段，全量启用工序进入工单）
