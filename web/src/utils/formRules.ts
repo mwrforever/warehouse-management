@@ -1,4 +1,4 @@
-// 单据表单行级字段共用校验器（D-17 购销域引入）：数量/单价输入框口径为「数量 / 元」展示值，
+// 单据表单行级字段共用校验器（D-17 购销域引入，产盘退域扩展 optionalQuantityRule）：数量/单价输入框口径为「数量 / 元」展示值，
 // el-input-number 的 :precision 已在输入侧钳制，此处做提交前兜底——空值、非数字、超范围、超精度
 // 在 el-form validate 阶段拦截，避免发出可预期的 422 请求；校验针对输入框现值，
 // 与提交侧 yuanToFen（元→分）单位换算解耦，rules 不感知分
@@ -66,4 +66,33 @@ export const priceRule: FormItemRule = {
     callback()
   },
   trigger: 'blur',
+}
+
+// 可空数量规则（D-17 产盘退域引入）：用于「填了才生效」的可选字段（报工工时/不良数），
+// 空值视为不填写直接放行（提交时置 undefined 不上报）；填写时须 ≥ 0 且最多 2 位小数，
+// 负值/超精度在 el-form validate 阶段拦截，口径与 quantityRule 一致
+export function optionalQuantityRule(rangeMessage: string): FormItemRule {
+  return {
+    validator: (_rule, value, callback) => {
+      if (value == null) {
+        callback()
+        return
+      }
+      const n = Number(value)
+      if (Number.isNaN(n)) {
+        callback(new Error('请输入有效的数字'))
+        return
+      }
+      if (n < 0) {
+        callback(new Error(rangeMessage))
+        return
+      }
+      if (!hasMaxDecimals(n, 2)) {
+        callback(new Error('数量最多 2 位小数'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur',
+  }
 }

@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   productionApi,
   type OperationGraphNode,
@@ -19,6 +19,7 @@ import OperationGraph from '../../components/OperationGraph.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
 import { formatThousand, toLocalDateString } from '../../utils/format'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -43,6 +44,16 @@ const form = reactive({
   plan_date: toLocalDateString(new Date()),
   remark: '',
 })
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+
+// 表单校验规则（D-17）：成品/计划日期必填；数量须 > 0 且最多 2 位小数
+// （输入框 :min=0 允许 0 属输入侧宽容，提交前此处按工单语义拦截 0）
+const rules: FormRules = {
+  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  quantity: [quantityRule(false, '数量必须大于 0')],
+  plan_date: [{ required: true, message: '请选择计划日期', trigger: 'change' }],
+}
 // 成品下拉实例引用（打开弹窗后聚焦）
 const productSelect = ref<{ focus: () => void } | null>(null)
 
@@ -160,23 +171,15 @@ async function openEdit(row: ProductionOrderItem) {
   }
 }
 
-// 保存：校验链（成品 → 数量>0 → 计划日期）；新建成功 → 定位新单 → 展开确认弹窗
+// 保存：校验链（成品 → 数量>0 → 计划日期，由 el-form rules 前置拦截）；新建成功 → 定位新单 → 展开确认弹窗
 async function save() {
-  if (!form.product_id) {
-    ElMessage.warning('请选择成品')
-    return
-  }
-  if (!form.quantity || Number(form.quantity) <= 0) {
-    ElMessage.warning('数量必须大于 0')
-    return
-  }
-  if (!form.plan_date) {
-    ElMessage.warning('请选择计划日期')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：成品必填/数量范围精度/计划日期必填在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
+  // 成品/数量经上方 rules 校验必填且 > 0，此处 ! 收窄类型（纯类型层面，运行时值不变）
   const payload = {
-    product_id: form.product_id,
-    quantity: form.quantity,
+    product_id: form.product_id!,
+    quantity: form.quantity!,
     plan_date: form.plan_date,
     remark: form.remark,
   }
@@ -576,8 +579,8 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="成品" required>
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <el-form-item label="成品" prop="product_id" required>
           <el-select
             ref="productSelect"
             v-model="form.product_id"
@@ -594,7 +597,7 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="数量" required>
+        <el-form-item label="数量" prop="quantity" required>
           <el-input-number
             v-model="form.quantity"
             :min="0"
@@ -604,7 +607,7 @@ onMounted(async () => {
             style="width: 100%"
           />
         </el-form-item>
-        <el-form-item label="计划日期" required>
+        <el-form-item label="计划日期" prop="plan_date" required>
           <el-date-picker
             v-model="form.plan_date"
             type="date"

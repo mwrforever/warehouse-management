@@ -64,8 +64,8 @@
       width="800px"
       :close-on-click-modal="false"
     >
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="成品" required>
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <el-form-item label="成品" prop="product_id" required>
           <el-select
             v-model="form.product_id"
             filterable
@@ -83,10 +83,10 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="版本" required
+        <el-form-item label="版本" prop="version" required
           ><el-input v-model="form.version" style="width: 160px"
         /></el-form-item>
-        <el-form-item label="基准数量"
+        <el-form-item label="基准数量" prop="quantity"
           ><el-input-number v-model="form.quantity" :min="0.01" :precision="2"
         /></el-form-item>
         <el-form-item label="备注"
@@ -98,30 +98,34 @@
         <el-form-item label="物料明细">
           <div class="items-wrap">
             <div v-for="(row, idx) in form.items" :key="idx" class="item-row">
-              <el-select
-                v-model="row.material_id"
-                filterable
-                remote
-                :remote-method="searchMaterials"
-                :loading="materialLoading"
-                placeholder="搜索物料（原料/半成品）编码/名称"
-                style="width: 260px"
-                @change="(id: number) => applyMaterialUnit(row, id)"
-              >
-                <el-option
-                  v-for="m in materialProducts"
-                  :key="m.id"
-                  :label="productLabel(m)"
-                  :value="m.id"
+              <el-form-item :prop="`items.${idx}.material_id`" :rules="itemMaterialRules">
+                <el-select
+                  v-model="row.material_id"
+                  filterable
+                  remote
+                  :remote-method="searchMaterials"
+                  :loading="materialLoading"
+                  placeholder="搜索物料（原料/半成品）编码/名称"
+                  style="width: 260px"
+                  @change="(id: number) => applyMaterialUnit(row, id)"
+                >
+                  <el-option
+                    v-for="m in materialProducts"
+                    :key="m.id"
+                    :label="productLabel(m)"
+                    :value="m.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item :prop="`items.${idx}.quantity`" :rules="itemQuantityRules">
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="0.01"
+                  :precision="2"
+                  placeholder="用量"
+                  style="width: 120px"
                 />
-              </el-select>
-              <el-input-number
-                v-model="row.quantity"
-                :min="0.01"
-                :precision="2"
-                placeholder="用量"
-                style="width: 120px"
-              />
+              </el-form-item>
               <span class="unit-name">{{ unitName(row.unit_id) }}</span>
               <el-button link type="danger" @click="removeItem(idx)">删 除</el-button>
             </div>
@@ -151,7 +155,13 @@
 <script setup lang="ts">
 // BOM 管理页：单头+明细一次保存/全量替换；启用切换自动停用同成品其他版本（后端 1120 兜底）
 import { onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import { bomApi, type BomItem, type BomRow } from '../../api/bom'
 import { productApi } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
@@ -159,6 +169,7 @@ import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
@@ -197,6 +208,20 @@ const form = reactive<BomForm>({
   status: 1,
   items: [],
 })
+// 弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+// 表单校验规则（D-17）：成品/版本必填；基准数量须 > 0 且最多 2 位小数。
+// 明细行物料必选与用量格式由行内 rules 承载；「至少一行明细」「单位齐全」跨行校验保持保存侧手工
+const rules: FormRules = {
+  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  version: [{ required: true, message: '请填写版本号', trigger: 'blur' }],
+  quantity: [quantityRule(false, '基准数量必须大于 0')],
+}
+// 明细行规则：物料必选；用量须 > 0（输入框 :min=0.01 已钳制，rules 兜底空值/精度）
+const itemMaterialRules: FormItemRule[] = [
+  { required: true, message: '请选择物料', trigger: 'change' },
+]
+const itemQuantityRules: FormItemRule[] = [quantityRule(false, '用量必须大于 0')]
 // 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑回显 pin 项缺编码/单位时仅保证展示与带出
 interface ProductOption {
   id: number
@@ -326,21 +351,24 @@ function removeItem(idx: string | number) {
   form.items.splice(idx as number, 1)
 }
 
-// 保存：单头+明细一次提交；后端 1118/1119/1120/1123 错误提示展示
+// 保存：单头+明细一次提交；跨行校验（至少一条明细/单位齐全）保持手工；后端 1118/1119/1120/1123 错误提示展示
 async function save() {
-  if (!form.product_id) return ElMessage.warning('请选择成品')
+  // 提交前统一 el-form 校验（D-17）：成品/版本/基准数量必填 + 明细行物料/用量格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (!form.items.length) return ElMessage.warning('请至少添加一条物料明细')
-  if (form.items.some((i) => !i.material_id || !i.quantity || !i.unit_id))
-    return ElMessage.warning('请补全物料行信息')
+  // 单位随物料自动带出，无可见输入控件不进 rules；此处兜底校验未带出单位的情况
+  if (form.items.some((i) => !i.unit_id)) return ElMessage.warning('请补全物料行信息')
   saving.value = true
   try {
+    // 成品经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     const payload = {
-      product_id: form.product_id,
+      product_id: form.product_id!,
       version: form.version,
       quantity: form.quantity,
       remark: form.remark,
       status: form.status,
-      // 经上面 some 校验后物料/单位必填，此处用 as number 收窄类型（纯类型层面，运行时值不变）
+      // 物料必选由行内 rules 拦截、单位由上方 some 校验兜底，此处用 as number 收窄类型（纯类型层面，运行时值不变）
       items: form.items.map((i) => ({
         material_id: i.material_id as number,
         quantity: i.quantity,
@@ -424,6 +452,10 @@ onMounted(async () => {
 }
 .items-wrap {
   width: 100%;
+}
+/* 行内校验包裹：零化 el-form-item 默认下边距，保持动态行一行布局 */
+.items-wrap :deep(.el-form-item) {
+  margin-bottom: 0;
 }
 .item-row {
   display: flex;

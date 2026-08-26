@@ -12,8 +12,15 @@
   >
     <div v-loading="loadingGraph" class="rc-body">
       <!-- 表头行：成品/版本/基准数量/启用/备注（readonly 全部禁用） -->
-      <el-form :model="header" label-width="76px" size="small" class="rc-header">
-        <el-form-item label="成品" required>
+      <el-form
+        ref="headerFormRef"
+        :model="header"
+        :rules="headerRules"
+        label-width="76px"
+        size="small"
+        class="rc-header"
+      >
+        <el-form-item label="成品" prop="product_id" required>
           <div class="header-product">
             <el-select
               v-model="header.product_id"
@@ -33,10 +40,10 @@
             </el-select>
           </div>
         </el-form-item>
-        <el-form-item label="版本" required>
+        <el-form-item label="版本" prop="version" required>
           <el-input v-model="header.version" :disabled="readonly" style="width: 110px" />
         </el-form-item>
-        <el-form-item label="基准数量">
+        <el-form-item label="基准数量" prop="quantity">
           <el-input-number
             v-model="header.quantity"
             :min="0.01"
@@ -319,7 +326,7 @@
 // 画布编辑器：编辑状态为纯前端结构（editorNodes/editorEdges），保存时 buildPayload 组装为后端契约；
 // 编辑回显走 routingApi.graph + layoutPositions 自动布局（spec 无坐标列，位置不持久化）
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { VueFlow, Handle, Position } from '@vue-flow/core'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -328,6 +335,7 @@ import { productApi, type ProductType } from '../../api/product'
 import { processApi, type ProcessItem } from '../../api/process'
 import { hasCycle, layoutPositions, nextNodeNo } from '../../utils/dag'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
+import { quantityRule } from '../../utils/formRules'
 
 // Vue Flow 样式在弹窗组件引入一次（style 基础样式 + theme-default 默认主题）
 
@@ -383,6 +391,15 @@ const header = reactive<EditorHeader>({
   status: 1,
   remark: '',
 })
+// 表头表单引用：保存前统一触发 el-form 校验（D-17）；节点配置面板/材料行为画布语义
+//（节点由 DAG 环预检 + 后端权威校验），不进 el-form rules
+const headerFormRef = ref<FormInstance>()
+// 表头校验规则（D-17）：成品/版本必填；基准数量须 > 0 且最多 2 位小数
+const headerRules: FormRules = {
+  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  version: [{ required: true, message: '请填写版本', trigger: 'blur' }],
+  quantity: [quantityRule(false, '基准数量必须大于 0')],
+}
 const editorNodes = ref<EditorNode[]>([])
 const editorEdges = ref<EditorEdge[]>([])
 const selectedNodeNo = ref<string | null>(null)
@@ -839,7 +856,7 @@ function buildPayload(h: EditorHeader, nodes: EditorNode[], edges: EditorEdge[])
   }
 }
 
-/** 保 存：本地环预检强制通过才调接口；新建/编辑按 routingId 分流 */
+/** 保 存：本地环预检强制通过才调接口；表头格式由 el-form rules 前置拦截；新建/编辑按 routingId 分流 */
 async function save() {
   // 保存前强制本地环预检：与后端 1701 同口径，未通过不调接口
   if (
@@ -851,8 +868,9 @@ async function save() {
     ElMessage.error('工艺路线存在工序环路')
     return
   }
-  if (!header.product_id) return ElMessage.warning('请选择成品')
-  if (!header.version.trim()) return ElMessage.warning('请填写版本')
+  // 提交前统一 el-form 校验（D-17）：成品/版本/基准数量在前端拦截，避免发出可预期的 422 请求
+  const valid = await headerFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (editorNodes.value.length === 0) return ElMessage.warning('请先添加工序节点')
   saving.value = true
   try {

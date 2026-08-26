@@ -2,13 +2,20 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import { productionApi, type ReturnItem } from '../../api/production'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -66,6 +73,17 @@ const form = reactive({
     quantity: number
   }[],
 })
+// 弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+// 表单校验规则（D-17）：工单/仓库/库位必填；明细行退料数量须 > 0 且最多 2 位小数。
+// 「退料数量 ≤ 已领数量」为业务上限校验，保持在行内 on-blur 与保存侧手工
+const rules: FormRules = {
+  order_id: [{ required: true, message: '请选择工单', trigger: 'change' }],
+  warehouse_id: [{ required: true, message: '请选择仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择库位', trigger: 'change' }],
+}
+// 明细行退料数量规则：从工单生成预填已领量（>0），行内均须 > 0（防空数量退料行）
+const quantityRules: FormItemRule[] = [quantityRule(false, '退料数量必须大于 0')]
 
 // 会话序号守卫（BF-2，模式同 OutsourcingsView 评审 F5）：选单预填/编辑回填为异步落点，
 // 快速切单/连点编辑/关窗重开时旧会话的慢响应必须丢弃——
@@ -191,33 +209,26 @@ async function openEdit(row: ReturnItem) {
   }
 }
 
-// 保存：校验链（工单 → 仓库/库位 → 明细非空 → 每行数量>0 且 ≤ 已领）→ 新建/更新
+// 保存：校验链（el-form rules 前置：工单/仓库库位必填 + 每行退料数量格式 →
+// 明细非空 → 每行数量 ≤ 已领，业务上限保持手工）→ 新建/更新
 async function save() {
-  if (!form.order_id) {
-    ElMessage.warning('请选择工单')
-    return
-  }
-  if (!form.warehouse_id || !form.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：表头必填 + 明细行数量必填/范围精度在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (!form.items.length) {
     ElMessage.warning('请至少添加一条明细')
-    return
-  }
-  if (form.items.some((i) => Number(i.quantity) <= 0)) {
-    ElMessage.warning('退料数量必须大于 0')
     return
   }
   if (form.items.some((i) => Number(i.quantity) > Number(i.issued_qty))) {
     ElMessage.warning('退料数量超过已领数量')
     return
   }
+  // 工单/仓库/库位经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
   const payload = {
-    order_id: form.order_id,
+    order_id: form.order_id!,
     ...(form.pick_id ? { pick_id: form.pick_id } : {}),
-    warehouse_id: form.warehouse_id,
-    location_id: form.location_id,
+    warehouse_id: form.warehouse_id!,
+    location_id: form.location_id!,
     remark: form.remark,
     items: form.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
   }
@@ -378,9 +389,9 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <div class="form-grid">
-          <el-form-item label="工单" required>
+          <el-form-item label="工单" prop="order_id" required>
             <el-select
               v-model="form.order_id"
               placeholder="输入单号搜索生产中/已完成工单"
@@ -399,7 +410,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="仓库" required>
+          <el-form-item label="仓库" prop="warehouse_id" required>
             <el-select
               v-model="form.warehouse_id"
               placeholder="选择仓库"
@@ -409,7 +420,7 @@ onMounted(async () => {
               <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="库位" required>
+          <el-form-item label="库位" prop="location_id" required>
             <el-select v-model="form.location_id" placeholder="选择库位" style="width: 100%">
               <el-option v-for="l in locations" :key="l.id" :label="l.name" :value="l.id" />
             </el-select>
@@ -434,16 +445,18 @@ onMounted(async () => {
             class-name="font-code"
           />
           <el-table-column label="本次退回" width="140">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                :max="row.issued_qty"
-                style="width: 100%"
-                @blur="validateQuantity(row)"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item :prop="`items.${$index}.quantity`" :rules="quantityRules">
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  :max="row.issued_qty"
+                  style="width: 100%"
+                  @blur="validateQuantity(row)"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
         </el-table>

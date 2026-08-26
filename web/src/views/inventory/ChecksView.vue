@@ -72,63 +72,73 @@
       width="900px"
       :close-on-click-modal="false"
     >
-      <div class="dialog-body">
-        <div class="check-toolbar">
-          <el-select
-            v-model="form.warehouse_id"
-            placeholder="盘点仓库"
-            :disabled="!!form.id"
-            style="width: 180px"
-          >
-            <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
-          </el-select>
-          <el-button
-            class="btn-secondary"
-            :disabled="!form.warehouse_id"
-            :loading="loadingBooks"
-            @click="loadBooks"
-            >加 载账面数</el-button
-          >
-          <el-input
-            ref="barcodeInput"
-            v-model="barcode"
-            placeholder="扫描条码回车添加商品"
-            clearable
-            style="width: 240px"
-            @keyup.enter="scanAdd"
-          />
-        </div>
-        <el-table :data="form.items" size="small" max-height="360">
-          <el-table-column label="商品" min-width="200">
-            <template #default="{ row }">{{ row.product_name }}（{{ row.product_code }}）</template>
-          </el-table-column>
-          <el-table-column prop="location_name" label="库位" width="90" />
-          <el-table-column label="账面数" width="110" align="right">
-            <template #default="{ row }"
-              ><span class="book-qty">{{ row.book_qty }}</span></template
+      <el-form ref="formRef" :model="form" :rules="rules">
+        <div class="dialog-body">
+          <div class="check-toolbar">
+            <el-form-item prop="warehouse_id">
+              <el-select
+                v-model="form.warehouse_id"
+                placeholder="盘点仓库"
+                :disabled="!!form.id"
+                style="width: 180px"
+              >
+                <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
+              </el-select>
+            </el-form-item>
+            <el-button
+              class="btn-secondary"
+              :disabled="!form.warehouse_id"
+              :loading="loadingBooks"
+              @click="loadBooks"
+              >加 载账面数</el-button
             >
-          </el-table-column>
-          <el-table-column label="实盘数" width="160">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.actual_qty"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                style="width: 110px"
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="70">
-            <template #default="{ $index }">
-              <el-button link type="danger" @click="form.items.splice($index, 1)">删 除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="dialog-remark">
-          <el-input v-model="form.remark" placeholder="备注（可选）" />
+            <el-input
+              ref="barcodeInput"
+              v-model="barcode"
+              placeholder="扫描条码回车添加商品"
+              clearable
+              style="width: 240px"
+              @keyup.enter="scanAdd"
+            />
+          </div>
+          <el-table :data="form.items" size="small" max-height="360">
+            <el-table-column label="商品" min-width="200">
+              <template #default="{ row }"
+                >{{ row.product_name }}（{{ row.product_code }}）</template
+              >
+            </el-table-column>
+            <el-table-column prop="location_name" label="库位" width="90" />
+            <el-table-column label="账面数" width="110" align="right">
+              <template #default="{ row }"
+                ><span class="book-qty">{{ row.book_qty }}</span></template
+              >
+            </el-table-column>
+            <el-table-column label="实盘数" width="160">
+              <template #default="{ row, $index }">
+                <el-form-item :prop="`items.${$index}.actual_qty`" :rules="actualQtyRules">
+                  <el-input-number
+                    v-model="row.actual_qty"
+                    :min="0"
+                    :precision="2"
+                    :controls="false"
+                    style="width: 110px"
+                  />
+                </el-form-item>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="70">
+              <template #default="{ $index }">
+                <el-button link type="danger" @click="form.items.splice($index, 1)"
+                  >删 除</el-button
+                >
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="dialog-remark">
+            <el-input v-model="form.remark" placeholder="备注（可选）" />
+          </div>
         </div>
-      </div>
+      </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取 消</el-button>
         <el-button type="primary" class="btn-primary" :loading="saving" @click="save"
@@ -175,7 +185,13 @@
 // 库存盘点页：草稿增删改 + 账面预填 + 扫码录入 + 审核（确认与结果弹窗）+ 详情查看
 import { onMounted, reactive, ref, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import {
   inventoryApi,
   type CheckItem,
@@ -187,6 +203,7 @@ import { warehouseApi } from '../../api/warehouse'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
+import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -223,6 +240,15 @@ interface CheckForm {
   items: CheckRow[]
 }
 const form = reactive<CheckForm>({ id: null, warehouse_id: undefined, remark: '', items: [] })
+// 弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+// 表单校验规则（D-17）：盘点仓库必填；明细行实盘数 ≥ 0 且最多 2 位小数（0 = 盘亏至零合法）。
+// 扫码框为扫码录入通道（非表单字段），不进 rules
+const rules: FormRules = {
+  warehouse_id: [{ required: true, message: '请选择盘点仓库', trigger: 'change' }],
+}
+// 实盘数规则：允许 0（实盘为 0 即盘亏至零），负值/超精度在 validate 阶段拦截
+const actualQtyRules: FormItemRule[] = [quantityRule(true, '实盘数不能为负数')]
 
 // 详情弹窗
 const detailVisible = ref(false)
@@ -352,14 +378,17 @@ function appendRow(book: AutoBookItem) {
   })
 }
 
-// 保存草稿：新建/更新；负数由 el-input-number min=0 前端拦截
+// 保存草稿：新建/更新；负数由 el-input-number min=0 钳制，行内 rules 兜底拦截；明细非空保持手工校验
 async function save() {
-  if (!form.warehouse_id) return ElMessage.warning('请选择盘点仓库')
+  // 提交前统一 el-form 校验（D-17）：盘点仓库必填 + 明细行实盘数格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (form.items.length === 0) return ElMessage.warning('请先加载账面数或扫码添加明细')
   saving.value = true
   try {
+    // 仓库经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     const payload = {
-      warehouse_id: form.warehouse_id,
+      warehouse_id: form.warehouse_id!,
       remark: form.remark || undefined,
       items: form.items.map((i) => ({
         product_id: i.product_id,
@@ -446,6 +475,10 @@ onMounted(async () => {
   display: flex;
   gap: var(--space-md);
   margin-bottom: var(--space-lg);
+}
+/* 校验包裹：工具栏行内 el-form-item 零化默认下边距，保持原 flex 一行布局 */
+.check-toolbar :deep(.el-form-item) {
+  margin-bottom: 0;
 }
 .dialog-remark {
   margin-top: var(--space-lg);

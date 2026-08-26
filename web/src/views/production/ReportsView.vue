@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   productionApi,
   type ProductionOperation,
@@ -11,6 +11,7 @@ import {
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { useAuthStore } from '../../stores/auth'
 import UserSelect from '../../components/UserSelect.vue'
+import { optionalQuantityRule, quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -48,6 +49,15 @@ const reportForm = reactive({
   operator: '',
   remark: '',
 })
+// 报工卡片表单引用：提交前统一触发 el-form 校验（D-17）
+const reportFormRef = ref<FormInstance>()
+// 表单校验规则（D-17）：合格数必填且 ≥ 0（0 合格合法，如首工序报 0）；不良数/工时可选，
+// 填写时须 ≥ 0 且最多 2 位小数。「合格数 ≤ 工单计划数」为业务上限校验，保持在 on-blur 与提交侧手工
+const reportRules: FormRules = {
+  qualified_qty: [quantityRule(true, '合格数不能为负数')],
+  defective_qty: [optionalQuantityRule('不良数不能为负数')],
+  hours: [optionalQuantityRule('工时不能为负数')],
+}
 
 // 当前进行中工序（无进行中 = 全部已完成）
 const currentOp = computed(() => operations.value.find((o) => o.status === 1) ?? null)
@@ -138,7 +148,7 @@ function validateHours() {
   }
 }
 
-// 提交报工：校验链（已选工单且有进行中工序 → 合格数必填且 ≤ 计划数 → 工时 ≥0）→ report → 成功提示 → 重新加载工序（步骤条推进）
+// 提交报工：校验链（已选工单且有进行中工序 → el-form rules 前置格式校验 → 合格数 ≤ 计划数业务上限）→ report → 成功提示 → 重新加载工序（步骤条推进）
 async function submitReport() {
   // 守卫同时校验工单与详情：清除选择后 currentOp 若残留旧工序则拒绝提交（bug #3 回归）；
   // 详情 id 与选中工单不一致（切换在途窗口）同样拒绝——防产量报进旧工单的工序（BF-2）
@@ -149,16 +159,11 @@ async function submitReport() {
     !currentOp.value
   )
     return
-  if (reportForm.qualified_qty == null || Number(reportForm.qualified_qty) < 0) {
-    ElMessage.warning('请填写合格的合格数')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：合格数必填/范围精度 + 不良数/工时格式在前端拦截，避免发出可预期的 422 请求
+  const valid = await reportFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (Number(reportForm.qualified_qty) > orderQuantity.value) {
     ElMessage.warning('合格数不能超过工单计划数量')
-    return
-  }
-  if (reportForm.hours != null && Number(reportForm.hours) < 0) {
-    ElMessage.warning('工时不能为负数')
     return
   }
   saving.value = true
@@ -244,8 +249,14 @@ onMounted(async () => {
         当前工序：{{ currentOp.process_name }}（已报合格 {{ Number(currentOp.qualified_qty) }} /
         计划 {{ orderQuantity }}）
       </div>
-      <el-form :model="reportForm" label-width="90px" class="form-grid">
-        <el-form-item label="合格数" required>
+      <el-form
+        ref="reportFormRef"
+        :model="reportForm"
+        :rules="reportRules"
+        label-width="90px"
+        class="form-grid"
+      >
+        <el-form-item label="合格数" prop="qualified_qty" required>
           <el-input-number
             v-model="reportForm.qualified_qty"
             :min="0"
@@ -256,7 +267,7 @@ onMounted(async () => {
             @blur="validateQualified"
           />
         </el-form-item>
-        <el-form-item label="不良数">
+        <el-form-item label="不良数" prop="defective_qty">
           <el-input-number
             v-model="reportForm.defective_qty"
             :min="0"
@@ -266,7 +277,7 @@ onMounted(async () => {
           />
           <div class="hint">不良数仅记录与统计，返修/报废流程后续版本提供</div>
         </el-form-item>
-        <el-form-item label="工时">
+        <el-form-item label="工时" prop="hours">
           <el-input-number
             v-model="reportForm.hours"
             :min="0"
