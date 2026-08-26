@@ -67,209 +67,229 @@
       </el-form>
 
       <div class="rc-main">
-        <!-- 左侧：工序库 + 画布 -->
-        <div class="rc-left">
-          <div v-if="!readonly" class="rc-toolbar">
-            <div class="toolbar-process">
-              <el-select
-                v-model="toolbarProcessId"
-                filterable
-                placeholder="选择工序"
-                style="width: 200px"
-              >
-                <el-option v-for="p in processes" :key="p.id" :label="p.name" :value="p.id" />
-              </el-select>
-            </div>
-            <el-button size="small" class="btn-primary" @click="addNodeFromToolbar"
-              >添加节点</el-button
-            >
-            <span class="toolbar-tip">拖拽节点两侧圆点连线，点选节点在右侧配置</span>
-          </div>
-          <div class="rc-canvas">
-            <VueFlow
-              :nodes="flowNodes"
-              :edges="flowEdges"
-              :nodes-connectable="!readonly"
-              :nodes-draggable="!readonly"
-              :fit-view-on-init="true"
-              @connect="onConnect"
-              @node-click="onNodeClick"
-              @edge-click="onEdgeClick"
-            >
-              <!-- 自定义工序节点卡片：id=node_no，展示工序名/材料清单/产出/委外角标 -->
-              <template #node-routing="{ id }">
-                <div
-                  class="rn-card"
-                  :class="{
-                    'is-outsourced': nodeById(id)?.is_outsourced === 1,
-                    'is-selected': selectedNodeNo === id,
-                  }"
-                  @click="selectNode(id)"
+        <!-- Z-1 降级态：浏览器不满足画布基线（PointerEvent/ResizeObserver/DOMMatrixReadOnly）时，
+             以提示条替代画布与配置面板——不渲染 Vue Flow 防白屏，弹窗仍可关闭返回列表 -->
+        <el-alert
+          v-if="supportIssues.length > 0"
+          class="rc-degrade"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="当前浏览器不支持工艺画布编辑"
+          :description="degradeDescription"
+        />
+        <template v-else>
+          <!-- 左侧：工序库 + 画布 -->
+          <div class="rc-left">
+            <div v-if="!readonly" class="rc-toolbar">
+              <div class="toolbar-process">
+                <el-select
+                  v-model="toolbarProcessId"
+                  filterable
+                  placeholder="选择工序"
+                  style="width: 200px"
                 >
-                  <Handle type="target" :position="Position.Left" />
-                  <div class="rn-title">{{ nodeById(id)?.node_no }} · {{ nodeById(id)?.name }}</div>
+                  <el-option v-for="p in processes" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+              </div>
+              <el-button size="small" class="btn-primary" @click="addNodeFromToolbar"
+                >添加节点</el-button
+              >
+              <span class="toolbar-tip">拖拽节点两侧圆点连线，点选节点在右侧配置</span>
+            </div>
+            <div class="rc-canvas">
+              <VueFlow
+                :nodes="flowNodes"
+                :edges="flowEdges"
+                :nodes-connectable="!readonly"
+                :nodes-draggable="!readonly"
+                :fit-view-on-init="true"
+                @connect="onConnect"
+                @node-click="onNodeClick"
+                @edge-click="onEdgeClick"
+              >
+                <!-- 自定义工序节点卡片：id=node_no，展示工序名/材料清单/产出/委外角标 -->
+                <template #node-routing="{ id }">
                   <div
-                    v-for="(m, mi) in cardMaterials(id)"
-                    :key="m.material_id ?? mi"
-                    class="rn-mat"
+                    class="rn-card"
+                    :class="{
+                      'is-outsourced': nodeById(id)?.is_outsourced === 1,
+                      'is-selected': selectedNodeNo === id,
+                    }"
+                    @click="selectNode(id)"
                   >
-                    {{ productName(m.material_id) }} ×{{ m.qty_per_unit }}
+                    <Handle type="target" :position="Position.Left" />
+                    <div class="rn-title">
+                      {{ nodeById(id)?.node_no }} · {{ nodeById(id)?.name }}
+                    </div>
+                    <div
+                      v-for="(m, mi) in cardMaterials(id)"
+                      :key="m.material_id ?? mi"
+                      class="rn-mat"
+                    >
+                      {{ productName(m.material_id) }} ×{{ m.qty_per_unit }}
+                    </div>
+                    <div v-if="nodeById(id)?.output_product_id" class="rn-out">
+                      产出：{{ productName(nodeById(id)?.output_product_id) }} ×{{
+                        nodeById(id)?.output_qty
+                      }}
+                    </div>
+                    <span v-if="nodeById(id)?.is_outsourced === 1" class="rn-badge">委外</span>
+                    <Handle type="source" :position="Position.Right" />
                   </div>
-                  <div v-if="nodeById(id)?.output_product_id" class="rn-out">
-                    产出：{{ productName(nodeById(id)?.output_product_id) }} ×{{
-                      nodeById(id)?.output_qty
-                    }}
-                  </div>
-                  <span v-if="nodeById(id)?.is_outsourced === 1" class="rn-badge">委外</span>
-                  <Handle type="source" :position="Position.Right" />
-                </div>
-              </template>
-            </VueFlow>
-            <div v-if="editorNodes.length === 0" class="canvas-empty">
-              {{ readonly ? '暂无工序节点' : '从上方选择工序，添加第一个节点' }}
+                </template>
+              </VueFlow>
+              <div v-if="editorNodes.length === 0" class="canvas-empty">
+                {{ readonly ? '暂无工序节点' : '从上方选择工序，添加第一个节点' }}
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- 右侧：节点配置面板（340px） -->
-        <aside class="rc-panel">
-          <template v-if="selectedNode">
-            <el-form label-width="76px" size="small">
-              <el-form-item label="节点">
-                <div class="panel-node">
-                  <el-select v-model="selectedNodeNo" placeholder="选择节点">
-                    <el-option
-                      v-for="n in editorNodes"
-                      :key="n.node_no"
-                      :label="`${n.node_no} · ${n.name}`"
-                      :value="n.node_no"
-                    />
-                  </el-select>
-                </div>
-              </el-form-item>
-              <el-form-item label="节点号">
-                <div class="panel-node-no">
-                  <el-input :model-value="selectedNode.node_no" disabled title="节点号自动生成" />
-                </div>
-              </el-form-item>
-              <el-form-item label="工序">
-                <div class="panel-process">
-                  <el-select
-                    v-model="selectedNode.process_id"
-                    :disabled="readonly"
-                    placeholder="选择工序"
-                    @change="(id: number) => applyNodeProcess(id)"
-                  >
-                    <el-option v-for="p in processes" :key="p.id" :label="p.name" :value="p.id" />
-                  </el-select>
-                </div>
-              </el-form-item>
-              <el-form-item label="输出产品">
-                <div class="panel-output">
-                  <el-select
-                    v-model="selectedNode.output_product_id"
-                    filterable
-                    clearable
-                    remote
-                    :remote-method="searchOutput"
-                    :loading="outputLoading"
-                    placeholder="搜索半成品/成品"
-                    :disabled="readonly"
-                  >
-                    <el-option
-                      v-for="p in outputOptions"
-                      :key="p.id"
-                      :label="productLabel(p)"
-                      :value="p.id"
-                    />
-                  </el-select>
-                </div>
-              </el-form-item>
-              <el-form-item label="产出数量">
-                <el-input-number
-                  v-model="selectedNode.output_qty"
-                  :min="0.01"
-                  :precision="2"
-                  :disabled="readonly"
-                />
-              </el-form-item>
-              <el-form-item label="委外工序">
-                <div class="panel-outsourced">
-                  <el-switch
-                    v-model="selectedNode.is_outsourced"
-                    :active-value="1"
-                    :inactive-value="0"
-                    :disabled="readonly"
-                  />
-                  <div
-                    v-if="!readonly && selectedNode.is_outsourced === 1"
-                    class="panel-outsourced-hint"
-                  >
-                    委外工序将在工单下达后生成委外需求
-                  </div>
-                </div>
-              </el-form-item>
-              <el-form-item label="输入材料">
-                <div class="mat-rows">
-                  <div v-for="(row, idx) in selectedNode.materials" :key="idx" class="mat-row">
-                    <el-select
-                      v-model="row.material_id"
-                      filterable
-                      remote
-                      :remote-method="searchMaterial"
-                      :loading="materialLoading"
-                      placeholder="搜索原料/半成品"
-                      :disabled="readonly"
-                      @change="(id: number) => applyMaterialUnit(row, id)"
-                    >
+          <!-- 右侧：节点配置面板（340px） -->
+          <aside class="rc-panel">
+            <template v-if="selectedNode">
+              <el-form label-width="76px" size="small">
+                <el-form-item label="节点">
+                  <div class="panel-node">
+                    <el-select v-model="selectedNodeNo" placeholder="选择节点">
                       <el-option
-                        v-for="m in materialOptions"
-                        :key="m.id"
-                        :label="productLabel(m)"
-                        :value="m.id"
+                        v-for="n in editorNodes"
+                        :key="n.node_no"
+                        :label="`${n.node_no} · ${n.name}`"
+                        :value="n.node_no"
                       />
                     </el-select>
-                    <el-input-number
-                      v-model="row.qty_per_unit"
-                      :min="0.01"
-                      :precision="2"
-                      :controls="false"
-                      style="width: 90px"
+                  </div>
+                </el-form-item>
+                <el-form-item label="节点号">
+                  <div class="panel-node-no">
+                    <el-input :model-value="selectedNode.node_no" disabled title="节点号自动生成" />
+                  </div>
+                </el-form-item>
+                <el-form-item label="工序">
+                  <div class="panel-process">
+                    <el-select
+                      v-model="selectedNode.process_id"
+                      :disabled="readonly"
+                      placeholder="选择工序"
+                      @change="(id: number) => applyNodeProcess(id)"
+                    >
+                      <el-option v-for="p in processes" :key="p.id" :label="p.name" :value="p.id" />
+                    </el-select>
+                  </div>
+                </el-form-item>
+                <el-form-item label="输出产品">
+                  <div class="panel-output">
+                    <el-select
+                      v-model="selectedNode.output_product_id"
+                      filterable
+                      clearable
+                      remote
+                      :remote-method="searchOutput"
+                      :loading="outputLoading"
+                      placeholder="搜索半成品/成品"
+                      :disabled="readonly"
+                    >
+                      <el-option
+                        v-for="p in outputOptions"
+                        :key="p.id"
+                        :label="productLabel(p)"
+                        :value="p.id"
+                      />
+                    </el-select>
+                  </div>
+                </el-form-item>
+                <el-form-item label="产出数量">
+                  <el-input-number
+                    v-model="selectedNode.output_qty"
+                    :min="0.01"
+                    :precision="2"
+                    :disabled="readonly"
+                  />
+                </el-form-item>
+                <el-form-item label="委外工序">
+                  <div class="panel-outsourced">
+                    <el-switch
+                      v-model="selectedNode.is_outsourced"
+                      :active-value="1"
+                      :inactive-value="0"
                       :disabled="readonly"
                     />
-                    <span class="mat-unit">{{ matUnitName(row) }}</span>
-                    <el-button v-if="!readonly" link type="danger" @click="removeMaterial(idx)"
-                      >删 除</el-button
+                    <div
+                      v-if="!readonly && selectedNode.is_outsourced === 1"
+                      class="panel-outsourced-hint"
+                    >
+                      委外工序将在工单下达后生成委外需求
+                    </div>
+                  </div>
+                </el-form-item>
+                <el-form-item label="输入材料">
+                  <div class="mat-rows">
+                    <div v-for="(row, idx) in selectedNode.materials" :key="idx" class="mat-row">
+                      <el-select
+                        v-model="row.material_id"
+                        filterable
+                        remote
+                        :remote-method="searchMaterial"
+                        :loading="materialLoading"
+                        placeholder="搜索原料/半成品"
+                        :disabled="readonly"
+                        @change="(id: number) => applyMaterialUnit(row, id)"
+                      >
+                        <el-option
+                          v-for="m in materialOptions"
+                          :key="m.id"
+                          :label="productLabel(m)"
+                          :value="m.id"
+                        />
+                      </el-select>
+                      <el-input-number
+                        v-model="row.qty_per_unit"
+                        :min="0.01"
+                        :precision="2"
+                        :controls="false"
+                        style="width: 90px"
+                        :disabled="readonly"
+                      />
+                      <span class="mat-unit">{{ matUnitName(row) }}</span>
+                      <el-button v-if="!readonly" link type="danger" @click="removeMaterial(idx)"
+                        >删 除</el-button
+                      >
+                    </div>
+                    <el-button v-if="!readonly" size="small" class="add-mat" @click="addMaterial"
+                      >添加材料</el-button
                     >
                   </div>
-                  <el-button v-if="!readonly" size="small" class="add-mat" @click="addMaterial"
-                    >添加材料</el-button
-                  >
-                </div>
-              </el-form-item>
-              <el-form-item label="备注">
-                <el-input
-                  v-model="selectedNode.remark"
-                  type="textarea"
-                  :rows="2"
-                  placeholder="选填"
-                  :disabled="readonly"
-                />
-              </el-form-item>
-            </el-form>
-            <el-button v-if="!readonly" size="small" type="danger" plain @click="removeSelectedNode"
-              >删除节点</el-button
-            >
-          </template>
-          <div v-else class="panel-empty">点击画布节点或在「节点」下拉选择后配置</div>
-        </aside>
+                </el-form-item>
+                <el-form-item label="备注">
+                  <el-input
+                    v-model="selectedNode.remark"
+                    type="textarea"
+                    :rows="2"
+                    placeholder="选填"
+                    :disabled="readonly"
+                  />
+                </el-form-item>
+              </el-form>
+              <el-button
+                v-if="!readonly"
+                size="small"
+                type="danger"
+                plain
+                @click="removeSelectedNode"
+                >删除节点</el-button
+              >
+            </template>
+            <div v-else class="panel-empty">点击画布节点或在「节点」下拉选择后配置</div>
+          </aside>
+        </template>
       </div>
     </div>
 
     <template #footer>
       <div class="rc-footer">
-        <!-- 添加连线双通道之一：下拉兜底（拖拽 Handle 之外的主通道，供 E2E 与无鼠标场景） -->
-        <div v-if="!readonly" class="footer-links">
+        <!-- 添加连线双通道之一：下拉兜底（拖拽 Handle 之外的主通道，供 E2E 与无鼠标场景）；降级态无画布不可连线 -->
+        <div v-if="!readonly && supportIssues.length === 0" class="footer-links">
           <span class="link-label">连线</span>
           <div class="edge-from">
             <el-select v-model="linkFrom" placeholder="从节点" style="width: 150px">
@@ -304,9 +324,13 @@
         </div>
         <div class="footer-actions">
           <template v-if="!readonly">
-            <el-button size="small" @click="validateDag">校验 DAG</el-button>
+            <!-- Z-1 降级态：画布不可用时校验/保存无意义，仅保留取消退出 -->
+            <el-button v-if="supportIssues.length === 0" size="small" @click="validateDag"
+              >校验 DAG</el-button
+            >
             <el-button size="small" @click="closeDialog">取 消</el-button>
             <el-button
+              v-if="supportIssues.length === 0"
               size="small"
               type="primary"
               class="btn-primary"
@@ -333,6 +357,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import { routingApi, type RoutingPayload } from '../../api/routing'
 import { productApi, type ProductType } from '../../api/product'
 import { processApi, type ProcessItem } from '../../api/process'
+import { getCanvasSupportIssues } from '../../utils/browserSupport'
 import { hasCycle, layoutPositions, nextNodeNo } from '../../utils/dag'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { quantityRule } from '../../utils/formRules'
@@ -507,6 +532,16 @@ const loadingGraph = ref(false)
 const saving = ref(false)
 // 编辑/查看对象的编码（弹窗标题展示）
 const routingCode = ref('')
+
+// Z-1 浏览器能力检测：画布可用性前置条件（PointerEvent/ResizeObserver/DOMMatrixReadOnly，基线 Chrome/Edge ≥ 100）。
+// 能力在会话内不变，组件装载时检测一次；不满足时进入降级态——不渲染 Vue Flow 防白屏，仅提示并允许关闭
+const supportIssues = getCanvasSupportIssues()
+
+/** 降级提示文案：逐项缺失原因 + 升级指引（列表/筛选不受影响，可关闭弹窗返回） */
+const degradeDescription = computed(() => {
+  const reasons = supportIssues.map((i) => i.message).join('；')
+  return `${reasons}。请升级浏览器至 Chrome/Edge 100 及以上版本（2022 年起主流版本）后再使用画布编辑；列表查询、筛选与详情查看不受影响，可关闭本弹窗返回列表。`
+})
 
 const dialogTitle = computed(() => {
   if (props.readonly) return `工艺路线详情${routingCode.value ? ` - ${routingCode.value}` : ''}`
@@ -957,6 +992,10 @@ function closeDialog() {
   background: var(--a-600);
   border-color: var(--a-600);
   cursor: pointer;
+}
+/* Z-1 降级提示条：替代画布两栏区域展示，占满宽度 */
+.rc-degrade {
+  flex: 1;
 }
 /* 画布容器：固定高度 + 相对定位承载空态提示 */
 .rc-canvas {
