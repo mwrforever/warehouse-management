@@ -93,4 +93,58 @@ describe('useRemoteOptions（远程搜索下拉数据源，BF-3）', () => {
     expect(options.value, '失败时保持原选项').toEqual([{ id: 1, name: '铝材' }])
     expect(loading.value).toBe(false)
   })
+
+  it('同关键字二次请求命中会话缓存：不发重复请求且选项立即可用（下拉闪烁修复）', async () => {
+    // 正常路径：remote 下拉每次打开会再次触发空关键字拉取，缓存命中直接返回既有选项
+    const fetcher = vi.fn().mockResolvedValue([{ id: 1, name: '铝材' }])
+    const { options, loading, load, search } = useRemoteOptions<Item>({
+      fetch: fetcher,
+      keyOf: (i) => i.id,
+    })
+    await load()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(options.value).toEqual([{ id: 1, name: '铝材' }])
+
+    // 再次空关键字加载（模拟下拉打开）：命中缓存，不重复请求、不置 loading、选项立即就位
+    await load()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(loading.value).toBe(false)
+    expect(options.value).toEqual([{ id: 1, name: '铝材' }])
+
+    // 新关键字未缓存：正常请求并写入缓存
+    fetcher.mockResolvedValue([{ id: 2, name: '钢材' }])
+    search('钢')
+    await vi.advanceTimersByTimeAsync(300)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(options.value).toEqual([{ id: 2, name: '钢材' }])
+  })
+
+  it('clearPins 清回显项但保留选项与缓存（弹窗关闭防串单且重开不闪）', async () => {
+    // 正常路径：编辑弹窗关闭时只清 pin 集，通用选项列表与关键字缓存保留，重开直接复用
+    const fetcher = vi.fn().mockResolvedValue([{ id: 1, name: '铝材' }])
+    const { options, load, pin, clearPins } = useRemoteOptions<Item>({
+      fetch: fetcher,
+      keyOf: (i) => i.id,
+    })
+    await load()
+    pin({ id: 101, name: '回显商品' })
+    expect(options.value).toHaveLength(2)
+
+    clearPins()
+    expect(options.value).toEqual([{ id: 1, name: '铝材' }])
+    // 缓存未清：load 命中缓存不发请求
+    await load()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('reset 清空选项与缓存（会话隔离，重新进入重新拉取保持数据新鲜）', async () => {
+    // 边界条件：reset 后选项与缓存一并清空，再 load 重新请求
+    const fetcher = vi.fn().mockResolvedValue([{ id: 1, name: '铝材' }])
+    const { options, load, reset } = useRemoteOptions<Item>({ fetch: fetcher, keyOf: (i) => i.id })
+    await load()
+    reset()
+    expect(options.value).toEqual([])
+    await load()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })

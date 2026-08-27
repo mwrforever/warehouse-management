@@ -25,14 +25,31 @@ export function useRemoteOptions<T>(opts: UseRemoteOptionsOptions<T>) {
   let requestSeq = 0
   // pin 集（已选/回显项）：搜索替换选项后仍未命中的 pin 项并入尾部，命中同 key 的按 key 去重
   const pinned = new Map<string | number, T>()
+  // 会话级关键字结果缓存（下拉闪烁修复）：同 (kw) 已加载的结果直接复用不发重复请求。
+  // remote 下拉每次打开会再次触发空关键字拉取，选项整体替换造成"闪一下"；缓存命中时
+  // 立即用既有选项返回（无 loading 无替换）。reset 清空保持会话隔离，新鲜数据靠调用方
+  // 在会话边界（弹窗关闭/页面卸载）调用 reset 重新拉取
+  const cache = new Map<string, T[]>()
+  // 最近一次生效的关键字：clearPins 按它重建纯结果（移除 pin 并入项）
+  let lastKw = ''
 
   /** 执行拉取并替换选项：结果在前、未命中的 pin 项并入尾部（按 key 去重不重复出现） */
   async function run(kw: string) {
+    lastKw = kw
+    const cached = cache.get(kw)
+    if (cached) {
+      // 缓存命中：直接以缓存结果 + pin 尾部填充，不发请求、不置 loading（消除重复拉取闪烁）
+      const seen = new Set(cached.map(opts.keyOf))
+      const tail = [...pinned.values()].filter((p) => !seen.has(opts.keyOf(p)))
+      options.value = [...cached, ...tail]
+      return
+    }
     const seq = ++requestSeq
     loading.value = true
     try {
       const items = await opts.fetch(kw)
       if (seq !== requestSeq) return // 已有更新的请求，丢弃本次过期响应
+      cache.set(kw, items)
       const seen = new Set(items.map(opts.keyOf))
       const tail = [...pinned.values()].filter((p) => !seen.has(opts.keyOf(p)))
       options.value = [...items, ...tail]
@@ -63,11 +80,21 @@ export function useRemoteOptions<T>(opts: UseRemoteOptionsOptions<T>) {
     search('')
   }
 
-  /** 会话重置：清空选项与 pin 集、取消挂起防抖并作废在途响应（弹窗关闭/重开时防止上一会话数据串扰） */
+  /** 清 pin 并作废在途（弹窗关闭时调用）：移除上一会话回显项防串单，按最近关键字重建纯结果，保留选项与缓存避免重开闪烁 */
+  function clearPins() {
+    search.cancel()
+    requestSeq++
+    pinned.clear()
+    const base = cache.get(lastKw)
+    if (base) options.value = [...base]
+  }
+
+  /** 会话重置：清空选项、pin 集与结果缓存、取消挂起防抖并作废在途响应（页面卸载/重进时调用，保持数据新鲜） */
   function reset() {
     search.cancel()
     requestSeq++
     pinned.clear()
+    cache.clear()
     options.value = []
   }
 
@@ -75,5 +102,5 @@ export function useRemoteOptions<T>(opts: UseRemoteOptionsOptions<T>) {
   // （getCurrentScope 守卫让纯单测等无作用域上下文跳过注册而不产生 Vue 警告，与 useListQuery 同惯例）
   if (getCurrentScope()) onScopeDispose(reset)
 
-  return { options, loading, load, search, pin, reset }
+  return { options, loading, load, search, pin, clearPins, reset }
 }

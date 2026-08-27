@@ -1,12 +1,17 @@
 <!-- 编号规则页（Spec 2）：13 类单据/商品编码的 prefix/date_format/seq_length 配置；编辑弹窗带实时预览；
      修改 seq_length/date_format 时弹确认（仅影响新生成单号，位宽一致性需评审） -->
 <template>
-  <div class="page">
-    <div class="page-head">
-      <h2>编号规则</h2>
-      <p class="sub">配置单据号与商品编码的生成格式；仅影响新生成的编号，存量单号保持不变</p>
-    </div>
-    <el-table v-loading="loading" :data="rows">
+  <div class="page-card">
+    <ListFilterBar
+      v-model:keyword="query.keyword"
+      title="编号规则"
+      keyword-placeholder="类型/前缀/备注"
+      @keyword-change="() => load()"
+      @search="search"
+      @reset="reset"
+      @refresh="refresh"
+    />
+    <el-table v-loading="loading" :data="list">
       <el-table-column prop="type_label" label="类型" width="130" />
       <el-table-column prop="type" label="类型键" width="100" class-name="font-code" />
       <el-table-column prop="prefix" label="前缀" width="90" class-name="font-code" />
@@ -33,28 +38,30 @@
         </template>
       </el-table-column>
     </el-table>
+    <el-pagination
+      v-model:current-page="query.page"
+      :total="total"
+      :page-size="query.per_page"
+      layout="total, prev, pager, next"
+      @current-change="refresh"
+    />
 
-    <!-- 编辑弹窗：字段变更即触发预览；位宽相关变更保存前确认 -->
-    <el-dialog v-model="dialogVisible" title="编辑编号规则" width="520px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
+    <!-- 编辑弹窗：字段变更即触发预览；位宽相关变更保存前确认（表单项样式与其他表单对齐） -->
+    <el-dialog v-model="dialogVisible" title="编辑编号规则" width="480px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
         <el-form-item label="类型">{{ form.type_label }}（{{ form.type }}）</el-form-item>
         <el-form-item label="前缀" prop="prefix">
-          <el-input
-            v-model="form.prefix"
-            maxlength="4"
-            style="width: 160px"
-            placeholder="大写字母 2~4 位"
-          />
+          <el-input v-model="form.prefix" maxlength="4" placeholder="大写字母 2~4 位" />
         </el-form-item>
         <el-form-item label="日期格式">
-          <el-select v-model="form.date_format" style="width: 160px">
+          <el-select v-model="form.date_format">
             <el-option label="无（全局自增）" value="" />
             <el-option label="年月日 Ymd" value="Ymd" />
             <el-option label="年月日时 YmdHi" value="YmdHi" />
             <el-option label="年月日时分秒 YmdHis" value="YmdHis" />
           </el-select>
         </el-form-item>
-        <el-form-item label="序列长度" required>
+        <el-form-item label="序列长度" prop="seq_length" required>
           <el-input-number v-model="form.seq_length" :min="1" :max="10" />
         </el-form-item>
         <el-form-item label="状态"
@@ -84,10 +91,16 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { useAuthStore } from '../../stores/auth'
 import { systemSettingApi, type NumberConfigItem } from '../../api/systemSetting'
 import { debounce } from '../../utils/async'
+import ListFilterBar from '../../components/ListFilterBar.vue'
+import { useListQuery } from '../../composables/useListQuery'
 
 const auth = useAuthStore()
-const rows = ref<NumberConfigItem[]>([])
-const loading = ref(false)
+// 列表查询状态（统一组合式：防抖加载/关键字查询/重置/刷新，请求序号守卫并发；与其它业务模块一致）
+const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
+  defaultQuery: { keyword: '' },
+  fetch: (q) => systemSettingApi.list(q),
+  onError: (e) => ElMessage.error(e.message),
+})
 const dialogVisible = ref(false)
 const saving = ref(false)
 const previewNo = ref('')
@@ -106,10 +119,13 @@ const form = reactive({
 })
 const origin = reactive({ date_format: '', seq_length: 0 })
 
-// 表单校验（对齐后端 422 规则，把可预期的失败拦截在提交前）：prefix 允许编辑中暂空
-// （空值跳过正则，提交后由后端 required 兜底），非空时必须 2~4 位大写字母；备注上限 255 字
+// 表单校验（对齐后端 422 规则，把可预期的失败拦截在提交前）：前缀必填且 2~4 位大写字母
+//（必填由前端规则拦截，空值不再依赖后端 required 兜底）；备注上限 255 字
 const rules: FormRules = {
-  prefix: [{ pattern: /^[A-Z]{2,4}$/, message: '前缀须为 2~4 位大写字母', trigger: 'blur' }],
+  prefix: [
+    { required: true, message: '请填写前缀', trigger: 'blur' },
+    { pattern: /^[A-Z]{2,4}$/, message: '前缀须为 2~4 位大写字母', trigger: 'blur' },
+  ],
   remark: [{ max: 255, message: '备注不能超过 255 个字符', trigger: 'blur' }],
 }
 
@@ -122,19 +138,6 @@ const DATE_FORMAT_LABELS: Record<string, string> = {
 
 function dateFormatLabel(v: string) {
   return DATE_FORMAT_LABELS[v] ?? v
-}
-
-async function load() {
-  loading.value = true
-  try {
-    const res = await systemSettingApi.list()
-    rows.value = res.items
-  } catch (e) {
-    // 首屏加载失败必须反馈，避免 rejection 无人接住导致页面静默空白（BF-5）
-    ElMessage.error((e as Error).message)
-  } finally {
-    loading.value = false
-  }
 }
 
 function openEdit(row: NumberConfigItem) {
@@ -214,7 +217,7 @@ async function save() {
     })
     ElMessage.success('已保存')
     dialogVisible.value = false
-    await load()
+    refresh()
   } catch (e) {
     // 保存失败必须反馈：http.ts 只 reject 不弹错，由页面展示后端 message（对齐项目其它写页面）；
     // 非 Error 值（mock/中间层 reject 字符串等）兜底统一文案，避免提示 undefined
@@ -224,5 +227,20 @@ async function save() {
   }
 }
 
-onMounted(load)
+onMounted(search)
 </script>
+
+<style scoped>
+/* 页面骨架与字典管理页一致 */
+.page-card {
+  background: var(--surface);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-2xl);
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  cursor: pointer;
+}
+</style>

@@ -33,9 +33,11 @@ async function apiPut(page: Page, url: string, body?: unknown) {
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 
-// 下拉项选择：等待唯一可见 option 后点击（隐藏的旧 popper 不参与 getByRole 匹配）
+// 下拉项选择：等待唯一可见 option 后点击（隐藏的旧 popper 不参与 getByRole 匹配）。
+// 商品选项文本含类型标签（如「成品B（FIN-002） 成品」），按正则包含匹配；name 含正则元字符时先转义
 async function pickOption(page: Page, name: string) {
-  const opt = page.getByRole('option', { name })
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const opt = page.getByRole('option', { name: new RegExp(esc) })
   await expect(opt).toHaveCount(1)
   await opt.click()
 }
@@ -104,15 +106,16 @@ test.describe('生产管理模块 E2E（TC-PRD-01~10 + 1113 补测）', () => {
     const units = await apiGet(page, '/api/v1/units', { per_page: 100 })
     pcId = (units.items as { code: string; id: number }[]).find((u) => u.code === 'pc')?.id ?? 0
     expect(pcId).toBeGreaterThan(0)
-    // 工序：种子仅 下料(PROC-01) → 补齐 组装/质检（sort 2/3，BOM 展开按 sort 升序生成工序序列）
+    // 工序：种子仅 下料(PROC-01) → 补齐 组装/质检（sort 2/3，BOM 展开按 sort 升序生成工序序列）。
+    // 工序编码已自动生成（PROC 前缀），幂等判断改用名称而非编码（Spec 2 起 code 不再由调用方提供）
     const procList = await apiGet(page, '/api/v1/processes')
-    const procCodes = (procList.items as { code: string }[]).map((p) => p.code)
+    const procNames = (procList.items as { name: string }[]).map((p) => p.name)
     for (const p of [
-      { name: '下料', code: 'PROC-01', sort: 1 },
-      { name: '组装', code: 'PROC-02', sort: 2 },
-      { name: '质检', code: 'PROC-03', sort: 3 },
+      { name: '下料', sort: 1 },
+      { name: '组装', sort: 2 },
+      { name: '质检', sort: 3 },
     ]) {
-      if (!procCodes.includes(p.code)) {
+      if (!procNames.includes(p.name)) {
         const created = await apiPost(page, '/api/v1/processes', p)
         expect(created.code).toBe(0)
       }

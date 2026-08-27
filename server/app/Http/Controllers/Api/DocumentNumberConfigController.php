@@ -24,13 +24,22 @@ class DocumentNumberConfigController extends Controller
         'check' => '盘点单', 'bom' => 'BOM', 'po' => '采购订单', 'pi' => '采购入库单',
         'so' => '销售订单', 'sout' => '销售出库单', 'mo' => '生产工单', 'pl' => '生产领料单',
         'rl' => '生产退料单', 'os' => '委外加工单', 'osr' => '委外回收单', 'osrt' => '委外退料', 'fi' => '成品入库单',
-        'rtg' => '工艺路线', 'prd' => '商品编码',
+        'rtg' => '工艺路线', 'prd' => '商品编码', 'proc' => '工序编码', 'wh' => '仓库编码',
     ];
 
-    /** 分页列表：按类型排序，附类型中文标签 */
+    /** 分页列表：按类型排序，附类型中文标签；keyword 模糊匹配 type/prefix/remark 及中文类型标签 */
     public function index(Request $request)
     {
-        $rows = DocumentNumberConfig::orderBy('id')->paginate(max(1, min(100, (int) $request->input('per_page', 20))));
+        $query = DocumentNumberConfig::query();
+        if ($keyword = $request->input('keyword')) {
+            // keyword 模糊：type/prefix/remark 直接 LIKE；中文标签不在库列，按 TYPE_LABELS 反查 type 集合再 whereIn
+            $labels = array_keys(array_filter(self::TYPE_LABELS, fn ($label) => str_contains($label, $keyword)));
+            $query->where(fn ($q) => $q->where('type', 'like', "%{$keyword}%")
+                ->orWhere('prefix', 'like', "%{$keyword}%")
+                ->orWhere('remark', 'like', "%{$keyword}%")
+                ->when($labels !== [], fn ($q2) => $q2->orWhereIn('type', $labels)));
+        }
+        $rows = $query->orderBy('id')->paginate(max(1, min(100, (int) $request->input('per_page', 20))));
 
         return $this->ok([
             'items' => $rows->map(fn ($c) => $this->payload($c)),

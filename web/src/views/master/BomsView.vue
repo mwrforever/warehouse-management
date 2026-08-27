@@ -18,7 +18,10 @@
     </ListFilterBar>
     <el-table v-loading="loading" :data="list">
       <el-table-column prop="code" label="BOM 编码" width="170" class-name="font-code" />
-      <el-table-column prop="product_name" label="成品名称" min-width="140" />
+      <el-table-column prop="product_name" label="商品名称" min-width="140" />
+      <el-table-column label="商品类型" width="90">
+        <template #default="{ row }">{{ row.type_label ?? '-' }}</template>
+      </el-table-column>
       <el-table-column prop="version" label="版本" width="80" class-name="font-code" />
       <el-table-column prop="quantity" label="基准数量" width="90" />
       <el-table-column label="状态" width="90">
@@ -65,23 +68,13 @@
       :close-on-click-modal="false"
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
-        <el-form-item label="成品" prop="product_id" required>
-          <el-select
+        <el-form-item label="商品" prop="product_id" required>
+          <ProductPicker
             v-model="form.product_id"
-            filterable
-            remote
-            :remote-method="searchFinished"
-            :loading="finishedLoading"
-            style="width: 100%"
-            placeholder="搜索成品编码/名称"
-          >
-            <el-option
-              v-for="p in finishedProducts"
-              :key="p.id"
-              :label="productLabel(p)"
-              :value="p.id"
-            />
-          </el-select>
+            :types="['semi_finished', 'finished']"
+            :pin="editProductPin"
+            placeholder="选择商品（半成品/成品）"
+          />
         </el-form-item>
         <el-form-item label="版本" prop="version" required
           ><el-input v-model="form.version" style="width: 160px"
@@ -103,23 +96,13 @@
                 :rules="itemMaterialRules"
                 label-width="0"
               >
-                <el-select
+                <ProductPicker
                   v-model="row.material_id"
-                  filterable
-                  remote
-                  :remote-method="searchMaterials"
-                  :loading="materialLoading"
-                  placeholder="搜索物料（原料/半成品）编码/名称"
-                  style="width: 260px"
-                  @change="(id: number) => applyMaterialUnit(row, id)"
-                >
-                  <el-option
-                    v-for="m in materialProducts"
-                    :key="m.id"
-                    :label="productLabel(m)"
-                    :value="m.id"
-                  />
-                </el-select>
+                  :types="['raw_material', 'semi_finished']"
+                  :pin="row.pin"
+                  placeholder="选择物料（原料/半成品）"
+                  @change="(picked: ProductOptionRow | null) => applyMaterialUnit(row, picked)"
+                />
               </el-form-item>
               <el-form-item
                 :prop="`items.${idx}.quantity`"
@@ -161,7 +144,7 @@
 </template>
 
 <script setup lang="ts">
-// BOM 管理页：单头+明细一次保存/全量替换；启用切换自动停用同成品其他版本（后端 1120 兜底）
+// BOM 管理页：单头+明细一次保存/全量替换；启用切换自动停用同商品其他版本（后端 1120 兜底）
 import { onMounted, reactive, ref, watch } from 'vue'
 import {
   ElMessage,
@@ -171,12 +154,11 @@ import {
   type FormRules,
 } from 'element-plus'
 import { bomApi, type BomItem, type BomRow } from '../../api/bom'
-import { productApi } from '../../api/product'
 import { unitApi, type UnitItem } from '../../api/unit'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
+import ProductPicker, { type ProductOptionRow } from '../../components/ProductPicker.vue'
 import { useListQuery } from '../../composables/useListQuery'
-import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
@@ -189,11 +171,13 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
 const dialogVisible = ref(false)
 const saving = ref(false)
 
-// BOM 明细行表单：物料/单位未选择时为空（null），保存前通过 some 校验必填
+// BOM 明细行表单：物料/单位未选择时为空（null），保存前通过 some 校验必填；
+// pin 为编辑回显的历史物料摘要（不在选择器初载列表时保证名称展示），不参与提交
 interface BomItemForm {
   material_id: number | null
   quantity: number
   unit_id: number | null
+  pin: ProductOptionRow | null
 }
 
 // BOM 单头表单：id 为空表示新建；明细行为动态数组（items 每次弹窗打开时重置）
@@ -218,10 +202,10 @@ const form = reactive<BomForm>({
 })
 // 弹窗表单引用：保存前统一触发 el-form 校验（D-17）
 const formRef = ref<FormInstance>()
-// 表单校验规则（D-17）：成品/版本必填；基准数量须 > 0 且最多 2 位小数。
+// 表单校验规则（D-17）：商品/版本必填；基准数量须 > 0 且最多 2 位小数。
 // 明细行物料必选与用量格式由行内 rules 承载；「至少一行明细」「单位齐全」跨行校验保持保存侧手工
 const rules: FormRules = {
-  product_id: [{ required: true, message: '请选择成品', trigger: 'change' }],
+  product_id: [{ required: true, message: '请选择商品', trigger: 'change' }],
   version: [{ required: true, message: '请填写版本号', trigger: 'blur' }],
   quantity: [quantityRule(false, '基准数量必须大于 0')],
 }
@@ -230,64 +214,22 @@ const itemMaterialRules: FormItemRule[] = [
   { required: true, message: '请选择物料', trigger: 'change' },
 ]
 const itemQuantityRules: FormItemRule[] = [quantityRule(false, '用量必须大于 0')]
-// 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑回显 pin 项缺编码/单位时仅保证展示与带出
-interface ProductOption {
-  id: number
-  name: string
-  code: string
-  unit_id: number
-}
-
-// 成品下拉（BF-3）：成品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
-const {
-  options: finishedProducts,
-  loading: finishedLoading,
-  load: loadFinished,
-  search: searchFinished,
-  pin: pinFinished,
-  reset: resetFinished,
-} = useRemoteOptions<ProductOption>({
-  fetch: (kw) =>
-    productApi.list({ page: 1, per_page: 100, type: 'finished', keyword: kw }).then((r) => r.items),
-  keyOf: (p) => p.id,
-  onError: (e) => ElMessage.error(e.message),
-})
-
-// 物料下拉（BF-3）：原料+半成品双路合并（成品嵌套由后端 1119 兜底），超 100 条后服务端搜索
-const {
-  options: materialProducts,
-  loading: materialLoading,
-  load: loadMaterials,
-  search: searchMaterials,
-  pin: pinMaterial,
-  reset: resetMaterials,
-} = useRemoteOptions<ProductOption>({
-  fetch: (kw) =>
-    Promise.all([
-      productApi.list({ page: 1, per_page: 100, type: 'raw_material', keyword: kw }),
-      productApi.list({ page: 1, per_page: 100, type: 'semi_finished', keyword: kw }),
-    ]).then(([raw, semi]) => [...raw.items, ...semi.items]),
-  keyOf: (p) => p.id,
-  onError: (e) => ElMessage.error(e.message),
-})
+// 编辑回显 pin：主商品（编辑中可能不在选择器初载列表内，pin 保证名称展示而非裸 id）
+const editProductPin = ref<ProductOptionRow | null>(null)
 
 const units = ref<UnitItem[]>([])
 const itemsVisible = ref(false)
 const currentBom = ref<BomRow | null>(null)
 const itemsRows = ref<BomItem[]>([])
 
-// 下拉选项文案：编码+名称；编辑回显 pin 项无编码时仅展示名称（避免前导空格）
-function productLabel(p: ProductOption): string {
-  return p.code ? `${p.code} ${p.name}` : p.name
-}
-
 // 单位名映射（明细行显示；unit_id 未选时为空）
 function unitName(id: number | null) {
   return units.value.find((u) => u.id === id)?.name ?? ''
 }
 
-// 弹窗数据源：成品仅 finished；物料仅 raw_material/semi_finished
+// 弹窗数据源：商品仅半成品+成品；物料仅原料+半成品
 function openCreate() {
+  editProductPin.value = null
   Object.assign(form, {
     id: null,
     product_id: null,
@@ -313,15 +255,18 @@ async function openEdit(row: BomRow) {
   try {
     // 明细请求成功后组装行数据并打开弹窗，请求期间表单不会被旧数据回写
     const res = await bomApi.items(row.id)
-    // 回显 pin：成品/物料可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id（物料需带 unit_id 供单位带出）
-    pinFinished({ id: row.product_id, name: row.product_name ?? '', code: '', unit_id: 0 })
-    for (const i of res.items) {
-      pinMaterial({ id: i.material_id, name: i.material_name, code: '', unit_id: i.unit_id })
+    // 回显 pin：主商品/物料可能不在选择器初载列表内，不 pin 则只显示裸 id（物料需带 unit_id 供单位带出）
+    editProductPin.value = {
+      id: row.product_id,
+      name: row.product_name ?? '',
+      code: '',
+      unit_id: null,
     }
     form.items = res.items.map((i) => ({
       material_id: i.material_id,
       quantity: i.quantity,
       unit_id: i.unit_id,
+      pin: { id: i.material_id, name: i.material_name, code: '', unit_id: i.unit_id },
     }))
     dialogVisible.value = true
   } catch (e) {
@@ -330,26 +275,20 @@ async function openEdit(row: BomRow) {
   }
 }
 
-// 弹窗开关边界（BF-3 remote 会话）：打开初载下拉前 100 条，关闭清空选项与 pin 集并作废在途，
-// 防止上一张 BOM 的回显成品/物料串入下一张新单的下拉
+// 弹窗关闭边界：清主商品 pin（ProductPicker 收到 null 后移除并入项防串单）；
+// 选择器缓存保留，重开不重复请求不闪烁（与 useRemoteOptions clearPins 语义一致）
 watch(dialogVisible, (open) => {
-  if (open) {
-    loadFinished()
-    loadMaterials()
-  } else {
-    resetFinished()
-    resetMaterials()
-  }
+  if (!open) editProductPin.value = null
 })
 
-// 动态行：默认单位取第一个单位（选择物料后由 applyMaterialUnit 带出该物料单位）
+// 动态行：默认单位取第一个单位（选择物料后由 ProductPicker change 行带出该物料单位）
 function newRow() {
-  return { material_id: null, quantity: 1, unit_id: units.value[0]?.id ?? null }
+  return { material_id: null, quantity: 1, unit_id: units.value[0]?.id ?? null, pin: null }
 }
-// 选择物料后自动带出其计量单位（spec §5.7：单位自动带出；E2E TC-MST-09 回归）
-function applyMaterialUnit(row: { unit_id: number | null }, materialId: number) {
-  const m = materialProducts.value.find((p) => p.id === materialId)
-  row.unit_id = m?.unit_id ?? null
+// 选择物料后自动带出其计量单位（spec §5.7：单位自动带出；E2E TC-MST-09 回归）；
+// picked 来自 ProductPicker change 事件的选中行（含 unit_id），清除时置空
+function applyMaterialUnit(row: { unit_id: number | null }, picked: ProductOptionRow | null) {
+  row.unit_id = picked?.unit_id ?? null
 }
 function addItem() {
   form.items.push(newRow())
@@ -361,7 +300,7 @@ function removeItem(idx: string | number) {
 
 // 保存：单头+明细一次提交；跨行校验（至少一条明细/单位齐全）保持手工；后端 1118/1119/1120/1123 错误提示展示
 async function save() {
-  // 提交前统一 el-form 校验（D-17）：成品/版本/基准数量必填 + 明细行物料/用量格式在前端拦截，避免发出可预期的 422 请求
+  // 提交前统一 el-form 校验（D-17）：商品/版本/基准数量必填 + 明细行物料/用量格式在前端拦截，避免发出可预期的 422 请求
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   if (!form.items.length) return ElMessage.warning('请至少添加一条物料明细')
@@ -369,7 +308,7 @@ async function save() {
   if (form.items.some((i) => !i.unit_id)) return ElMessage.warning('请补全物料行信息')
   saving.value = true
   try {
-    // 成品经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
+    // 商品经上方 rules 校验必填，此处 ! 收窄类型（纯类型层面，运行时值不变）
     const payload = {
       product_id: form.product_id!,
       version: form.version,
@@ -407,7 +346,7 @@ async function openItems(row: BomRow) {
   }
 }
 
-// 启用/停用切换：后端保证同成品启用唯一
+// 启用/停用切换：后端保证同商品启用唯一
 async function toggle(row: BomRow) {
   try {
     await bomApi.toggle(row.id, row.status === 1 ? 0 : 1)
@@ -470,6 +409,11 @@ onMounted(async () => {
   gap: var(--space-md);
   align-items: center;
   margin-bottom: var(--space-md);
+}
+/* 物料行商品选择器占位：弹性伸缩，数量输入保持固定宽 */
+.item-row :deep(.product-picker) {
+  flex: 1;
+  min-width: 0;
 }
 .unit-name {
   width: 50px;

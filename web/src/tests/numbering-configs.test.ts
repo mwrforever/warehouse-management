@@ -152,8 +152,8 @@ describe('编号规则页保存反馈与表单校验', () => {
     wrapper.unmount()
   })
 
-  it('prefix 清空时前端放行提交（必填性由后端 required 兜底）', async () => {
-    // 边界条件：校验规则为"可空但非空时须 2~4 位大写字母"，空值不拦、交后端判定
+  it('prefix 清空时被前端必填规则拦截，不发更新请求', async () => {
+    // 边界条件：前缀必填（对齐后端 required），空值前置拦截，避免发出可预期的 422 请求
     const wrapper = mountView()
     await flushPromises()
     await openEditDialog(wrapper)
@@ -161,7 +161,24 @@ describe('编号规则页保存反馈与表单校验', () => {
     await fillByLabel(wrapper, '前缀', '')
     await clickSave(wrapper)
 
-    expect(systemSettingApi.update).toHaveBeenCalledWith(1, expect.objectContaining({ prefix: '' }))
+    expect(systemSettingApi.update).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(wrapper.find('.el-form-item__error').text()).toContain('请填写前缀')
+    })
+    wrapper.unmount()
+  })
+
+  it('关键字输入经防抖触发带 keyword 的列表查询（模糊搜索接入）', async () => {
+    // 正常路径：编号规则页与其他列表页一致接入模糊搜索，关键字变更后 list 请求携带 keyword
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('.kw-input input').setValue('采购')
+    // ListFilterBar 内层 300ms + useListQuery 外层 300ms 两级防抖串联，轮询等待查询落定
+    await vi.waitFor(() => {
+      expect(systemSettingApi.list).toHaveBeenCalledWith(
+        expect.objectContaining({ keyword: '采购' }),
+      )
+    })
     wrapper.unmount()
   })
 

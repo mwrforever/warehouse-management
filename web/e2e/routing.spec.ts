@@ -1,4 +1,4 @@
-// 工艺路线 DAG E2E：TC-RTG-01~05（画布保存/环路拦截/工单展开/并行推进/兼容回退）
+// 工艺路线 DAG E2E：TC-RTG-01~06（画布保存/环路拦截/工单展开/并行推进/兼容回退/子页面建节点）
 // 数据策略：主数据/半成品/工序/BOM/供应商全部经 API 幂等自建（编码 RTG- 前缀），
 //   不动 MAT-001/SEMI-001/FIN-002 种子基线；库存不走盘点（1205 拒无余额商品录盘）
 //   ——RTG-SEMI-A 经采购入库（PO→PI）注入 6@B-01 供 TC-RTG-04 委外发出扣减（组件口径；
@@ -9,6 +9,7 @@
 // 并行分支产出互异半成品：后端 1704 逐节点数量闭合要求「半成品产出 = 直接后继消耗合计」，同产物会重复闭合冲突
 // 节点选中策略（TC-RTG-01 实测）：工具栏「添加节点」自动选中新节点 → 面板直接配置；
 //   画布卡片点选为主、面板「节点」下拉兜底（配置过程零选择开销，E2E 不依赖卡片点击定位）
+// 画布编辑/详情为子页面（/master/routings/canvas），不再弹窗——用例定位器统一锚定页面内 .rc-editor
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { loginByAPI, sessionHeaders } from './helpers'
 
@@ -26,17 +27,19 @@ async function apiPost(page: Page, url: string, body?: unknown) {
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 
-// 下拉项选择：等待唯一可见 option 后点击（隐藏的旧 popper 不参与 getByRole 匹配）
+// 下拉项选择：等待唯一可见 option 后点击（隐藏的旧 popper 不参与 getByRole 匹配）。
+// 商品选项文本含类型标签（如「RTG-FIN RTG最终成品 成品」），按正则包含匹配；name 含正则元字符时先转义
 async function pickOption(page: Page, name: string) {
-  const opt = page.getByRole('option', { name })
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const opt = page.getByRole('option', { name: new RegExp(esc) })
   await expect(opt).toHaveCount(1)
   await opt.click()
 }
 
 // 画布选中节点：优先点选节点卡片（轨道交互），选中值不对时回退面板「节点」下拉切换。
 // 注意：EP 选中项渲染在第 2 个 .el-select__selected-item span（第 1 个是 input-wrapper，文本恒空）
-async function selectNode(page: Page, dialog: Locator, no: string) {
-  const title = dialog
+async function selectNode(page: Page, editor: Locator, no: string) {
+  const title = editor
     .locator('.rn-card', { hasText: `${no} ·` })
     .locator('.rn-title')
     .first()
@@ -45,7 +48,7 @@ async function selectNode(page: Page, dialog: Locator, no: string) {
   } catch {
     // 卡片被遮挡/命中不稳定：降级走面板下拉
   }
-  const panelSelect = dialog.locator('.rc-panel .panel-node .el-select')
+  const panelSelect = editor.locator('.rc-panel .panel-node .el-select')
   const shown = (await panelSelect.locator('.el-select__selected-item').nth(1).textContent()) ?? ''
   if (!shown.startsWith(no)) {
     await panelSelect.click()
@@ -185,16 +188,17 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     // —— 画布新建：成品 RTG-FIN / 版本 v1 / 基准 3 ——
     await page.goto('/master/routings')
     await page.getByRole('button', { name: /新\s*建/ }).click()
-    const dialog = page.locator('.el-dialog')
-    await dialog.locator('.rc-header .el-select').click()
+    const editor = page.locator('.rc-editor')
+    await expect(editor).toBeVisible()
+    await editor.locator('.rc-header .el-select').click()
     await pickOption(page, 'RTG-FIN RTG最终成品')
-    await dialog.locator('.rc-header .el-input-number input').fill('3')
-    const panel = dialog.locator('.rc-panel')
+    await editor.locator('.rc-header .el-input-number input').fill('3')
+    const panel = editor.locator('.rc-panel')
     // 逐节点添加：工具栏工序下拉 + 添加节点（自动选中新节点 → 面板直接配置）
     async function addNode(proc: string) {
-      await dialog.locator('.rc-toolbar .el-select').click()
+      await editor.locator('.rc-toolbar .el-select').click()
       await pickOption(page, proc)
-      await dialog.getByRole('button', { name: '添加节点' }).click()
+      await editor.getByRole('button', { name: '添加节点' }).click()
     }
     async function setOutput(code: string, name: string, qty: string) {
       await panel.locator('.el-form-item', { hasText: '输出产品' }).locator('.el-select').click()
@@ -216,7 +220,7 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     }
     // 添加连线（底部工具栏：从节点 → 到节点）
     async function addEdge(fromNo: string, toNo: string) {
-      const footer = dialog.locator('.rc-footer')
+      const footer = editor.locator('.rc-footer')
       await footer.locator('.edge-from .el-select').click()
       await pickOption(page, `${fromNo} ·`)
       await footer.locator('.edge-to .el-select').click()
@@ -225,28 +229,28 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     }
     // OP10 下料：产 A×3 耗原料×3
     await addNode('下料')
-    await selectNode(page, dialog, 'OP10')
+    await selectNode(page, editor, 'OP10')
     await setOutput('RTG-SEMI-A', 'RTG半成品A', '3')
     await setMaterial('RTG-RAW', 'RTG原料', '3')
     // OP20 冲压：产 B×2 耗 A×1
     await addNode('冲压')
-    await selectNode(page, dialog, 'OP20')
+    await selectNode(page, editor, 'OP20')
     await setOutput('RTG-SEMI-B', 'RTG半成品B', '2')
     await setMaterial('RTG-SEMI-A', 'RTG半成品A', '1')
     // OP30 焊接：产 C×2 耗 A×1，委外标记
     await addNode('焊接')
-    await selectNode(page, dialog, 'OP30')
+    await selectNode(page, editor, 'OP30')
     await setOutput('RTG-SEMI-C', 'RTG半成品C', '2')
     await setMaterial('RTG-SEMI-A', 'RTG半成品A', '1')
     await panel.locator('.el-form-item', { hasText: '委外工序' }).locator('.el-switch').click()
     // OP40 组装：产 D×2 耗 A×1
     await addNode('组装')
-    await selectNode(page, dialog, 'OP40')
+    await selectNode(page, editor, 'OP40')
     await setOutput('RTG-SEMI-D', 'RTG半成品D', '2')
     await setMaterial('RTG-SEMI-A', 'RTG半成品A', '1')
     // OP50 质检：产成品×1 耗 B×2+C×2+D×2
     await addNode('质检')
-    await selectNode(page, dialog, 'OP50')
+    await selectNode(page, editor, 'OP50')
     await setOutput('RTG-FIN', 'RTG最终成品', '1')
     await setMaterial('RTG-SEMI-B', 'RTG半成品B', '2')
     await setMaterial('RTG-SEMI-C', 'RTG半成品C', '2')
@@ -259,12 +263,12 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     await addEdge('OP30', 'OP50')
     await addEdge('OP40', 'OP50')
     // 校验 DAG：无环 + 材料闭环无警告 → 成功
-    await dialog.getByRole('button', { name: /校验\s*DAG/ }).click()
+    await editor.getByRole('button', { name: /校验\s*DAG/ }).click()
     await expect(page.locator('.el-message--success').last()).toContainText('DAG 校验通过')
-    // 保存：成功 → 弹窗关闭 → 列表出现 RTG 编码行
-    await dialog.getByRole('button', { name: /保\s*存/ }).click()
+    // 保存：成功 → 返回列表 → 列表出现 RTG 编码行
+    await editor.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success').last()).toContainText('保存成功')
-    await expect(dialog).toBeHidden()
+    await expect(page.locator('.rc-editor')).toHaveCount(0)
     const row = page.locator('.el-table__row', { hasText: /^RTG\d{15}/ }).first()
     await expect(row).toBeVisible()
     // API graph 权威断言：5 节点 / 6 边 / OP30 委外 / 产出与材料落库
@@ -298,16 +302,17 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
     // 新建最小 2 节点路线（OP10→OP20 + 追加 OP20→OP10 闭环）
     await page.goto('/master/routings')
     await page.getByRole('button', { name: /新\s*建/ }).click()
-    const dialog = page.locator('.el-dialog')
-    await dialog.locator('.rc-header .el-select').click()
+    const editor = page.locator('.rc-editor')
+    await expect(editor).toBeVisible()
+    await editor.locator('.rc-header .el-select').click()
     await pickOption(page, 'RTG-FIN2 RTG循环成品')
     async function addNode(proc: string) {
-      await dialog.locator('.rc-toolbar .el-select').click()
+      await editor.locator('.rc-toolbar .el-select').click()
       await pickOption(page, proc)
-      await dialog.getByRole('button', { name: '添加节点' }).click()
+      await editor.getByRole('button', { name: '添加节点' }).click()
     }
     async function addEdge(fromNo: string, toNo: string) {
-      const footer = dialog.locator('.rc-footer')
+      const footer = editor.locator('.rc-footer')
       await footer.locator('.edge-from .el-select').click()
       await pickOption(page, `${fromNo} ·`)
       await footer.locator('.edge-to .el-select').click()
@@ -315,15 +320,66 @@ test.describe('工艺路线 DAG 全链路 E2E（TC-RTG-01~05）', () => {
       await footer.getByRole('button', { name: '添加连线' }).click()
     }
     await addNode('下料')
-    await selectNode(page, dialog, 'OP10')
+    await selectNode(page, editor, 'OP10')
     await addNode('冲压')
-    await selectNode(page, dialog, 'OP20')
+    await selectNode(page, editor, 'OP20')
     await addEdge('OP10', 'OP20')
     await addEdge('OP20', 'OP10')
     // 保存：本地环预检（与后端 1701 同口径）拦截，不调接口
-    await dialog.getByRole('button', { name: /保\s*存/ }).click()
+    await editor.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--error').last()).toContainText('工艺路线存在工序环路')
     // API 权威：路线数量未新增（仅 TC-RTG-01 的 1 条）
+    const after = await apiGet(page, '/api/v1/routings', { per_page: 100 })
+    expect(after.total).toBe(before.total)
+  })
+
+  test('TC-RTG-06 双击空白与节点四边把手拖出建节点（自动连线，未选工序保存拦截）', async ({
+    page,
+  }) => {
+    await loginByAPI(page, 'admin', 'admin123')
+    const before = await apiGet(page, '/api/v1/routings', { per_page: 100 })
+    await page.goto('/master/routings')
+    await page.getByRole('button', { name: /新\s*建/ }).click()
+    const editor = page.locator('.rc-editor')
+    await expect(editor).toBeVisible()
+    const canvas = editor.locator('.rc-canvas')
+    // 先选成品：保存拦截点在「未选工序」，表头校验必须先放行（以免先命中「请选择成品」）
+    await editor.locator('.rc-header .el-select').click()
+    await pickOption(page, 'RTG-FIN RTG最终成品')
+
+    // 双击画布空白：创建无工序空节点 OP10（无连线，自动选中进面板）
+    await canvas.dblclick({ position: { x: 140, y: 140 } })
+    await expect(editor.locator('.panel-node-no input')).toHaveValue('OP10')
+    await expect(editor.locator('.rn-card', { hasText: /OP10 · 未选工序/ })).toBeVisible()
+
+    // 从 OP10 卡片「上边中点把手」拖到画布 (cx+560, cy+330)：按松手位置创建 OP20，
+    // 并自动连线「被拖节点 → 新节点」（OP10→OP20）。落点与 OP10 保持足够间距避免卡片重叠挡边
+    const handle = editor
+      .locator('.rn-card', { hasText: /OP10 · 未选工序/ })
+      .locator('.ns-spawn[data-side="top"]')
+    const hb = await handle.boundingBox()
+    expect(hb, 'OP10 上边中点把手应有可见盒').toBeTruthy()
+    const cb = await canvas.boundingBox()
+    expect(cb, '画布应有可见盒').toBeTruthy()
+    await page.mouse.move(hb!.x + hb!.width / 2, hb!.y + hb!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(cb!.x + 560, cb!.y + 330, { steps: 8 })
+    await page.mouse.up()
+    await expect(editor.locator('.panel-node-no input')).toHaveValue('OP20')
+    await expect(editor.locator('.rn-card', { hasText: /OP20 · 未选工序/ })).toHaveCount(1)
+    // 自动连线的可观测证据：点选画布 OP10→OP20 连线，底部出现「删除连线 OP10->OP20」按钮
+    await editor.locator('.vue-flow__edge[data-id="OP10->OP20"]').click()
+    await expect(editor.getByRole('button', { name: '删除连线 OP10->OP20' })).toBeVisible()
+
+    // 两空节点带边：DAG 校验通过（不要求工序/产出）；未选工序时保存被前端拦截
+    await editor.getByRole('button', { name: /校验\s*DAG/ }).click()
+    await expect(page.locator('.el-message--success').last()).toContainText('DAG 校验通过')
+    await editor.getByRole('button', { name: /保\s*存/ }).click()
+    await expect(page.locator('.el-message--warning').last()).toContainText('未选择工序')
+
+    // 取消返回列表：未保存，路线数量不变（自建自清不残留）
+    await editor.getByRole('button', { name: /取\s*消/ }).click()
+    await expect(page.locator('.rc-editor')).toHaveCount(0)
     const after = await apiGet(page, '/api/v1/routings', { per_page: 100 })
     expect(after.total).toBe(before.total)
   })

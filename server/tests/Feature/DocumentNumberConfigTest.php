@@ -29,10 +29,31 @@ class DocumentNumberConfigTest extends TestCase
 
     public function test_index_lists_all_configs_paginated(): void
     {
-        // 正常路径：15 类规则全部可查（14 类单据含工艺路线 rtg/委外退料 osrt + 商品编码 prd，per_page 覆盖）
+        // 正常路径：17 类规则全部可查（14 类单据含工艺路线 rtg/委外退料 osrt + 商品编码 prd + 工序编码 proc + 仓库编码 wh，per_page 覆盖）
         $this->withToken($this->token)->getJson('/api/v1/document-number-configs?per_page=50')
             ->assertJsonPath('code', 0)
-            ->assertJsonPath('data.total', 15);
+            ->assertJsonPath('data.total', 17);
+    }
+
+    public function test_index_keyword_filters_by_type_label_and_prefix(): void
+    {
+        // 正常路径：中文标签反查（采购订单 → po）与 prefix/type 模糊（PRD → 仅 prd）均命中
+        $res = $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword='.urlencode('采购订单'));
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(1, $res->json('data.total'));
+        $this->assertSame('po', $res->json('data.items.0.type'));
+        $res2 = $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword=PRD');
+        $res2->assertJsonPath('code', 0);
+        $this->assertSame(1, $res2->json('data.total'));
+        $this->assertSame('prd', $res2->json('data.items.0.type'));
+    }
+
+    public function test_index_keyword_no_match_returns_empty(): void
+    {
+        // 边界条件：无命中返回空列表而非报错
+        $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword='.urlencode('不存在的规则'))
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.total', 0);
     }
 
     public function test_update_changes_rule_and_preview_reflects(): void
