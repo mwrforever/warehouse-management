@@ -201,11 +201,16 @@ async function searchDialog() {
     if (seq === requestSeq) dialogLoading.value = false
   }
 }
-// 查询按钮 1s 节流（ListFilterBar 同口径）：窗口内连点只执行首次，尾调用补发最终意图
-const searchThrottled = throttle(() => void searchDialog(), 1000)
+// 查询按钮 1s 节流（ListFilterBar 同口径）：窗口内连点只执行首次，尾调用补发最终意图。
+// 执行前先冲刷输入防抖：300ms 窗口内点查询/回车时立即用最新关键字（否则会先按旧关键字发一次，
+// 300ms 后再补发正确请求——慢网络下短暂展示旧结果）
+const searchThrottled = throttle(() => {
+  searchKw.flush()
+  void searchDialog()
+}, 1000)
 watch(searchKw.debounced, () => searchDialog())
 
-// 弹窗打开：加载第一页（options 保留上次搜索结果，避免每次打开空表/闪烁）
+// 点击输入框加载第一页：挂载预载之外的手动刷新（options 保留上次搜索结果，避免每次打开空表/闪烁）
 function onPopoverShow() {
   void searchDialog()
 }
@@ -246,10 +251,13 @@ onScopeDispose(() => searchThrottled.cancel())
     :loading="loading"
     style="width: 100%"
     @update:model-value="
-      (v: unknown) =>
-        v == null
-          ? clear()
-          : pick(options.find((o) => o.id === v) ?? { id: v as number, name: String(v), code: '' })
+      (v: unknown) => {
+        if (v == null) return clear()
+        const row = options.find((o) => o.id === v)
+        // 选中值不在选项集（正常不会出现，pin 已并入）：只回写值，不发虚假 change 行
+        if (!row) return emit('update:modelValue', v as number)
+        pick(row)
+      }
     "
     @clear="clear"
   >
@@ -279,11 +287,10 @@ onScopeDispose(() => searchThrottled.cancel())
     placement="bottom-start"
     :disabled="disabled"
     :teleported="false"
-    @show="onPopoverShow"
   >
     <template #reference>
-      <!-- 点击输入框即加载第一页：不依赖 popover show 事件（jsdom 与真实浏览器事件时序差异），
-           点击与展开语义一致 -->
+      <!-- 点击输入框即加载第一页：仅绑定 @click（popover show 事件在 jsdom 与真实浏览器
+           事件时序不一致，双绑定会重复触发首屏搜索），点击与展开语义一致 -->
       <el-input
         :model-value="selectedLabel"
         readonly

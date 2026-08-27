@@ -986,16 +986,22 @@ function applyNodeProcess(id: number) {
 async function applyNodeOutput(id: number | undefined) {
   const node = selectedNode.value
   if (!id || !node) return
+  // 记录目标节点号：await 期间用户可能切换选中/再次切换输出产品，落点前校验防旧响应覆盖新选择
+  const targetNo = node.node_no
   // 先落选值：节点卡片产出行即时刷新（BOM 拉取非阻塞）
   node.output_product_id = id
   try {
     const list = await bomApi.list({ product_id: id, per_page: 100 })
+    // 竞态守卫：选中节点已切换或输出产品已再次变更时，丢弃本次迟到的 BOM 材料回填
+    if (selectedNodeNo.value !== targetNo || selectedNode.value?.output_product_id !== id) return
     const bom = list.items.find((b) => b.status === 1) ?? list.items[0]
     if (!bom) {
       ElMessage.info('该产品暂无 BOM，请手动添加材料')
       return
     }
     const { items } = await bomApi.items(bom.id)
+    // 第二个 await 落点同样需守卫（items 拉取期间仍可能切换）
+    if (selectedNodeNo.value !== targetNo || selectedNode.value?.output_product_id !== id) return
     const basis = Number(bom.quantity) || 1
     // 材料行整体替换为 BOM 明细（再次切换输出产品可重新拉取）
     node.materials = items.map((m) => ({
