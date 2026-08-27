@@ -34,7 +34,9 @@ class CustomerController extends Controller
         return $this->ok([
             'items' => $rows->map(fn ($c) => [
                 'id' => $c->id, 'name' => $c->name, 'code' => $c->code, 'contact' => $c->contact,
-                'phone' => $c->phone, 'address' => $c->address, 'remark' => $c->remark, 'status' => $c->status,
+                'phone' => $c->phone, 'province' => $c->province, 'city' => $c->city,
+                'district' => $c->district, 'town' => $c->town, 'address' => $c->address,
+                'remark' => $c->remark, 'status' => $c->status,
             ]),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
         ]);

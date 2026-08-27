@@ -34,7 +34,9 @@ class SupplierController extends Controller
         return $this->ok([
             'items' => $rows->map(fn ($s) => [
                 'id' => $s->id, 'name' => $s->name, 'code' => $s->code, 'contact' => $s->contact,
-                'phone' => $s->phone, 'address' => $s->address, 'remark' => $s->remark, 'status' => $s->status,
+                'phone' => $s->phone, 'province' => $s->province, 'city' => $s->city,
+                'district' => $s->district, 'town' => $s->town, 'address' => $s->address,
+                'remark' => $s->remark, 'status' => $s->status,
             ]),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),
         ]);

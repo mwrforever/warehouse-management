@@ -1,6 +1,7 @@
 <?php
 
-// 仓库保存（新建/更新共用）表单校验：名称/编码/地址/负责人/状态格式校验
+// 仓库保存（新建/更新共用）表单校验：名称/四级地址/详细地址/负责人/状态格式校验
+// （编码不再由前端提供，交由 WarehouseService 按号段自动生成，故本表无 code 规则）
 
 namespace App\Http\Requests\Master;
 
@@ -18,8 +19,8 @@ class SaveWarehouseRequest extends FormRequest
     /**
      * 载荷格式校验规则（422 仅格式层）
      *
-     * 与原控制器内联 validate 逐条等价迁移；编码唯一（1105）属业务冲突，走 WarehouseService
-     * 业务码，不在此处拦截。
+     * 编码由 WarehouseService 经 DocumentSequenceService 自动生成，载荷不再接收 code；
+     * 四级地址为区划名称（文本落库），详细地址沿用 address 字段。
      *
      * @return array<string, string> 字段名 => 规则串（Laravel 校验语法）
      */
@@ -27,8 +28,11 @@ class SaveWarehouseRequest extends FormRequest
     {
         return [
             'name' => 'required|string|max:50',
-            'code' => 'required|string|max:20',
             'address' => 'nullable|string',
+            'province' => 'nullable|string|max:50',
+            'city' => 'nullable|string|max:50',
+            'district' => 'nullable|string|max:50',
+            'town' => 'nullable|string|max:50',
             'manager' => 'nullable|string|max:50',
             'status' => 'nullable|in:0,1',
         ];

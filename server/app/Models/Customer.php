@@ -17,6 +17,10 @@ use Illuminate\Support\Carbon;
  * @property string $code
  * @property string|null $contact
  * @property string|null $phone
+ * @property string|null $province
+ * @property string|null $city
+ * @property string|null $district
+ * @property string|null $town
  * @property string|null $address
  * @property string|null $remark
  * @property int $status
@@ -30,7 +34,8 @@ class Customer extends Model
 
     public const STATUS_ENABLED = 1;
 
-    protected $fillable = ['name', 'code', 'contact', 'phone', 'address', 'remark', 'status'];
+    /** $fillable：name/code 必填，其余可空；province-city-district-town 为四级地址（存区划名称） */
+    protected $fillable = ['name', 'code', 'contact', 'phone', 'province', 'city', 'district', 'town', 'address', 'remark', 'status'];
 
     protected function casts(): array
     {

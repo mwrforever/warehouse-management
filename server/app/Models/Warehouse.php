@@ -11,13 +11,17 @@ use Illuminate\Support\Carbon;
 /**
  * 仓库模型
  *
- * 库位挂载点（code 全局唯一），库存模块余额按仓库聚合；
+ * 库位挂载点（code 全局唯一，由 DocumentSequenceService 自动生成），库存模块余额按仓库聚合；
  * 依赖 Location（hasMany），存在库存余额时删除受限。
  *
  * @property int $id
  * @property string $name
  * @property string $code
  * @property string|null $address
+ * @property string|null $province
+ * @property string|null $city
+ * @property string|null $district
+ * @property string|null $town
  * @property string|null $manager
  * @property int $status
  * @property Carbon|null $created_at
@@ -30,7 +34,7 @@ class Warehouse extends Model
 
     public const STATUS_ENABLED = 1;
 
-    protected $fillable = ['name', 'code', 'address', 'manager', 'status'];
+    protected $fillable = ['name', 'code', 'address', 'province', 'city', 'district', 'town', 'manager', 'status'];
 
     protected function casts(): array
     {

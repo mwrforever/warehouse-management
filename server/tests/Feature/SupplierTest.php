@@ -52,19 +52,45 @@ class SupplierTest extends TestCase
 
     public function test_store_and_duplicate_code_fails_with_1108(): void
     {
-        // 正常路径：创建成功
+        // 正常路径：创建成功（含四级地址 + 详细地址落库）
         $this->withToken($this->token)->postJson('/api/v1/suppliers', [
             'name' => '测试供应商',
             'code' => 'SUP-001',
             'contact' => '张三',
             'phone' => '13800000000',
+            'province' => '浙江省',
+            'city' => '杭州市',
+            'district' => '西湖区',
+            'town' => '三墩镇',
             'address' => '工业园1号',
             'status' => 1,
         ])
             ->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('suppliers', [
+            'code' => 'SUP-001',
+            'province' => '浙江省', 'city' => '杭州市', 'district' => '西湖区', 'town' => '三墩镇',
+            'address' => '工业园1号',
+        ]);
         // 异常路径：重复编码 1108
         $this->withToken($this->token)->postJson('/api/v1/suppliers', ['name' => '重复', 'code' => 'SUP-001'])
             ->assertJsonPath('code', 1108);
+    }
+
+    public function test_store_without_region_fields_stores_null(): void
+    {
+        // 边界路径：不传四级地址（仅详细地址）时各列均为 null，保证可空
+        $this->withToken($this->token)->postJson('/api/v1/suppliers', [
+            'name' => '无区域供应商',
+            'code' => 'SUP-002',
+            'address' => '某街巷 12 号',
+            'status' => 1,
+        ])
+            ->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('suppliers', [
+            'code' => 'SUP-002',
+            'province' => null, 'city' => null, 'district' => null, 'town' => null,
+            'address' => '某街巷 12 号',
+        ]);
     }
 
     public function test_update_contact_and_phone(): void

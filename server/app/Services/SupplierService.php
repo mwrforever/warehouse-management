@@ -28,7 +28,10 @@ class SupplierService
         }
         $supplier = Supplier::create([
             'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? null,
-            'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
+            'phone' => $data['phone'] ?? null,
+            'province' => $data['province'] ?? null, 'city' => $data['city'] ?? null,
+            'district' => $data['district'] ?? null, 'town' => $data['town'] ?? null,
+            'address' => $data['address'] ?? null,
             'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? Supplier::STATUS_ENABLED,
         ]);
 
@@ -52,7 +55,10 @@ class SupplierService
         }
         $supplier->update([
             'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? $supplier->contact,
-            'phone' => $data['phone'] ?? $supplier->phone, 'address' => $data['address'] ?? $supplier->address,
+            'phone' => $data['phone'] ?? $supplier->phone,
+            'province' => $data['province'] ?? $supplier->province, 'city' => $data['city'] ?? $supplier->city,
+            'district' => $data['district'] ?? $supplier->district, 'town' => $data['town'] ?? $supplier->town,
+            'address' => $data['address'] ?? $supplier->address,
             'remark' => $data['remark'] ?? $supplier->remark, 'status' => $data['status'] ?? $supplier->status,
         ]);
 

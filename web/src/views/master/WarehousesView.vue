@@ -1,4 +1,5 @@
-<!-- 仓库管理页：列表 + 库位管理弹窗（库位 CRUD 在弹窗内完成） -->
+<!-- 仓库管理页：列表 + 新建/编辑弹窗（编码自动生成、四级地址+详细地址、负责人选择）+ 库位管理弹窗（库位 CRUD 在弹窗内完成） -->
+
 <template>
   <div class="page-card">
     <ListFilterBar
@@ -19,7 +20,10 @@
     <el-table v-loading="loading" :data="list">
       <el-table-column prop="code" label="编码" width="100" class-name="font-code" />
       <el-table-column prop="name" label="名称" min-width="120" />
-      <el-table-column prop="address" label="地址" show-overflow-tooltip />
+      <!-- 地址列：四级地址 + 详细地址拼接展示（任一级为空跳过） -->
+      <el-table-column label="地址" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">{{ formatFullAddress(row) }}</template>
+      </el-table-column>
       <el-table-column prop="manager" label="负责人" width="100" />
       <el-table-column label="状态" width="80">
         <template #default="{ row }">
@@ -55,12 +59,20 @@
     />
 
     <!-- 仓库新建/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑仓库' : '新建仓库'" width="480px">
+    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑仓库' : '新建仓库'" width="520px">
       <el-form :model="form" label-width="80px">
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="编码" required><el-input v-model="form.code" /></el-form-item>
-        <el-form-item label="地址"><el-input v-model="form.address" /></el-form-item>
-        <el-form-item label="负责人"><el-input v-model="form.manager" /></el-form-item>
+        <!-- 编码由后端号段自动生成：新建仅提示不输入，编辑只读展示 -->
+        <el-form-item label="编码">
+          <span v-if="form.id" class="font-code">{{ form.code }}</span>
+          <span v-else class="code-auto-tip">编码自动生成</span>
+        </el-form-item>
+        <!-- 地址两段式：四级地区级联（各级可留空）+ 详细地址 -->
+        <el-form-item label="地址"><AreaCascader v-model="form.region" /></el-form-item>
+        <el-form-item label="详细地址"
+          ><el-input v-model="form.address" placeholder="详细地址"
+        /></el-form-item>
+        <el-form-item label="负责人"><UserSelect v-model="form.manager" /></el-form-item>
         <el-form-item label="状态"
           ><el-switch v-model="form.status" :active-value="1" :inactive-value="0"
         /></el-form-item>
@@ -142,13 +154,21 @@
 </template>
 
 <script setup lang="ts">
-// 仓库管理页：CRUD + 库位弹窗子管理；删除有库存仓库时后端 1106 提示
+// 仓库管理页：CRUD + 库位弹窗子管理；编码后端自动生成、地址四级级联；删除有库存仓库时后端 1106 提示
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
+import AreaCascader from '../../components/AreaCascader.vue'
+import UserSelect from '../../components/UserSelect.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import {
+  emptyRegion,
+  formatFullAddress,
+  regionToPayload,
+  type RegionAddress,
+} from '../../utils/region'
 
 const auth = useAuthStore()
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
@@ -160,11 +180,12 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
 const dialogVisible = ref(false)
 const saving = ref(false)
 
-// 仓库表单：address/manager 为空字符串（编辑回填时后端 null 值原样带入）
+// 仓库表单：address/manager 为空字符串；region 为四级地址（空串=未选该级）；code 仅编辑时只读展示
 interface WarehouseForm {
   id: number | null
   name: string
   code: string
+  region: RegionAddress
   address: string
   manager: string
   status: number
@@ -174,6 +195,7 @@ const form = reactive<WarehouseForm>({
   id: null,
   name: '',
   code: '',
+  region: emptyRegion(),
   address: '',
   manager: '',
   status: 1,
@@ -196,30 +218,47 @@ interface LocationForm {
 const locForm = reactive<LocationForm>({ id: null, name: '', code: '', status: 1 })
 
 function openCreate() {
-  Object.assign(form, { id: null, name: '', code: '', address: '', manager: '', status: 1 })
+  Object.assign(form, {
+    id: null,
+    name: '',
+    code: '',
+    region: emptyRegion(),
+    address: '',
+    manager: '',
+    status: 1,
+  })
   dialogVisible.value = true
 }
 function openEdit(row: WarehouseItem) {
+  // 编辑回填：四级地址由后端四列倒推 region（列可空，null 归一为空串），编码只读展示
   Object.assign(form, {
     id: row.id,
     name: row.name,
     code: row.code,
-    address: row.address,
-    manager: row.manager,
+    region: {
+      province: row.province ?? '',
+      city: row.city ?? '',
+      district: row.district ?? '',
+      town: row.town ?? '',
+    },
+    address: row.address ?? '',
+    manager: row.manager ?? '',
     status: row.status,
   })
   dialogVisible.value = true
 }
 
-// 保存仓库：后端 1105 重复编码提示展示
+// 保存仓库：名称必填（编码由后端自动生成，提交不含 code）
 async function save() {
-  if (!form.name || !form.code) return ElMessage.warning('请填写名称与编码')
+  if (!form.name) return ElMessage.warning('请填写名称')
   saving.value = true
   try {
+    // 四级地址拆分后与详细地址一并提交（region 空字段经 regionToPayload 过滤，后端落库 null）
+    const region = regionToPayload(form.region)
     if (form.id)
       await warehouseApi.update(form.id, {
         name: form.name,
-        code: form.code,
+        ...region,
         address: form.address,
         manager: form.manager,
         status: form.status,
@@ -227,7 +266,7 @@ async function save() {
     else
       await warehouseApi.create({
         name: form.name,
-        code: form.code,
+        ...region,
         address: form.address,
         manager: form.manager,
         status: form.status,
@@ -337,6 +376,10 @@ onMounted(search)
   background: var(--color-accent);
   border-color: var(--color-accent);
   cursor: pointer;
+}
+/* 新建态编码提示：次要文本色，与只读展示区分（编码由后端自动生成） */
+.code-auto-tip {
+  color: var(--el-text-color-secondary);
 }
 .loc-toolbar {
   display: flex;

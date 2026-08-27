@@ -16,9 +16,12 @@ class BomController extends Controller
 {
     use ApiResponse;
 
+    // 商品类型 → 中文标签映射（列表「商品类型」列展示，与 ProductController 口径一致）
+    private const TYPE_LABELS = ['raw_material' => '原料', 'semi_finished' => '半成品', 'finished' => '成品'];
+
     public function __construct(private BomService $bomService) {}
 
-    /** 分页列表：成品过滤 + 单号模糊，含成品名称 */
+    /** 分页列表：单号模糊，含商品名称与商品类型标签（BOM 主商品已放宽为成品/半成品） */
     public function index(Request $request)
     {
         $query = BomHeader::with('product')->orderByDesc('id');
@@ -33,7 +36,9 @@ class BomController extends Controller
         return $this->ok([
             'items' => $rows->map(fn ($b) => [
                 'id' => $b->id, 'code' => $b->code, 'product_id' => $b->product_id,
-                'product_name' => $b->product?->name, 'version' => $b->version,
+                'product_name' => $b->product?->name,
+                'type_label' => $b->product ? (self::TYPE_LABELS[$b->product->type] ?? $b->product->type) : null,
+                'version' => $b->version,
                 'quantity' => (float) $b->quantity, 'status' => $b->status, 'remark' => $b->remark,
             ]),
             'total' => $rows->total(), 'page' => $rows->currentPage(), 'per_page' => $rows->perPage(),

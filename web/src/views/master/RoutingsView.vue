@@ -78,26 +78,19 @@
       @current-change="refresh"
     />
 
-    <!-- 画布弹窗三态：新建（routingId=null）/编辑/详情（readonly）；保存成功后刷新列表 -->
-    <RoutingCanvasDialog
-      :visible="canvasVisible"
-      :routing-id="currentId"
-      :readonly="readonlyMode"
-      @update:visible="canvasVisible = $event"
-      @saved="refresh"
-    />
+    <!-- 画布编辑/详情为子页面（/master/routings/canvas），列表仅提供入口跳转 -->
   </div>
 </template>
 
 <script setup lang="ts">
-// 工艺路线列表页：仅做筛选/编排与启停删，DAG 编辑全部在 RoutingCanvasDialog 内完成
-import { onMounted, ref } from 'vue'
+// 工艺路线列表页：仅做筛选/编排与启停删；DAG 编辑在画布子页面（RoutingCanvasView）内完成
+import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { routingApi, type RoutingListItem } from '../../api/routing'
 import { productApi } from '../../api/product'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
-import RoutingCanvasDialog from '../../components/routing/RoutingCanvasDialog.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { formatThousand } from '../../utils/format'
@@ -110,7 +103,7 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
   onError: (e) => ElMessage.error(e.message),
 })
 
-// 筛选成品下拉选项（BF-3 remote）：label 编码+名称；画布内商品下拉由 RoutingCanvasDialog 自管
+// 筛选成品下拉选项（BF-3 remote）：label 编码+名称；画布内商品下拉由 RoutingCanvasEditor 自管
 interface ProductOption {
   id: number
   name: string
@@ -139,25 +132,20 @@ function onProductFilterChange(productId: number | null | undefined) {
   }
   load()
 }
-// 画布弹窗状态：currentId=null 新建；readonlyMode=true 详情查看
-const canvasVisible = ref(false)
-const currentId = ref<number | null>(null)
-const readonlyMode = ref(false)
+// 画布子页面入口：routing_id/mode 经 query 传递（新建不带 id；详情 mode=view）
+const router = useRouter()
 
 function openCreate() {
-  currentId.value = null
-  readonlyMode.value = false
-  canvasVisible.value = true
+  void router.push('/master/routings/canvas')
 }
 function openCanvas(row: RoutingListItem) {
-  currentId.value = row.id
-  readonlyMode.value = false
-  canvasVisible.value = true
+  void router.push({ path: '/master/routings/canvas', query: { routing_id: String(row.id) } })
 }
 function openDetail(row: RoutingListItem) {
-  currentId.value = row.id
-  readonlyMode.value = true
-  canvasVisible.value = true
+  void router.push({
+    path: '/master/routings/canvas',
+    query: { routing_id: String(row.id), mode: 'view' },
+  })
 }
 
 // 启用/停用：启用前提示将自动停用同成品其他版本（后端保证同成品启用唯一）

@@ -53,10 +53,12 @@ const searchPage = ref(1)
 // 先发后至的响应直接丢弃，避免旧结果覆盖新数据导致点选到非预期用户（BUG-05）
 let requestSeq = 0
 
-// 选中值：即用户姓名
-function pick(name: string) {
-  emit('update:modelValue', name)
-  emit('change', name)
+// 选中值：即用户姓名；清除（空串/显式 null）统一归一为 null，保持 string|null 契约
+//（审计发现：下拉模式清除发空串、弹窗模式清除不回写父级，两个入口归一后语义一致）
+function pick(name: string | null) {
+  const value = name || null
+  emit('update:modelValue', value)
+  emit('change', value)
 }
 
 // 首次加载：拉取全量用户判断走下拉还是弹窗；失败降级为占位不阻塞页面（spec §7）
@@ -161,6 +163,7 @@ onMounted(loadOptions)
         :clearable="clearable"
         :disabled="disabled"
         :placeholder="placeholder"
+        @clear="pick(null)"
       />
     </template>
     <div class="user-dialog">

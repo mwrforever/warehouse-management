@@ -184,6 +184,12 @@ const router = createRouter({
           meta: { permission: 'routing.list' },
         },
         {
+          path: 'master/routings/canvas',
+          name: 'master-routings-canvas',
+          component: () => import('../views/master/RoutingCanvasView.vue'),
+          meta: { permission: 'routing.list' },
+        },
+        {
           path: 'reports/inventory',
           name: 'reports-inventory',
           component: () => import('../views/reports/InventoryReportView.vue'),

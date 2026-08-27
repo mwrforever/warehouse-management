@@ -19,11 +19,13 @@ class DatabaseSeeder extends Seeder
         // 基础资料主数据：分类/单位/仓库/商品/工序
         // 库存基线：E2E 与演示用的商品/库位/已知库存（经 InventoryService 注入）
         // 编号规则：各类单据号/商品编码的 prefix + date_format + seq_length 默认配置（Spec 2）
+        // 工序标签分类字典：工序管理分类下拉数据源（process_category）
         $this->call([
             RbacSeeder::class,
             MasterDataSeeder::class,
             InventorySeeder::class,
             DocumentNumberConfigSeeder::class,
+            DictionaryProcessCategorySeeder::class,
         ]);
     }
 }

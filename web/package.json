@@ -23,6 +23,7 @@
     "@fontsource/fira-code": "^5.3.0",
     "@vue-flow/core": "^1.48.2",
     "axios": "^1.19.0",
+    "china-division": "^2.7.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.4",
     "jsbarcode": "^3.12.3",

@@ -1,6 +1,6 @@
 <?php
 
-// BOM 领域服务：草稿创建/更新/删除、启用切换（事务+成品行锁+启用版本唯一）+ 业务码校验（1118/1119/1120/1121/1123）
+// BOM 领域服务：草稿创建/更新/删除、启用切换（事务+商品行锁+启用版本唯一）+ 业务码校验（1118/1119/1120/1121/1123）
 
 namespace App\Services;
 
@@ -15,17 +15,17 @@ use Illuminate\Support\Facades\DB;
  * BOM 领域服务（D-1：控制器写操作全部下沉至此）
  *
  * 承接原 BomController 的单头+明细事务维护：创建/更新/删除/启用切换，均在 DB::transaction 内
- * 「锁成品行 → 启用版本唯一校验 → 变更」三步执行（与工单创建同锁序：成品行先锁）。
+ * 「锁商品行 → 启用版本唯一校验 → 变更」三步执行（与工单创建同锁序：商品行先锁）。
  * 业务失败统一抛 ProductionException（业务码沿用原口径 1118/1119/1120/1121/1123），
  * 由全局异常处理器渲染 {code, message, data} 信封，与原控制器 fail() 响应字节级等价。
- * 非线程安全：同一成品的并发写依赖成品行锁串行化，勿在事务外组合调用多个写方法。
+ * 非线程安全：同一商品的并发写依赖商品行锁串行化，勿在事务外组合调用多个写方法。
  */
 class BomService
 {
     public function __construct(private DocumentSequenceService $sequenceService) {}
 
     /**
-     * 新建 BOM：单头+明细一次提交（事务）；启用版本唯一、成品/物料类型校验；单号走持久序列
+     * 新建 BOM：单头+明细一次提交（事务）；启用版本唯一、商品/物料类型校验；单号走持久序列
      *
      * 事务第 2 参数为死锁(1213)重试次数：编号序列行首建时（MySQL RR 隔离级别下取号走
      * lockForUpdate+INSERT，间隙锁使并发双方各自 INSERT 同键序列行互等死锁）败方整单回滚 500；
@@ -35,18 +35,18 @@ class BomService
      * @param  array  $data  已过 SaveBomRequest 格式校验的原始载荷
      * @return BomHeader 新建的 BOM 模型（含单号，供控制器回显 id/code）
      *
-     * @throws ProductionException 成品类型 1118 / 明细物料类型 1119 / 启用唯一 1120 / 重复物料 1123
+     * @throws ProductionException 商品类型 1118 / 明细物料类型 1119 / 启用唯一 1120 / 重复物料 1123
      */
     public function create(array $data): BomHeader
     {
-        // 业务码校验 + 归一化（422 仅格式层已由 FormRequest 拦截，此处为业务冲突；1120 在事务内配合成品行锁检查）
+        // 业务码校验 + 归一化（422 仅格式层已由 FormRequest 拦截，此处为业务冲突；1120 在事务内配合商品行锁检查）
         $data = $this->normalizePayload($data);
 
         return DB::transaction(function () use ($data) {
-            // 先锁成品行串行化同成品并发创建，再查启用版本，守住「同成品启用版本唯一」核心不变式
+            // 先锁商品行串行化同商品并发创建，再查启用版本，守住「同商品启用版本唯一」核心不变式
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
             if ($data['status'] === BomHeader::STATUS_ENABLED && $this->hasEnabledVersion($data['product_id'], null)) {
-                throw new ProductionException('该成品已有启用版本的 BOM', 1120);
+                throw new ProductionException('该商品已有启用版本的 BOM', 1120);
             }
             // 生成单号：按编号规则配置格式（BOM 前缀+日期段+补零），持久序列原子取号（删除不回退，撞号自动重试）
             $bom = $this->sequenceService->nextNoByConfig(
@@ -75,7 +75,7 @@ class BomService
      * @param  BomHeader  $bom  路由绑定的 BOM 模型
      * @param  array  $data  已过 SaveBomRequest 格式校验的原始载荷
      *
-     * @throws ProductionException 成品类型 1118 / 明细物料类型 1119 / 启用唯一 1120 / 重复物料 1123
+     * @throws ProductionException 商品类型 1118 / 明细物料类型 1119 / 启用唯一 1120 / 重复物料 1123
      */
     public function update(BomHeader $bom, array $data): void
     {
@@ -83,13 +83,13 @@ class BomService
         $data = $this->normalizePayload($data);
 
         DB::transaction(function () use ($bom, $data) {
-            // 先锁成品行串行化同成品并发更新，再查启用版本（排除自身 id）
+            // 先锁商品行串行化同商品并发更新，再查启用版本（排除自身 id）
             Product::whereKey($data['product_id'])->lockForUpdate()->first();
             if (
                 $data['status'] === BomHeader::STATUS_ENABLED
                 && $this->hasEnabledVersion($data['product_id'], $bom->id)
             ) {
-                throw new ProductionException('该成品已有启用版本的 BOM', 1120);
+                throw new ProductionException('该商品已有启用版本的 BOM', 1120);
             }
             $bom->update([
                 'product_id' => $data['product_id'], 'version' => $data['version'],
@@ -116,7 +116,7 @@ class BomService
     }
 
     /**
-     * 启用/停用切换：启用时自动停用同成品其他版本（事务）
+     * 启用/停用切换：启用时自动停用同商品其他版本（事务）
      *
      * @param  BomHeader  $bom  路由绑定的 BOM 模型
      * @param  int  $status  目标状态（BomHeader::STATUS_ENABLED / STATUS_DISABLED，来自 ToggleStatusRequest）
@@ -124,10 +124,10 @@ class BomService
     public function toggle(BomHeader $bom, int $status): void
     {
         DB::transaction(function () use ($bom, $status) {
-            // 先锁成品行串行化同成品并发启停（B-103）：与 store/update 写入路径同锁序，
+            // 先锁商品行串行化同商品并发启停（B-103）：与 store/update 写入路径同锁序，
             // 否则 toggle 与新建/更新交错时各自的启用判断互看不到对方未提交的变更，可产生双启用版本
             Product::whereKey($bom->product_id)->lockForUpdate()->first();
-            // 启用新版本：同成品其他启用版本全部停用，保证启用唯一
+            // 启用新版本：同商品其他启用版本全部停用，保证启用唯一
             if ($status === BomHeader::STATUS_ENABLED) {
                 BomHeader::where('product_id', $bom->product_id)
                     ->where('status', BomHeader::STATUS_ENABLED)->where('id', '!=', $bom->id)
@@ -138,14 +138,16 @@ class BomService
     }
 
     // BOM 业务码校验 + 归一化（原控制器 validateBom 后半段下沉）：格式 422 已由 FormRequest 拦截；
-    // 1118 成品类型 / 1119 明细物料类型 / 1123 重复物料 在此检查；1120 启用唯一在事务内配合成品行锁检查。
+    // 1118 商品类型（成品/半成品均可维护 BOM，原材料不允许） / 1119 明细物料类型 / 1123 重复物料 在此检查；
+    // 1120 启用唯一在事务内配合商品行锁检查。
     // 与原实现差异仅在失败出口：fail 信封改为抛 ProductionException（全局渲染字节级等价）
     private function normalizePayload(array $data): array
     {
-        // 成品类型校验 1118
+        // 商品类型校验 1118：BOM 主商品放宽为成品/半成品（面向中间产物维护物料清单）；
+        // 明细物料 1119 单独限制，成品嵌套仍禁止
         $product = Product::find($data['product_id']);
-        if ($product->type !== 'finished') {
-            throw new ProductionException('BOM 关联商品必须是成品', 1118);
+        if (! in_array($product->type, ['finished', 'semi_finished'], true)) {
+            throw new ProductionException('BOM 关联商品必须是成品或半成品', 1118);
         }
 
         // 物料类型校验 1119：明细物料仅原料/半成品（不允许成品嵌套）

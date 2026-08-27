@@ -28,7 +28,10 @@ class CustomerService
         }
         $customer = Customer::create([
             'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? null,
-            'phone' => $data['phone'] ?? null, 'address' => $data['address'] ?? null,
+            'phone' => $data['phone'] ?? null,
+            'province' => $data['province'] ?? null, 'city' => $data['city'] ?? null,
+            'district' => $data['district'] ?? null, 'town' => $data['town'] ?? null,
+            'address' => $data['address'] ?? null,
             'remark' => $data['remark'] ?? null, 'status' => $data['status'] ?? Customer::STATUS_ENABLED,
         ]);
 
@@ -52,7 +55,10 @@ class CustomerService
         }
         $customer->update([
             'name' => $data['name'], 'code' => $data['code'], 'contact' => $data['contact'] ?? $customer->contact,
-            'phone' => $data['phone'] ?? $customer->phone, 'address' => $data['address'] ?? $customer->address,
+            'phone' => $data['phone'] ?? $customer->phone,
+            'province' => $data['province'] ?? $customer->province, 'city' => $data['city'] ?? $customer->city,
+            'district' => $data['district'] ?? $customer->district, 'town' => $data['town'] ?? $customer->town,
+            'address' => $data['address'] ?? $customer->address,
             'remark' => $data['remark'] ?? $customer->remark, 'status' => $data['status'] ?? $customer->status,
         ]);
 

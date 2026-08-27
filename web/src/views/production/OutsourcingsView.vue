@@ -189,7 +189,7 @@ function statusTagType(status: number) {
   return 'success'
 }
 
-// 会话序号守卫（评审 F5，模式同 RoutingCanvasDialog）：工序预填/编辑回填为异步落点，
+// 会话序号守卫（评审 F5，模式同 RoutingCanvasEditor）：工序预填/编辑回填为异步落点，
 // 快速切换工序/关窗重开时旧会话的慢响应必须丢弃（防 A 的迟到响应覆盖 B 已回填的编辑态）
 let sessionSeq = 0
 

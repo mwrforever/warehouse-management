@@ -1,6 +1,6 @@
 <?php
 
-// BOM 保存（新建/更新共用）表单校验：成品/明细格式校验（成品类型/明细物料类型/重复物料/启用唯一归 Service）
+// BOM 保存（新建/更新共用）表单校验：商品/明细格式校验（商品类型/明细物料类型/重复物料/启用唯一归 Service）
 
 namespace App\Http\Requests\Production;
 
@@ -19,7 +19,7 @@ class SaveBomRequest extends FormRequest
      * 载荷格式校验规则（422 仅格式层）
      *
      * 与原控制器内联 validateBom 的 $request->validate 段逐条等价迁移；
-     * 成品类型 1118 / 明细物料类型 1119 / 重复物料 1123 / 启用唯一 1120 /
+     * 商品类型 1118 / 明细物料类型 1119 / 重复物料 1123 / 启用唯一 1120 /
      * 删除引用保护 1121 业务校验下沉 BomService 抛 ProductionException 全局渲染。
      */
     public function rules(): array

@@ -38,6 +38,10 @@ class WarehouseController extends Controller
                 'name' => $w->name,
                 'code' => $w->code,
                 'address' => $w->address,
+                'province' => $w->province,
+                'city' => $w->city,
+                'district' => $w->district,
+                'town' => $w->town,
                 'manager' => $w->manager,
                 'status' => $w->status,
             ]),
@@ -45,11 +49,13 @@ class WarehouseController extends Controller
         ]);
     }
 
-    /** 新建仓库：编码重复 1105 */
+    /** 新建仓库：编码由服务自动生成（响应回填供前端展示） */
     public function store(SaveWarehouseRequest $request)
     {
-        // 写流程下沉 WarehouseService（编码唯一 1105/1106/1107 引用保护由其抛出）
-        return $this->ok(['id' => $this->warehouseService->create($request->validated())->id]);
+        // 写流程下沉 WarehouseService（编码自动生成/1106/1107 引用保护由其抛出）
+        $warehouse = $this->warehouseService->create($request->validated());
+
+        return $this->ok(['id' => $warehouse->id, 'code' => $warehouse->code]);
     }
 
     /** 更新仓库 */
