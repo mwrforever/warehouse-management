@@ -56,21 +56,21 @@ class MasterDataStructureTest extends TestCase
 
     public function test_master_permissions_seeded_for_admin(): void
     {
-        // 正常路径：基础资料 32 个权限已注册且 admin 角色全量持有
-        $this->assertSame(32, Permission::where('group', '基础资料')->count());
+        // 正常路径：基础资料 36 个权限已注册（8 资源+BOM+工艺路线 routing 各四动作）且 admin 角色全量持有
+        $this->assertSame(36, Permission::where('group', '基础资料')->count());
         $admin = Role::where('code', 'admin')->first();
         $this->assertSame(2, $admin->permissions()->whereIn('code', ['product.list', 'bom.delete'])->count());
     }
 
     public function test_document_number_configs_table_structure(): void
     {
-        // 结构契约：type 唯一、seq_length 1~10、enabled 布尔（配置驱动编号的核心约束）
+        // 结构契约：type 唯一、seq_length 1~10、is_enabled 布尔（配置驱动编号的核心约束）
         $cols = Schema::getColumnListing('document_number_configs');
         $this->assertContains('type', $cols);
         $this->assertContains('prefix', $cols);
         $this->assertContains('date_format', $cols);
         $this->assertContains('seq_length', $cols);
-        $this->assertContains('enabled', $cols);
+        $this->assertContains('is_enabled', $cols);
         $this->assertContains('remark', $cols);
     }
 

@@ -7,6 +7,10 @@ export interface CustomerItem {
   code: string
   contact: string | null
   phone: string | null
+  province: string | null
+  city: string | null
+  district: string | null
+  town: string | null
   address: string | null
   remark: string | null
   status: number
@@ -18,19 +22,23 @@ export const customerApi = {
     const { data } = await http.get('/customers', { params })
     return data.data as { items: CustomerItem[]; total: number; page: number; per_page: number }
   },
-  // 新建客户
+  // 新建客户（province/city/district/town 为四级地址名称，可空）
   async create(payload: {
     name: string
     code: string
     contact?: string
     phone?: string
+    province?: string
+    city?: string
+    district?: string
+    town?: string
     address?: string
     remark?: string
     status?: number
   }) {
     await http.post('/customers', payload)
   },
-  // 更新客户
+  // 更新客户（province/city/district/town 为四级地址名称，可空）
   async update(
     id: number,
     payload: {
@@ -38,6 +46,10 @@ export const customerApi = {
       code: string
       contact?: string
       phone?: string
+      province?: string
+      city?: string
+      district?: string
+      town?: string
       address?: string
       remark?: string
       status?: number

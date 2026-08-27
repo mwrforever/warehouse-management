@@ -14,6 +14,7 @@ use App\Models\Unit;
 use App\Models\User;
 use App\Models\WorkOrderOperation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 class OperationReportTest extends TestCase
@@ -70,6 +71,90 @@ class OperationReportTest extends TestCase
             'operator' => '张三',
             'remark' => '正常报工',
         ], $overrides);
+    }
+
+    /**
+     * DAG 工单辅助：造钻石路线工单（OP10→OP20/OP30/OP40→OP50，OP30 委外）并下达开工
+     *
+     * 独立物料族与 setUp 线性工单（成品B，routing_id=null）隔离互不影响：
+     * OP10 产半成品A×3（耗原料×3），三分支各耗 A×1、各产互异半成品 B/C/D×2，
+     * OP50 汇合耗 B/C/D 各×2 产成品；工单计划 6（节点报满 6 即完成）。
+     * 返回 ['order' => 工单, 'ops' => 按 node_no 键控的工序映射（开工后刷新态）]
+     */
+    private function dagOrder(): array
+    {
+        // 钻石 DAG 物料族：原料 + OP10 半成品A + 分支互异半成品 B/C/D + 成品
+        $cat = Category::create(['name' => 'DAG 物料']);
+        $unitId = Unit::where('code', 'pc')->firstOrFail()->id;
+        $processId = Process::where('code', 'CUT')->firstOrFail()->id;
+        $raw = Product::create(['name' => '铝材', 'code' => 'RAW-DAG', 'type' => 'raw_material', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        $semiA = Product::create(['name' => '半成品A', 'code' => 'SEMI-DA', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        $semiB = Product::create(['name' => '半成品B', 'code' => 'SEMI-DB', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        $semiC = Product::create(['name' => '半成品C', 'code' => 'SEMI-DC', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        $semiD = Product::create(['name' => '半成品D', 'code' => 'SEMI-DD', 'type' => 'semi_finished', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        $fin = Product::create(['name' => '机柜DAG', 'code' => 'FIN-DAG', 'type' => 'finished', 'category_id' => $cat->id, 'unit_id' => $unitId, 'status' => 1]);
+        // 成品启用 BOM：原料×3 + 半成品A×1（工单创建前置，与路线数量口径一致）
+        $bom = BomHeader::create(['code' => 'BOM-DAG-1', 'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 1, 'status' => 1]);
+        $bom->items()->createMany([
+            ['material_id' => $raw->id, 'quantity' => 3, 'unit_id' => $unitId],
+            ['material_id' => $semiA->id, 'quantity' => 1, 'unit_id' => $unitId],
+        ]);
+
+        // 启用钻石路线（OP30 委外）：下达后工单按 DAG 展开快照节点/边
+        $this->withToken($this->token)->postJson('/api/v1/routings', [
+            'product_id' => $fin->id, 'version' => 'v1', 'quantity' => 3, 'status' => 1, 'remark' => null,
+            'nodes' => [
+                ['node_no' => 'OP10', 'process_id' => $processId, 'name' => '下料', 'output_product_id' => $semiA->id, 'output_qty' => 3, 'is_outsourced' => 0, 'remark' => null, 'materials' => [
+                    ['material_id' => $raw->id, 'qty_per_unit' => 3, 'unit_id' => $unitId],
+                ]],
+                ['node_no' => 'OP20', 'process_id' => $processId, 'name' => '冲压', 'output_product_id' => $semiB->id, 'output_qty' => 2, 'is_outsourced' => 0, 'remark' => null, 'materials' => [
+                    ['material_id' => $semiA->id, 'qty_per_unit' => 1, 'unit_id' => $unitId],
+                ]],
+                ['node_no' => 'OP30', 'process_id' => $processId, 'name' => '焊接', 'output_product_id' => $semiC->id, 'output_qty' => 2, 'is_outsourced' => 1, 'remark' => null, 'materials' => [
+                    ['material_id' => $semiA->id, 'qty_per_unit' => 1, 'unit_id' => $unitId],
+                ]],
+                ['node_no' => 'OP40', 'process_id' => $processId, 'name' => '组装', 'output_product_id' => $semiD->id, 'output_qty' => 2, 'is_outsourced' => 0, 'remark' => null, 'materials' => [
+                    ['material_id' => $semiA->id, 'qty_per_unit' => 1, 'unit_id' => $unitId],
+                ]],
+                ['node_no' => 'OP50', 'process_id' => $processId, 'name' => '质检', 'output_product_id' => $fin->id, 'output_qty' => 1, 'is_outsourced' => 0, 'remark' => null, 'materials' => [
+                    ['material_id' => $semiB->id, 'qty_per_unit' => 2, 'unit_id' => $unitId],
+                    ['material_id' => $semiC->id, 'qty_per_unit' => 2, 'unit_id' => $unitId],
+                    ['material_id' => $semiD->id, 'qty_per_unit' => 2, 'unit_id' => $unitId],
+                ]],
+            ],
+            'edges' => [
+                ['from_node_no' => 'OP10', 'to_node_no' => 'OP20'],
+                ['from_node_no' => 'OP10', 'to_node_no' => 'OP30'],
+                ['from_node_no' => 'OP10', 'to_node_no' => 'OP40'],
+                ['from_node_no' => 'OP20', 'to_node_no' => 'OP50'],
+                ['from_node_no' => 'OP30', 'to_node_no' => 'OP50'],
+                ['from_node_no' => 'OP40', 'to_node_no' => 'OP50'],
+            ],
+        ])->assertJsonPath('code', 0);
+
+        // 建单（计划 6）→ 下达 → 开工（入度 0 的 OP10 置进行中）
+        $res = $this->withToken($this->token)->postJson('/api/v1/production/orders', [
+            'product_id' => $fin->id, 'quantity' => 6, 'plan_date' => now()->toDateString(),
+        ]);
+        $res->assertJsonPath('code', 0);
+        $order = ProductionOrder::where('id', $res->json('data.id'))->firstOrFail();
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/release")->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson("/api/v1/production/orders/{$order->id}/start")->assertJsonPath('code', 0);
+
+        // 按 node_no 键控的工序映射（开工后已刷新，直接承载起点状态断言）
+        return ['order' => $order, 'ops' => $order->operations()->get()->keyBy('node_no')];
+    }
+
+    /** 提交报工载荷并返回响应（成功与异常断言共用出口） */
+    private function postReport(WorkOrderOperation $op, array $payload): TestResponse
+    {
+        return $this->withToken($this->token)->postJson("/api/v1/production/operations/{$op->id}/reports", $payload);
+    }
+
+    /** 对工序报合格数量并断言成功（DAG 推进用例的步进动作） */
+    private function report(WorkOrderOperation $op, string $qty): void
+    {
+        $this->postReport($op, ['qualified_qty' => $qty])->assertJsonPath('code', 0);
     }
 
     public function test_report_success_and_auto_advance(): void
@@ -223,6 +308,38 @@ class OperationReportTest extends TestCase
             'operation_id' => $op1->id, 'qualified_qty' => '10.00', 'defective_qty' => '0.00',
             'hours' => '0.50', 'operator' => '管理员',
         ]);
+    }
+
+    // RTG-07：并行分支报工推进——节点完成后仅「全部前驱已完成」的直接后继置进行中
+    public function test_report_advances_dag_parallel(): void
+    {
+        ['order' => $order, 'ops' => $ops] = $this->dagOrder();
+        // 开工：仅入度 0 的 OP10 进行中，其余待开工
+        $this->assertSame(WorkOrderOperation::STATUS_RUNNING, $ops['OP10']->fresh()->status);
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP20']->fresh()->status);
+
+        // OP10 报满 → 三分支同时进行中（并行）
+        $this->report($ops['OP10'], '6');
+        $this->assertSame(WorkOrderOperation::STATUS_DONE, $ops['OP10']->fresh()->status);
+        foreach (['OP20', 'OP30', 'OP40'] as $no) {
+            $this->assertSame(WorkOrderOperation::STATUS_RUNNING, $ops[$no]->fresh()->status, "节点 {$no} 应进行中");
+        }
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP50']->fresh()->status);
+
+        // OP20/OP40 完成、OP30（委外）未完成 → 汇合点 OP50 仍待开工（前驱全完成才推进）
+        $this->report($ops['OP20'], '6');
+        $this->report($ops['OP40'], '6');
+        $this->assertSame(WorkOrderOperation::STATUS_PENDING, $ops['OP50']->fresh()->status);
+    }
+
+    // RTG-07：委外节点不可报工（只能经委外单回收完成）
+    public function test_report_rejects_outsourced_node(): void
+    {
+        ['order' => $order, 'ops' => $ops] = $this->dagOrder();
+        $this->report($ops['OP10'], '6'); // OP30 随之分叉置进行中
+        $this->postReport($ops['OP30'], ['qualified_qty' => 1])
+            ->assertJsonPath('code', 1509)
+            ->assertJsonPath('message', '委外工序不可报工，经委外单回收完成');
     }
 
     public function test_reports_requires_report_permission(): void

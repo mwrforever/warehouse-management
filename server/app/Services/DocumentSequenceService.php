@@ -29,7 +29,7 @@ class DocumentSequenceService
     public function nextNoByConfig(string $type, callable $persist, ?callable $legacyMax = null): mixed
     {
         // 读配置：缺失或停用时回退默认规则（前缀=type 大写、YmdHi、3 位），保证编号能力不因配置损坏而中断
-        $cfg = DocumentNumberConfig::where('type', $type)->where('enabled', true)->first();
+        $cfg = DocumentNumberConfig::where('type', $type)->where('is_enabled', true)->first();
         // 注意 date_format 空字符串（商品编码无日期段）是合法配置值，回退默认判断须在其值之后（?? 区分 null 与空串）
         $prefix = $cfg !== null ? $cfg->prefix : strtoupper($type);
         $dateFormat = $cfg !== null ? $cfg->date_format : 'YmdHi';

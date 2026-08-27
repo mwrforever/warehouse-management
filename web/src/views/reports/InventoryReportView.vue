@@ -59,7 +59,7 @@ import {
   type ReportGroupBy,
 } from '../../api/report'
 import { inventoryApi } from '../../api/inventory'
-import { formatThousand } from '../../utils/format'
+import { formatPercent, formatThousand } from '../../utils/format'
 
 const groupBy = ref<ReportGroupBy>('category')
 const items = ref<InventorySummaryItem[]>([])
@@ -71,12 +71,12 @@ const total = ref<InventorySummaryTotal>({
 const alertCount = ref(0)
 const loading = ref(false)
 
-// 数量占比：行数量/总量（总量 0 时占比 0，防除零）
+// 数量占比：行数量/总量（总量 0 时占比 0，防除零；百分比统一走 utils/format 的 formatPercent——D-16）
 function percent(row: InventorySummaryItem): string {
   const t = Number(total.value.quantity_total)
   const v = Number(row.quantity_total)
   if (t <= 0) return '0.00%'
-  return `${((v / t) * 100).toFixed(2)}%`
+  return `${formatPercent(v / t)}%`
 }
 
 // 请求序号守卫：快速切换维度时旧响应不得覆盖新结果（bug #4 回归）
@@ -114,7 +114,7 @@ onMounted(load)
   margin-bottom: var(--space-2xl);
 }
 .kpi-card {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: var(--space-xl);
@@ -126,7 +126,7 @@ onMounted(load)
 }
 .kpi-label {
   font-size: 12px;
-  color: #64748b;
+  color: var(--t3);
   margin-bottom: var(--space-md);
 }
 .kpi-value {
@@ -139,14 +139,14 @@ onMounted(load)
 }
 .bar-track {
   position: relative;
-  background: #f2f3f4;
+  background: var(--p-100);
   border-radius: 4px;
   height: 20px;
   overflow: hidden;
 }
 .bar-fill {
   height: 100%;
-  background: #059669;
+  background: var(--a-600);
   transition: width 300ms ease;
 }
 .bar-text {

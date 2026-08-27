@@ -158,7 +158,7 @@ onMounted(async () => {
 <style scoped>
 /* 页面骨架：卡片容器（筛选栏样式由 ListFilterBar 提供） */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -179,6 +179,6 @@ onMounted(async () => {
   cursor: pointer;
 }
 .el-table :deep(.el-table__row:hover td) {
-  background: #f1f5f9;
+  background: var(--p-100);
 }
 </style>

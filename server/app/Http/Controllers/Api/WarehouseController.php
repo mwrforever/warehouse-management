@@ -1,19 +1,23 @@
 <?php
 
-// 仓库/库位控制器：仓库 CRUD + 库位子资源 + 删除保护（有库存不可删）
+// 仓库/库位控制器：仓库/库位列表 读取 + 管理薄壳（写流程全部下沉 WarehouseService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Master\SaveLocationRequest;
+use App\Http\Requests\Master\SaveWarehouseRequest;
 use App\Models\Location;
 use App\Models\Warehouse;
+use App\Services\WarehouseService;
 use App\Support\ApiResponse;
-use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
 
 class WarehouseController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(private WarehouseService $warehouseService) {}
 
     /** 仓库分页列表：名称/编码模糊搜索 + 状态过滤 */
     public function index(Request $request)
@@ -34,6 +38,10 @@ class WarehouseController extends Controller
                 'name' => $w->name,
                 'code' => $w->code,
                 'address' => $w->address,
+                'province' => $w->province,
+                'city' => $w->city,
+                'district' => $w->district,
+                'town' => $w->town,
                 'manager' => $w->manager,
                 'status' => $w->status,
             ]),
@@ -41,48 +49,19 @@ class WarehouseController extends Controller
         ]);
     }
 
-    /** 新建仓库：编码重复 1105 */
-    public function store(Request $request)
+    /** 新建仓库：编码由服务自动生成（响应回填供前端展示） */
+    public function store(SaveWarehouseRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:20',
-            'address' => 'nullable|string',
-            'manager' => 'nullable|string|max:50',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Warehouse::where('code', $data['code'])->exists()) {
-            return $this->fail(1105, '仓库编码已存在');
-        }
-        $warehouse = Warehouse::create([
-            'name' => $data['name'],
-            'code' => $data['code'],
-            'address' => $data['address'] ?? null,
-            'manager' => $data['manager'] ?? null,
-            'status' => $data['status'] ?? 1,
-        ]);
+        // 写流程下沉 WarehouseService（编码自动生成/1106/1107 引用保护由其抛出）
+        $warehouse = $this->warehouseService->create($request->validated());
 
-        return $this->ok(['id' => $warehouse->id]);
+        return $this->ok(['id' => $warehouse->id, 'code' => $warehouse->code]);
     }
 
     /** 更新仓库 */
-    public function update(Request $request, Warehouse $warehouse)
+    public function update(SaveWarehouseRequest $request, Warehouse $warehouse)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:20',
-            'address' => 'nullable|string',
-            'manager' => 'nullable|string|max:50',
-            'status' => 'nullable|in:0,1',
-        ]);
-        if (Warehouse::where('code', $data['code'])->where('id', '!=', $warehouse->id)->exists()) {
-            return $this->fail(1105, '仓库编码已存在');
-        }
-        $warehouse->update([
-            'name' => $data['name'], 'code' => $data['code'],
-            'address' => $data['address'] ?? $warehouse->address, 'manager' => $data['manager'] ?? $warehouse->manager,
-            'status' => $data['status'] ?? $warehouse->status,
-        ]);
+        $this->warehouseService->update($warehouse, $request->validated());
 
         return $this->ok();
     }
@@ -90,22 +69,7 @@ class WarehouseController extends Controller
     /** 删除仓库：被库存余额/流水、盘点单、采购入库/销售出库、生产单据（领退料/委外/成品入库）引用 1106 */
     public function destroy(Warehouse $warehouse)
     {
-        // 覆盖全部 restrictOnDelete 引用表（未建自动放行，建后自动生效）
-        if (
-            DeletionGuard::referenced('inventory_balances', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('inventory_movements', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('inventory_checks', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('purchase_inbounds', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('sales_outbounds', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('pick_lists', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('return_lists', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('outsourcing_orders', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('outsourcing_receipts', 'warehouse_id', $warehouse->id)
-            || DeletionGuard::referenced('finished_inbounds', 'warehouse_id', $warehouse->id)
-        ) {
-            return $this->fail(1106, '仓库存在库存，不可删除');
-        }
-        $warehouse->delete();
+        $this->warehouseService->delete($warehouse);
 
         return $this->ok();
     }
@@ -120,35 +84,16 @@ class WarehouseController extends Controller
     }
 
     /** 新建库位：编码全局唯一（重复 422，格式层校验） */
-    public function storeLocation(Request $request, Warehouse $warehouse)
+    public function storeLocation(SaveLocationRequest $request, Warehouse $warehouse)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:50|unique:locations,code',
-            'status' => 'nullable|in:0,1',
-        ]);
-        $location = $warehouse->locations()->create([
-            'name' => $data['name'],
-            'code' => $data['code'],
-            'status' => $data['status'] ?? 1,
-        ]);
-
-        return $this->ok(['id' => $location->id]);
+        // 写流程下沉 WarehouseService（编码唯一由格式层 unique 规则把关）
+        return $this->ok(['id' => $this->warehouseService->createLocation($warehouse, $request->validated())->id]);
     }
 
     /** 更新库位 */
-    public function updateLocation(Request $request, Location $location)
+    public function updateLocation(SaveLocationRequest $request, Location $location)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:50|unique:locations,code,'.$location->id,
-            'status' => 'nullable|in:0,1',
-        ]);
-        $location->update([
-            'name' => $data['name'],
-            'code' => $data['code'],
-            'status' => $data['status'] ?? $location->status,
-        ]);
+        $this->warehouseService->updateLocation($location, $request->validated());
 
         return $this->ok();
     }
@@ -156,22 +101,7 @@ class WarehouseController extends Controller
     /** 删除库位：被库存余额/流水、盘点明细、采购入库/销售出库、生产单据（领退料/委外/成品入库）引用 1107 */
     public function destroyLocation(Location $location)
     {
-        // 覆盖全部 restrictOnDelete 引用表（未建自动放行，建后自动生效）
-        if (
-            DeletionGuard::referenced('inventory_balances', 'location_id', $location->id)
-            || DeletionGuard::referenced('inventory_movements', 'location_id', $location->id)
-            || DeletionGuard::referenced('inventory_check_items', 'location_id', $location->id)
-            || DeletionGuard::referenced('purchase_inbounds', 'location_id', $location->id)
-            || DeletionGuard::referenced('sales_outbounds', 'location_id', $location->id)
-            || DeletionGuard::referenced('pick_lists', 'location_id', $location->id)
-            || DeletionGuard::referenced('return_lists', 'location_id', $location->id)
-            || DeletionGuard::referenced('outsourcing_orders', 'location_id', $location->id)
-            || DeletionGuard::referenced('outsourcing_receipts', 'location_id', $location->id)
-            || DeletionGuard::referenced('finished_inbounds', 'location_id', $location->id)
-        ) {
-            return $this->fail(1107, '库位存在库存，不可删除');
-        }
-        $location->delete();
+        $this->warehouseService->deleteLocation($location);
 
         return $this->ok();
     }

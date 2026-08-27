@@ -126,12 +126,15 @@ describe('productionApi 报工与状态流转', () => {
   })
 
   it('operationReports 解包报工记录分页', async () => {
+    // 响应契约：后端 decimal:2 列序列化为字符串（与 OperationReportRecord 类型声明一致）
     vi.mocked(http.get).mockResolvedValue({
-      data: { data: { items: [{ id: 1, qualified_qty: 5 }], total: 1, page: 1, per_page: 10 } },
+      data: {
+        data: { items: [{ id: 1, qualified_qty: '5.00' }], total: 1, page: 1, per_page: 10 },
+      },
     })
     const res = await productionApi.operationReports(1)
     expect(http.get).toHaveBeenCalledWith('/production/operations/1/reports')
-    expect(res.items[0].qualified_qty).toBe(5)
+    expect(res.items[0].qualified_qty).toBe('5.00')
   })
 
   it('startOrder/completeOrder/closeOrder 走状态流转路径', async () => {

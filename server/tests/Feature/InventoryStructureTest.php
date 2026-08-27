@@ -45,16 +45,17 @@ class InventoryStructureTest extends TestCase
 
     public function test_movement_source_types_cover_spec_enum(): void
     {
-        // 正常路径：9 种来源类型与中文标签一一映射（采购/销售/生产模块将复用）
+        // 正常路径：10 种来源类型与中文标签一一映射（采购/销售/生产模块将复用）
         $this->assertSame(
             [
                 'purchase_inbound', 'sales_outbound', 'pick', 'return',
-                'finished_inbound', 'outsourcing_out', 'outsourcing_in',
+                'finished_inbound', 'outsourcing_out', 'outsourcing_in', 'outsourcing_return',
                 'check_in', 'check_out',
             ],
             InventoryMovement::SOURCE_TYPES
         );
         $this->assertSame('采购入库', InventoryMovement::SOURCE_TYPE_LABELS['purchase_inbound']);
+        $this->assertSame('余料退回', InventoryMovement::SOURCE_TYPE_LABELS['outsourcing_return']);
         $this->assertSame('盘盈', InventoryMovement::SOURCE_TYPE_LABELS['check_in']);
         $this->assertSame('盘亏', InventoryMovement::SOURCE_TYPE_LABELS['check_out']);
     }

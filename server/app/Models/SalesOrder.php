@@ -18,7 +18,7 @@ use Illuminate\Support\Carbon;
  * @property string $order_date
  * @property string|null $expected_date
  * @property int $status
- * @property string $total_amount
+ * @property int $total_amount 明细金额合计（分单位整数）
  * @property string|null $remark
  * @property int|null $created_by
  * @property Carbon|null $approved_at
@@ -53,7 +53,7 @@ class SalesOrder extends Model
     {
         return [
             'status' => 'integer',
-            'total_amount' => 'decimal:2',
+            'total_amount' => 'integer',
             'approved_at' => 'datetime',
             'closed_at' => 'datetime',
         ];

@@ -134,7 +134,7 @@ onMounted(search)
 <style scoped>
 /* 与 CategoriesView 相同页面骨架（主按钮），页面间保持一致 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

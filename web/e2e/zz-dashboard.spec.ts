@@ -6,26 +6,23 @@
 // 将破坏 inventory.spec 硬编码基线断言（MAT-001=100/FIN-002=20/盘点弹窗 toHaveCount(3)），
 // 且已下达工单/已审核单据不可删——本文件为最后一篇，残留不影响任何后续 spec
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 stats-report.spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 stats-report.spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 async function apiDelete(page: Page, url: string) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.delete(url, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await page.request.delete(url, { headers: await sessionHeaders(page) })
   return (await res.json()) as { code: number; message?: string }
 }
 

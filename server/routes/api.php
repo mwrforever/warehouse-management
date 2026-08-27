@@ -22,6 +22,7 @@ use App\Http\Controllers\Api\PurchaseOrderController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReturnListController;
 use App\Http\Controllers\Api\RoleController;
+use App\Http\Controllers\Api\RoutingController;
 use App\Http\Controllers\Api\SalesOrderController;
 use App\Http\Controllers\Api\SalesOutboundController;
 use App\Http\Controllers\Api\SupplierController;
@@ -54,10 +55,13 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:role.delete')->delete('/roles/{role}', [RoleController::class, 'destroy']);
     });
 
-    // 数据字典：按编码取值登录即可访问（供其他模块下拉）；CRUD 要求认证 + 对应权限（dictionary.list/create/update/delete）
+    // 数据字典：全部要求认证 + 对应权限（dictionary.list/create/update/delete）；
+    // 按编码取值与列表同口径要求 dictionary.list（D-11 权限收紧：byCode 为公开字典查询，
+    // 管理员配置的角色通常持有；前端 api/dictionary.ts 未调用该接口，无实际影响面）
     Route::middleware('auth:sanctum')->group(function () {
         // 注意：code/{code} 必须先于 {dictionary} 注册，避免 code 被解析为字典 ID
-        Route::get('/dictionaries/code/{code}', [DictionaryController::class, 'byCode']);
+        Route::middleware('permission:dictionary.list')
+            ->get('/dictionaries/code/{code}', [DictionaryController::class, 'byCode']);
         Route::middleware('permission:dictionary.list')->get('/dictionaries', [DictionaryController::class, 'index']);
         Route::middleware('permission:dictionary.list')
             ->get('/dictionaries/{dictionary}/items', [DictionaryController::class, 'items']);
@@ -171,6 +175,16 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:bom.delete')->delete('/boms/{bom}', [BomController::class, 'destroy']);
         Route::middleware('permission:bom.list')->get('/boms/{bom}/items', [BomController::class, 'items']);
         Route::middleware('permission:bom.update')->put('/boms/{bom}/toggle', [BomController::class, 'toggle']);
+    });
+
+    // 工艺路线：CRUD + DAG 图 + 启停（routing.*；DAG 校验 17xx 在 Service；graph 静态段先于 {routing} 注册）
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::middleware('permission:routing.list')->get('/routings', [RoutingController::class, 'index']);
+        Route::middleware('permission:routing.create')->post('/routings', [RoutingController::class, 'store']);
+        Route::middleware('permission:routing.list')->get('/routings/{routing}/graph', [RoutingController::class, 'graph']);
+        Route::middleware('permission:routing.update')->put('/routings/{routing}', [RoutingController::class, 'update']);
+        Route::middleware('permission:routing.delete')->delete('/routings/{routing}', [RoutingController::class, 'destroy']);
+        Route::middleware('permission:routing.update')->put('/routings/{routing}/toggle', [RoutingController::class, 'toggle']);
     });
 
     // 库存查询：余额/导出/流水/预警（inventory.list）
@@ -290,8 +304,10 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.return.update')->post('/production/returns/{return}/approve', [ReturnListController::class, 'approve']);
     });
 
-    // 委外加工：CRUD + 发出（审核）+ 回收（production.outsource.*；审核/回收复用 update）
+    // 委外加工：CRUD + from-operation 预填 + 发出（审核）+ 回收 + 余料退回（production.outsource.*；审核/回收复用 update）
     Route::middleware('auth:sanctum')->group(function () {
+        // from-operation 必须先于 {outsourcing} 注册（operationId 不被解析为委外单 ID）
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/from-operation/{operationId}', [OutsourcingController::class, 'fromOperation']);
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings', [OutsourcingController::class, 'index']);
         Route::middleware('permission:production.outsource.create')->post('/production/outsourcings', [OutsourcingController::class, 'store']);
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}', [OutsourcingController::class, 'show']);
@@ -300,6 +316,8 @@ Route::prefix('v1')->group(function () {
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/approve', [OutsourcingController::class, 'approve']);
         Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'storeReceipt']);
         Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/receipts', [OutsourcingController::class, 'receipts']);
+        Route::middleware('permission:production.outsource.update')->post('/production/outsourcings/{outsourcing}/returns', [OutsourcingController::class, 'storeReturn']);
+        Route::middleware('permission:production.outsource.list')->get('/production/outsourcings/{outsourcing}/returns', [OutsourcingController::class, 'returnList']);
     });
 
     // 成品入库单：CRUD + 审核（production.finished.*；审核复用 update）

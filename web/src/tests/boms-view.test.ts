@@ -1,6 +1,7 @@
 // BOM 页组件测试：物料行选择物料后单位自动带出（spec §5.7「单位（自动带出）」）
 // 背景：物料行单位原固定取第一个单位（units[0]），未随物料联动，
-// 导致 MAT-001（单位个）行显示「千克」、保存载荷 unit_id 错误（E2E TC-MST-09 回归保护）
+// 导致 MAT-001（单位个）行显示「千克」、保存载荷 unit_id 错误（E2E TC-MST-09 回归保护）；
+// 首屏下拉 Promise.all 失败不产生 unhandled rejection（BF-6）
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -21,7 +22,7 @@ vi.mock('../api/bom', () => ({
 }))
 vi.mock('../api/product', () => ({
   productApi: {
-    // params 仅用于区分成品/物料两类下拉数据源（type 为商品类型）
+    // params.type 区分四类请求：商品下拉双路（半成品+成品）、物料下拉双路（原料+半成品）
     list: vi.fn().mockImplementation((params: { type?: string }) => {
       if (params.type === 'finished')
         return Promise.resolve({
@@ -32,6 +33,23 @@ vi.mock('../api/product', () => ({
               code: 'FIN-002',
               type: 'finished',
               type_label: '成品',
+              category_id: 1,
+              unit_id: 1,
+              unit_name: '个',
+              status: 1,
+            },
+          ],
+          total: 1,
+        })
+      if (params.type === 'semi_finished')
+        return Promise.resolve({
+          items: [
+            {
+              id: 3,
+              name: '半成品A',
+              code: 'SEMI-001',
+              type: 'semi_finished',
+              type_label: '半成品',
               category_id: 1,
               unit_id: 1,
               unit_name: '个',
@@ -72,6 +90,9 @@ vi.mock('../api/unit', () => ({
   },
 }))
 import { bomApi } from '../api/bom'
+import { unitApi } from '../api/unit'
+import { productApi } from '../api/product'
+import { __resetProductPickerCache } from '../components/ProductPicker.vue'
 
 describe('BOM 物料行单位自动带出', () => {
   let store: ReturnType<typeof useAuthStore>
@@ -79,6 +100,8 @@ describe('BOM 物料行单位自动带出', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    // 重置商品选择器模块级缓存（pre-flight 同款裁决：模块级变量跨用例共享会污染断言）
+    __resetProductPickerCache()
     pinia = createPinia()
     setActivePinia(pinia)
     store = useAuthStore()
@@ -98,6 +121,18 @@ describe('BOM 物料行单位自动带出', () => {
     await newBtn!.trigger('click')
     await flushPromises()
 
+    // 商品下拉放宽为半成品+成品双路：semi_finished 与 finished 两类均被请求（BOM 主商品可半成品）
+    expect(productApi.list).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'semi_finished', page: 1, per_page: 100 }),
+    )
+    expect(productApi.list).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'finished', page: 1, per_page: 100 }),
+    )
+    // 物料下拉维持原料+半成品双路，不受本轮放宽影响
+    expect(productApi.list).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'raw_material', page: 1, per_page: 100 }),
+    )
+
     // 物料下拉选择 MAT-001（单位个 id=1）
     const materialSelect = wrapper.find('.item-row .el-select__wrapper')
     expect(materialSelect, '物料行下拉应存在').toBeTruthy()
@@ -107,7 +142,11 @@ describe('BOM 物料行单位自动带出', () => {
       ...document.querySelectorAll(
         '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
       ),
-    ].find((o) => (o as HTMLElement).textContent!.trim() === 'MAT-001 测试铝材')
+    ].find(
+      (o) =>
+        (o as HTMLElement).textContent!.includes('测试铝材') &&
+        (o as HTMLElement).textContent!.includes('MAT-001'),
+    )
     expect(opt, '物料选项 MAT-001 应存在').toBeTruthy()
     ;(opt as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
@@ -124,7 +163,11 @@ describe('BOM 物料行单位自动带出', () => {
       ...document.querySelectorAll(
         '.el-select-dropdown:not(.el-tree-select__popper) .el-select-dropdown__item',
       ),
-    ].find((o) => (o as HTMLElement).textContent!.trim() === 'FIN-002 成品B')
+    ].find(
+      (o) =>
+        (o as HTMLElement).textContent!.includes('成品B') &&
+        (o as HTMLElement).textContent!.includes('FIN-002'),
+    )
     expect(finOpt, '成品选项 FIN-002 应存在').toBeTruthy()
     ;(finOpt as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
@@ -137,6 +180,37 @@ describe('BOM 物料行单位自动带出', () => {
         items: expect.arrayContaining([expect.objectContaining({ material_id: 1, unit_id: 1 })]),
       }),
     )
+    wrapper.unmount()
+  })
+})
+
+describe('BOM 首屏下拉加载兜底（BF-6）', () => {
+  let pinia: ReturnType<typeof createPinia>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    pinia = createPinia()
+    setActivePinia(pinia)
+    useAuthStore().permissions = ['bom.create', 'bom.list']
+  })
+
+  function mountView() {
+    return mount(BomsView, { attachTo: document.body, global: { plugins: [ElementPlus, pinia] } })
+  }
+
+  it('下拉任一路加载失败不产生 unhandled rejection，主列表与新建入口不受阻塞', async () => {
+    // 异常场景：onMounted 内 Promise.all 无兜底时 rejection 无人接住（BF-6 回归）；
+    // 下拉失败只损失下拉数据源，主列表由 useListQuery 独立链路加载
+    vi.mocked(unitApi.list).mockRejectedValueOnce(new Error('单位接口不可用'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(bomApi.list, '主列表加载不受下拉失败影响').toHaveBeenCalled()
+    const newBtn = wrapper.findAll('button').find((b) => b.text().trim() === '新 建')
+    expect(newBtn, '新建入口应存在').toBeTruthy()
+    await newBtn!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.el-dialog').exists(), '下拉失败不阻塞新建弹窗').toBe(true)
     wrapper.unmount()
   })
 })

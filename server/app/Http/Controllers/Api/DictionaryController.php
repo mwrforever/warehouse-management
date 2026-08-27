@@ -1,12 +1,15 @@
 <?php
 
-// 字典管理控制器：字典/字典项 CRUD + 按编码取值（供其他模块下拉）
+// 字典管理控制器：字典/字典项列表与按编码取值 读取 + 管理薄壳（写流程全部下沉 DictionaryService）
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Master\SaveDictionaryItemRequest;
+use App\Http\Requests\Master\SaveDictionaryRequest;
 use App\Models\Dictionary;
 use App\Models\DictionaryItem;
+use App\Services\DictionaryService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 
@@ -16,12 +19,14 @@ use Illuminate\Http\Request;
  * 负责数据字典与字典项的全量管理：字典 CRUD（编码唯一，重复返回 1005）、
  * 字典项 CRUD（items 列表返回全部项含停用，避免禁用项在管理 UI 消失后无法恢复）、
  * 按编码取启用项供其他模块下拉（登录即可访问）。
- * 依赖 Dictionary/DictionaryItem 模型、ApiResponse 统一响应与 permission 中间件；
- * 删除字典依赖外键级联删除字典项；编码唯一性由数据库 unique 约束兜底。
+ * 依赖 DictionaryService（写流程）/ Dictionary、DictionaryItem 模型、ApiResponse 统一响应
+ * 与 permission 中间件；删除字典依赖外键级联删除字典项；编码唯一性由数据库 unique 约束兜底。
  */
 class DictionaryController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(private DictionaryService $dictionaryService) {}
 
     /** 字典分页列表 */
     public function index(Request $request)
@@ -41,34 +46,16 @@ class DictionaryController extends Controller
     }
 
     /** 新建字典：编码唯一 */
-    public function store(Request $request)
+    public function store(SaveDictionaryRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:50',
-            'remark' => 'nullable|string',
-        ]);
-        // 编码重复属业务错误，返回 1005（不能用 unique 校验，否则被统一渲染为 422）
-        if (Dictionary::where('code', $data['code'])->exists()) {
-            return $this->fail(1005, '字典编码已存在');
-        }
-
-        return $this->ok(['id' => Dictionary::create($data)->id]);
+        // 写流程下沉 DictionaryService（编码唯一 1005 由其抛出；删除字典项由 FK 级联）
+        return $this->ok(['id' => $this->dictionaryService->create($request->validated())->id]);
     }
 
     /** 更新字典 */
-    public function update(Request $request, Dictionary $dictionary)
+    public function update(SaveDictionaryRequest $request, Dictionary $dictionary)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:50',
-            'code' => 'required|string|max:50',
-            'remark' => 'nullable|string',
-        ]);
-        // 编码重复属业务错误，返回 1005（排除自身；数据库 unique 约束仍兜底并发场景）
-        if (Dictionary::where('code', $data['code'])->where('id', '!=', $dictionary->id)->exists()) {
-            return $this->fail(1005, '字典编码已存在');
-        }
-        $dictionary->update($data);
+        $this->dictionaryService->update($dictionary, $request->validated());
 
         return $this->ok();
     }
@@ -76,7 +63,7 @@ class DictionaryController extends Controller
     /** 删除字典（级联删除字典项） */
     public function destroy(Dictionary $dictionary)
     {
-        $dictionary->delete();
+        $this->dictionaryService->delete($dictionary);
 
         return $this->ok();
     }
@@ -88,28 +75,15 @@ class DictionaryController extends Controller
     }
 
     /** 新增字典项 */
-    public function storeItem(Request $request, Dictionary $dictionary)
+    public function storeItem(SaveDictionaryItemRequest $request, Dictionary $dictionary)
     {
-        $data = $request->validate([
-            'label' => 'required|string|max:50',
-            'value' => 'required|string|max:50',
-            'sort' => 'integer',
-            'status' => 'in:0,1',
-        ]);
-
-        return $this->ok(['id' => $dictionary->items()->create($data)->id]);
+        return $this->ok(['id' => $this->dictionaryService->createItem($dictionary, $request->validated())->id]);
     }
 
     /** 更新字典项 */
-    public function updateItem(Request $request, DictionaryItem $item)
+    public function updateItem(SaveDictionaryItemRequest $request, DictionaryItem $item)
     {
-        $data = $request->validate([
-            'label' => 'required|string|max:50',
-            'value' => 'required|string|max:50',
-            'sort' => 'integer',
-            'status' => 'in:0,1',
-        ]);
-        $item->update($data);
+        $this->dictionaryService->updateItem($item, $request->validated());
 
         return $this->ok();
     }
@@ -117,7 +91,7 @@ class DictionaryController extends Controller
     /** 删除字典项 */
     public function destroyItem(DictionaryItem $item)
     {
-        $item->delete();
+        $this->dictionaryService->deleteItem($item);
 
         return $this->ok();
     }
@@ -130,6 +104,8 @@ class DictionaryController extends Controller
             return $this->fail(1008, '字典不存在');
         }
 
-        return $this->ok(['items' => $dictionary->items()->where('status', 1)->orderBy('sort')->get()]);
+        $items = $dictionary->items()->where('status', DictionaryItem::STATUS_ENABLED)->orderBy('sort')->get();
+
+        return $this->ok(['items' => $items]);
     }
 }

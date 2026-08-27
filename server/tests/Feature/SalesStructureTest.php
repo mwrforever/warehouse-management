@@ -67,18 +67,18 @@ class SalesStructureTest extends TestCase
         ]);
     }
 
-    public function test_amount_columns_are_decimal(): void
+    public function test_amount_columns_are_bigint_cents_and_qty_columns_decimal(): void
     {
-        // 正常路径：金额/数量列为 decimal（分单位整数运算，禁浮点）
-        // 注：sqlite 语法器将 DECIMAL 编译为 NUMERIC，故类型名 decimal|numeric 均合法，float 则拒绝
+        // 正常路径（R2）：金额列为 bigint 分单位整数、数量列为 decimal（分单位整数运算，禁浮点）
+        // 注：MySQL 返回类型名 bigint、sqlite 语法器将 BIGINT 编译为 INTEGER，故 integer|bigint 均合法
         foreach (['price', 'amount'] as $col) {
             $this->assertContains(
                 Schema::getColumnType('sales_order_items', $col),
-                ['decimal', 'numeric'],
-                "{$col} 应为 decimal（sqlite 下为 numeric）"
+                ['integer', 'bigint'],
+                "{$col} 应为 bigint（sqlite 下为 integer）"
             );
         }
-        $this->assertContains(Schema::getColumnType('sales_orders', 'total_amount'), ['decimal', 'numeric']);
+        $this->assertContains(Schema::getColumnType('sales_orders', 'total_amount'), ['integer', 'bigint']);
         $this->assertContains(Schema::getColumnType('sales_order_items', 'quantity'), ['decimal', 'numeric']);
         $this->assertContains(Schema::getColumnType('sales_order_items', 'shipped_qty'), ['decimal', 'numeric']);
     }

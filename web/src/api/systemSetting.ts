@@ -8,19 +8,19 @@ export interface NumberConfigItem {
   prefix: string
   date_format: string
   seq_length: number
-  enabled: boolean
+  is_enabled: boolean
   remark: string | null
 }
 
 export const systemSettingApi = {
-  // 分页列表（13 类规则，per_page 缺省 20）
-  async list(params: { page?: number; per_page?: number } = {}) {
+  // 分页列表（17 类规则，per_page 缺省 20；keyword 模糊匹配类型/前缀/备注/中文标签）
+  async list(params: { page?: number; per_page?: number; keyword?: string } = {}) {
     const { data } = await http.get('/document-number-configs', {
       params: { per_page: 50, ...params },
     })
     return data.data as { items: NumberConfigItem[]; total: number; page: number; per_page: number }
   },
-  // 编辑规则（prefix/date_format/seq_length/enabled/remark；type 由种子固定不可改）
+  // 编辑规则（prefix/date_format/seq_length/is_enabled/remark；type 由种子固定不可改）
   async update(id: number, payload: Omit<NumberConfigItem, 'id' | 'type' | 'type_label'>) {
     await http.put(`/document-number-configs/${id}`, payload)
   },

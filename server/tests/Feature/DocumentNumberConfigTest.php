@@ -29,10 +29,31 @@ class DocumentNumberConfigTest extends TestCase
 
     public function test_index_lists_all_configs_paginated(): void
     {
-        // 正常路径：13 类规则全部可查（per_page 覆盖）
+        // 正常路径：17 类规则全部可查（14 类单据含工艺路线 rtg/委外退料 osrt + 商品编码 prd + 工序编码 proc + 仓库编码 wh，per_page 覆盖）
         $this->withToken($this->token)->getJson('/api/v1/document-number-configs?per_page=50')
             ->assertJsonPath('code', 0)
-            ->assertJsonPath('data.total', 13);
+            ->assertJsonPath('data.total', 17);
+    }
+
+    public function test_index_keyword_filters_by_type_label_and_prefix(): void
+    {
+        // 正常路径：中文标签反查（采购订单 → po）与 prefix/type 模糊（PRD → 仅 prd）均命中
+        $res = $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword='.urlencode('采购订单'));
+        $res->assertJsonPath('code', 0);
+        $this->assertSame(1, $res->json('data.total'));
+        $this->assertSame('po', $res->json('data.items.0.type'));
+        $res2 = $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword=PRD');
+        $res2->assertJsonPath('code', 0);
+        $this->assertSame(1, $res2->json('data.total'));
+        $this->assertSame('prd', $res2->json('data.items.0.type'));
+    }
+
+    public function test_index_keyword_no_match_returns_empty(): void
+    {
+        // 边界条件：无命中返回空列表而非报错
+        $this->withToken($this->token)->getJson('/api/v1/document-number-configs?keyword='.urlencode('不存在的规则'))
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.total', 0);
     }
 
     public function test_update_changes_rule_and_preview_reflects(): void
@@ -40,7 +61,7 @@ class DocumentNumberConfigTest extends TestCase
         // 正常路径：改 po 的 seq_length=4 → 数据库更新；预览接口按新值出 4 位示例
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 4, 'enabled' => true, 'remark' => '改宽',
+            'prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 4, 'is_enabled' => true, 'remark' => '改宽',
         ])->assertJsonPath('code', 0);
         $this->assertSame(4, $cfg->refresh()->seq_length);
         $res = $this->withToken($this->token)->postJson('/api/v1/document-number-configs/preview', [
@@ -55,7 +76,7 @@ class DocumentNumberConfigTest extends TestCase
         // 正常路径（spec §3 边界）：date_format 空串=无日期段（商品编码场景），required 会误拒、present 放行
         $cfg = DocumentNumberConfig::where('type', 'prd')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'enabled' => true, 'remark' => null,
+            'prefix' => 'PRD', 'date_format' => '', 'seq_length' => 6, 'is_enabled' => true, 'remark' => null,
         ])->assertJsonPath('code', 0);
         $this->assertSame('', $cfg->refresh()->date_format);
         $res = $this->withToken($this->token)->postJson('/api/v1/document-number-configs/preview', [
@@ -70,7 +91,7 @@ class DocumentNumberConfigTest extends TestCase
         // 异常路径：seq_length 越界/前缀含小写/date_format 非法 → 422
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($this->token)->putJson("/api/v1/document-number-configs/{$cfg->id}", [
-            'prefix' => 'po', 'date_format' => 'YmdHi', 'seq_length' => 0, 'enabled' => true,
+            'prefix' => 'po', 'date_format' => 'YmdHi', 'seq_length' => 0, 'is_enabled' => true,
         ])->assertStatus(422);
     }
 
@@ -82,7 +103,7 @@ class DocumentNumberConfigTest extends TestCase
         $u->roles()->sync([$role->id]);
         $cfg = DocumentNumberConfig::where('type', 'po')->firstOrFail();
         $this->withToken($u->createToken('api')->plainTextToken)
-            ->putJson("/api/v1/document-number-configs/{$cfg->id}", ['prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'enabled' => true])
+            ->putJson("/api/v1/document-number-configs/{$cfg->id}", ['prefix' => 'PO', 'date_format' => 'YmdHi', 'seq_length' => 3, 'is_enabled' => true])
             ->assertStatus(403);
     }
 }

@@ -21,7 +21,10 @@
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="contact" label="联系人" width="100" />
       <el-table-column prop="phone" label="电话" width="140" />
-      <el-table-column prop="address" label="地址" show-overflow-tooltip />
+      <!-- 地址列：四级地址 + 详细地址拼接展示（任一级为空跳过） -->
+      <el-table-column label="地址" show-overflow-tooltip>
+        <template #default="{ row }">{{ formatFullAddress(row) }}</template>
+      </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
           <el-tag :type="row.status === 1 ? 'success' : 'info'">{{
@@ -54,7 +57,11 @@
         <el-form-item label="编码" required><el-input v-model="form.code" /></el-form-item>
         <el-form-item label="联系人"><el-input v-model="form.contact" /></el-form-item>
         <el-form-item label="电话"><el-input v-model="form.phone" /></el-form-item>
-        <el-form-item label="地址"><el-input v-model="form.address" /></el-form-item>
+        <!-- 地址两段式：四级地区级联（各级可留空）+ 详细地址 -->
+        <el-form-item label="地址"><AreaCascader v-model="form.region" /></el-form-item>
+        <el-form-item label="详细地址"
+          ><el-input v-model="form.address" placeholder="详细地址"
+        /></el-form-item>
         <el-form-item label="备注"
           ><el-input v-model="form.remark" type="textarea" :rows="2"
         /></el-form-item>
@@ -79,7 +86,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { useAuthStore } from '../../stores/auth'
 import ListFilterBar from '../../components/ListFilterBar.vue'
+import AreaCascader from '../../components/AreaCascader.vue'
 import { useListQuery } from '../../composables/useListQuery'
+import {
+  emptyRegion,
+  formatFullAddress,
+  regionToPayload,
+  type RegionAddress,
+} from '../../utils/region'
 
 const auth = useAuthStore()
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
@@ -91,13 +105,14 @@ const { query, list, total, loading, load, search, reset, refresh } = useListQue
 const dialogVisible = ref(false)
 const saving = ref(false)
 
-// 供应商表单：contact/phone/address/remark 为空字符串
+// 供应商表单：contact/phone/address/remark 为空字符串；region 为四级地址（空串=未选该级）
 interface SupplierForm {
   id: number | null
   name: string
   code: string
   contact: string
   phone: string
+  region: RegionAddress
   address: string
   remark: string
   status: number
@@ -109,6 +124,7 @@ const form = reactive<SupplierForm>({
   code: '',
   contact: '',
   phone: '',
+  region: emptyRegion(),
   address: '',
   remark: '',
   status: 1,
@@ -121,6 +137,7 @@ function openCreate() {
     code: '',
     contact: '',
     phone: '',
+    region: emptyRegion(),
     address: '',
     remark: '',
     status: 1,
@@ -128,12 +145,19 @@ function openCreate() {
   dialogVisible.value = true
 }
 function openEdit(row: SupplierItem) {
+  // 编辑回填：四级地址由后端四列倒推 region（列可空，null 归一为空串）
   Object.assign(form, {
     id: row.id,
     name: row.name,
     code: row.code,
     contact: row.contact,
     phone: row.phone,
+    region: {
+      province: row.province ?? '',
+      city: row.city ?? '',
+      district: row.district ?? '',
+      town: row.town ?? '',
+    },
     address: row.address,
     remark: row.remark,
     status: row.status,
@@ -146,12 +170,15 @@ async function save() {
   if (!form.name || !form.code) return ElMessage.warning('请填写名称与编码')
   saving.value = true
   try {
+    // 四级地址拆分后与原详细地址一并提交（region 空字段被 regionToPayload 过滤，后端落库 null）
+    const region = regionToPayload(form.region)
     if (form.id)
       await supplierApi.update(form.id, {
         name: form.name,
         code: form.code,
         contact: form.contact,
         phone: form.phone,
+        ...region,
         address: form.address,
         remark: form.remark,
         status: form.status,
@@ -162,6 +189,7 @@ async function save() {
         code: form.code,
         contact: form.contact,
         phone: form.phone,
+        ...region,
         address: form.address,
         remark: form.remark,
         status: form.status,
@@ -198,7 +226,7 @@ onMounted(search)
 <style scoped>
 /* 页面骨架同上（page-card/btn-primary） */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);

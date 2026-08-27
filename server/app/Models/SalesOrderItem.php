@@ -14,9 +14,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $order_id
  * @property int $product_id
  * @property string $quantity
- * @property string $price
+ * @property int $price 单价（分单位整数）
  * @property string $shipped_qty
- * @property string $amount
+ * @property int $amount 行金额（分单位整数，half-up 取整）
  */
 class SalesOrderItem extends Model
 {
@@ -26,9 +26,9 @@ class SalesOrderItem extends Model
     {
         return [
             'quantity' => 'decimal:2',
-            'price' => 'decimal:2',
+            'price' => 'integer',
             'shipped_qty' => 'decimal:2',
-            'amount' => 'decimal:2',
+            'amount' => 'integer',
         ];
     }
 

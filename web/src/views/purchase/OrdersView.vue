@@ -1,7 +1,13 @@
 <!-- 采购订单页：筛选列表 + 新建/编辑弹窗（900px 明细/扫码/实时合计）+ 详情弹窗（含入库记录） -->
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import {
   purchaseApi,
   type OrderInboundItem,
@@ -14,12 +20,22 @@ import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
 import { useListQuery } from '../../composables/useListQuery'
 import { useAuthStore } from '../../stores/auth'
-import { formatYuan, toLocalDateString } from '../../utils/format'
+import {
+  fenToYuan,
+  formatYuan,
+  multiplyCents,
+  toLocalDateString,
+  yuanToFen,
+} from '../../utils/format'
+import { priceRule, quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const saving = ref(false)
 const suppliers = ref<SupplierItem[]>([])
 const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
+
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
 
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
 const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
@@ -43,6 +59,19 @@ const form = reactive({
   items: [] as { product_id: number | undefined; quantity: number; price: number }[],
 })
 
+// 表单校验规则（D-17）：表头必填字段；明细行字段由行内 :rules 承载（见下方行级规则）
+const rules: FormRules = {
+  supplier_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  order_date: [{ required: true, message: '请选择下单日期', trigger: 'change' }],
+}
+// 明细行校验：商品必选；数量必须 > 0 且最多 2 位小数（0.5 等小数合法，后端 decimal(12,2) 同口径）；
+// 单价（元口径）≥ 0 且最多 2 位小数，提交时再经 yuanToFen 精确转分
+const itemProductRules: FormItemRule[] = [
+  { required: true, message: '请选择商品', trigger: 'change' },
+]
+const itemQuantityRules: FormItemRule[] = [quantityRule(false, '数量必须大于 0')]
+const itemPriceRules: FormItemRule[] = [priceRule]
+
 // 状态标签语义色（purchase.md 五态：草稿灰/已审核绿/部分入库蓝/已完成深绿/关闭红）
 function statusTagType(status: number) {
   if (status === 0) return 'info'
@@ -52,19 +81,16 @@ function statusTagType(status: number) {
   return 'danger'
 }
 
-// 明细合计（元，实时计算：Σ 数量×单价元）
-function lineAmountYuan(item: { quantity: number; price: number }): number {
-  return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
-}
-function totalYuan(): string {
-  return form.items
-    .reduce((sum, i) => sum + lineAmountYuan(i), 0)
-    .toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// 行金额实时计算（元展示）：元价先精确转分，再经 multiplyCents 求积（与后端 Cents::multiply 同口径 half-up），禁浮点乘法
+function rowAmount(item: { quantity: number; price: number }): string {
+  return formatYuan(multiplyCents(item.quantity, yuanToFen(item.price)))
 }
 
-// 行金额（分→元展示，仅读列）
-function rowAmountFen(item: { product_id?: number; quantity: number; price: number }): string {
-  return formatYuan(Math.round(Number(item.quantity) * Number(item.price) * 100))
+// 明细合计（元展示）：Σ 行金额按分整数累加（无精度损失），统一 formatYuan 分转元展示
+function totalAmount(): string {
+  return formatYuan(
+    form.items.reduce((sum, i) => sum + multiplyCents(i.quantity, yuanToFen(i.price)), 0),
+  )
 }
 
 // 添加明细行
@@ -132,7 +158,8 @@ async function openEdit(row: PurchaseOrderItem) {
       items: d.items.map((i) => ({
         product_id: i.product_id,
         quantity: Number(i.quantity),
-        price: Number(i.price) / 100,
+        // 详情价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+        price: fenToYuan(i.price),
       })),
     })
     dialogVisible.value = true
@@ -142,27 +169,14 @@ async function openEdit(row: PurchaseOrderItem) {
 }
 
 async function save() {
-  if (!form.supplier_id) {
-    ElMessage.warning('请选择供应商')
-    return
-  }
+  // 提交前统一 el-form 校验（D-17）：表头必填 + 明细行必选/范围/精度在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (!form.items.length) {
     ElMessage.warning('请至少添加一条明细')
     return
   }
-  if (form.items.some((i) => !i.product_id)) {
-    ElMessage.warning('请选择商品')
-    return
-  }
-  if (form.items.some((i) => Number(i.quantity) <= 0)) {
-    ElMessage.warning('数量必须大于 0')
-    return
-  }
-  if (form.items.some((i) => Number(i.price) < 0)) {
-    ElMessage.warning('价格不能为负数')
-    return
-  }
-  // 载荷：价格 元 → 分（×100 取整）；数量原样（2 位小数）
+  // 载荷：价格 元 → 分（yuanToFen 字符串精确换算，满足后端整数分校验）；数量原样（2 位小数）
   const payload = {
     supplier_id: form.supplier_id!,
     order_date: form.order_date,
@@ -171,7 +185,7 @@ async function save() {
     items: form.items.map((i) => ({
       product_id: i.product_id!,
       quantity: i.quantity,
-      price: Math.round(Number(i.price) * 100),
+      price: yuanToFen(i.price),
     })),
   }
   saving.value = true
@@ -381,9 +395,9 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form :model="form" label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <div class="form-grid">
-          <el-form-item label="供应商" required>
+          <el-form-item label="供应商" prop="supplier_id" required>
             <el-select
               v-model="form.supplier_id"
               placeholder="选择供应商"
@@ -398,7 +412,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="下单日期" required>
+          <el-form-item label="下单日期" prop="order_date" required>
             <el-date-picker
               v-model="form.order_date"
               type="date"
@@ -424,47 +438,61 @@ onMounted(async () => {
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
             <template #default="{ row, $index }">
-              <el-select
-                v-model="row.product_id"
-                placeholder="选择商品"
-                filterable
-                style="width: 100%"
-                @change="onProductChange(row, $index)"
+              <el-form-item
+                :prop="`items.${$index}.product_id`"
+                :rules="itemProductRules"
+                label-width="0"
               >
-                <el-option
-                  v-for="p in products"
-                  :key="p.id"
-                  :label="`${p.name}（${p.code}）`"
-                  :value="p.id"
-                />
-              </el-select>
+                <el-select
+                  v-model="row.product_id"
+                  placeholder="选择商品"
+                  filterable
+                  style="width: 100%"
+                  @change="onProductChange(row, $index)"
+                >
+                  <el-option
+                    v-for="p in products"
+                    :key="p.id"
+                    :label="`${p.name}（${p.code}）`"
+                    :value="p.id"
+                  />
+                </el-select>
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="数量" width="130">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity"
-                :min="1"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="itemQuantityRules"
+                label-width="0"
+              >
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="1"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="含税单价（元）" width="150">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.price"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item :prop="`items.${$index}.price`" :rules="itemPriceRules" label-width="0">
+                <el-input-number
+                  v-model="row.price"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="金额" width="130" align="right">
             <template #default="{ row }">
-              <span class="amount-cell">¥{{ rowAmountFen(row) }}</span>
+              <span class="amount-cell">¥{{ rowAmount(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="" width="60">
@@ -477,7 +505,7 @@ onMounted(async () => {
           <el-button link type="primary" @click="addRow">+ 添加明细行</el-button>
         </div>
         <div class="total-bar">
-          合计：<span class="total-amount">¥{{ totalYuan() }}</span>
+          合计：<span class="total-amount">¥{{ totalAmount() }}</span>
         </div>
       </el-form>
       <template #footer>
@@ -570,7 +598,7 @@ onMounted(async () => {
 <style scoped>
 /* 采购订单页样式（nexus-factory）：骨架与基础资料页一致，采购特有样式见 pages/purchase.md */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -578,7 +606,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -602,9 +630,9 @@ onMounted(async () => {
 }
 /* 已完成深绿（与已审核绿同族但明度更低，防同态混淆） */
 .tag-done {
-  background: #ecfdf5 !important;
-  color: #047857 !important;
-  border-color: #047857 !important;
+  background: var(--a-50) !important;
+  color: var(--a-700) !important;
+  border-color: var(--a-700) !important;
 }
 .form-grid {
   display: grid;

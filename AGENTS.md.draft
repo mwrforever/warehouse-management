@@ -1,0 +1,269 @@
+# 进销存+生产管理系统 项目宪法
+
+> 项目最高规范：**只存原则、约束与数据契约**。功能实现细节见代码与 `specs/` 设计文档，待办登记见 `TASK.md`，工程变更记录见 `CHANGELOG.md`，本文档不重复。
+> 任何与本文档冲突的代码或设计不得合入主分支。
+> 注释 / 日志 / 测试覆盖 / CI 门禁通用要求见全局 `~/.zcode/AGENTS.md`（§一/§二/§六/§八），编码基线见全局 §三；本项目不重复正文，强制生效。
+> 业务规则（单据状态机、字段口径、报表算法）以 `specs/` 设计文档为准，本文件只管工程技术原则。
+
+**配套文件职责**：
+- `specs/` —— 功能设计（系统设计 + 模块/迭代 spec）：状态机、字段口径、报表算法、工艺路线 DAG 等业务细节的唯一权威来源，宪法不重复；
+- `TASK.md` —— 待办与登记台：调研不可得项（{待调研项}）、待决策项、带截止日期的 TODO 工单；回填/完成后删除对应行；
+- `CHANGELOG.md` —— 工程变更记录：宪法修订与重大工程变更追加记录（日期 · 变更简述 · 原因），先记变更再改正文；
+- `docs/` —— 过程文档：业务流程说明、审查记录、调研报告（agmds-research/）等。
+
+**四段结构**：Part A PHP+Laravel 通用 / Part B 后端分层架构 / Part C 前端 / Part D 进销存+生产管理系统 实际。
+
+**措辞级别**（RFC 2119 口径）：【必须】强制执行、【禁止】绝对不允许——违规 CI 阻断 / CR 直接打回；【应当】默认遵守，偏离须 PR 书面说明理由；【建议】最佳实践不强制。正文未标注级别者视为【必须】；凡可被工具校验的规则一律接入 CI（§D.7），不依赖人工自觉。
+
+---
+
+# Part A — PHP+Laravel 通用规范
+
+## A.1 编码约束
+
+1. 编码基线：UTF-8 无 BOM、LF 行尾、文件末尾保留一个换行、移除尾随空白与未使用 import（细则见全局 §三）。
+2. 语言版本下限 PHP ^8.3；参数/返回/属性一律显式类型声明，禁止省略关键类型；官方推荐写法：构造器属性提升、`#[Override]`、typed class constants。
+3. `declare(strict_types=1)` 非强制：与 Laravel 13 官方骨架一致（团队《PHP 生产开发规范》为全文件【必须】，此处按项目决策记录偏离——逐文件调用点语义风险；切换须评审并记 CHANGELOG.md，见 TASK.md B 组）。一旦启用即全文件生效，禁止部分文件混用造成双重语义。
+4. 一致性优先：新代码匹配同目录既有代码风格、惯用法与注释密度；禁止"顺手优化"无关代码。
+5. 精准修改：每处改动必须能追溯到需求；禁止顺手重构无关代码；历史遗留死代码只指出不擅动（本次改动产生的废弃代码清理见 9）。
+6. 禁止魔法值：状态码、业务码、单据类型等必须使用命名常量（模型 `STATUS_*`、前端 `const enum`）或系统字典，禁止裸数字散落。
+7. 命名：类（含接口/抽象类）`PascalCase`；方法、变量、函数 `camelCase`；常量 `UPPER_SNAKE_CASE`；成员按 const → 属性 → 构造 → 方法排序；model 状态常量 `STATUS_` 开头；业务异常类 `Exception` 结尾；测试方法 snake_case；布尔感知名用 `is_`/`has_`/`can_`（字段）或 `isXxx`/`hasXxx`（方法）；类名后缀表意职责（`XxxController`/`XxxService`/`XxxException`/`XxxResource`），禁止 `CommonService`/`UtilService` 类垃圾桶类（Service 单一业务域）。
+8. 注释写业务意图：核心逻辑（状态变更、金额计算、权限判断、事务、并发、第三方调用）必须有行级中文注释，说明"为什么"而非"做什么"；禁止翻译型/复述型注释（细则见全局 §一）。
+9. 死代码零容忍（针对本次改动）：废弃函数/未用 import/注释掉的代码块/孤儿文件/失效测试同次提交清理；唯一例外是明确标注 `TODO(<feature>)` 预期功能与引入时间的预留接口。
+10. 依赖管理：禁止手改 `vendor/`、`node_modules/`；锁定文件（`composer.lock`、`package-lock.json`）与代码同次提交；升级依赖需全量回归。
+11. 简单优先：用最少的代码解决问题，不做推测性设计、不添加未要求的功能与抽象；评审时自问"资深工程师会觉得这过度复杂吗"（细则见全局 §七.2）。
+12. 【禁止】临时豁免：确需妥协必须创建带截止日期的 TODO 工单并在评审中备案；【建议】新类默认 `final`（Eloquent 模型与显式继承需求除外）。
+
+## A.2 配置管理
+
+1. 配置分层：`config/*.php`（非敏感，版本控制）+ `.env`（敏感，禁止入库）。`env()` 仅允许在 config 文件内使用——`config:cache` 后 `.env` 不再加载、`env()` 返回 null；业务代码一律 `config()`（官方明示）。
+2. `.env.example` 为强制模板：新增/变更环境变量必须同步维护；示例值不得为真实生产凭据（含弱口令明确标注"仅本地开发"）。
+3. 生产安全项：`APP_ENV=production`、`APP_DEBUG=false`（官方原话）、`APP_KEY` 必须由 `php artisan key:generate`（CSPRNG）生成且严格保密——泄露可伪造会话/解密敏感数据。
+4. 生产 PHP 配置：`display_errors=Off`、`log_errors=On`（php.ini-production 官方模板值）；display_errors 仅限本地开发。
+5. 生产部署必须执行 `php artisan optimize`（config:cache / route:cache / event:cache）；本地开发禁止 config:cache。
+6. 【应当】生产依赖定期执行 `composer audit` 漏洞扫描，高危漏洞 48 小时内响应。
+
+## A.3 API 设计
+
+1. 全部业务接口前缀 `/api/v1`（routes/api.php 挂载 api 路由组）；前端经 `web/src/api/` 模块访问，接口契约变更两端同步修改、同次提交。破坏性契约变更（删字段/改类型）必须升版本（`/api/v{n}`），禁止原地改坏既有调用方。
+2. 请求校验集中在 FormRequest（rules + authorize + 白名单）；禁止控制器内散落大段手工校验（单字段轻量判断除外）；校验失败统一 422 + 字段级错误明细（Laravel 默认输出）；批量赋值防护见 B.5.3。
+3. 统一响应信封 `{code, message, data}`：`code=0` 成功；业务失败用非 0 code + 中文 message（HTTP 默认 200，由 code 承载业务结果；仅认证失败等语义明确的场景用 401/403）。输出统一经 `ApiResponse` trait，禁止散装 `response()->json()`。
+4. 异常分层：业务异常（`*Exception`，携带用户可读中文 message）→ 全局 handler（`withExceptions` renderable）转统一 JSON 信封；系统异常向上抛由框架处理并记 error 日志。禁止：控制器内 `catch (Throwable)` 后自拼响应、空 catch、捕获后仅 log 不处理。
+5. 认证：Sanctum token——当前选型为跨源 SPA 直连 API token（官方推荐 first-party SPA 走同域会话模式；维持 token 须在 CHANGELOG.md 中保留理由，迁移会话模式须评审更新本文档）。token 官方默认永不过期、仅撤销失效——建议配置过期时间并定时 `sanctum:prune-expired` 清理；token 能力（abilities）按最小权限声明。
+6. 授权：RBAC 走路由 `permission:xxx` 中间件；控制器/服务内自行判断权限仅限中间件无法表达的动态场景，且必须注释原因。路由文件统一声明中间件与参数约束，禁止在控制器内补做路由级校验。
+7. 限流：API 限流必须显式配置（`RateLimiter::for('api')` + api 路由组挂 `throttle:api`）——官方默认 api 组不含限流，未配置即无保护（当前为缺口，见 TASK.md B 组）。
+8. 控制器职责边界：接收请求 → 触发验证 → 调用 Service（允许查询聚合与编排）→ 返回统一响应；禁止业务判断计算、写库、开事务、循环与复杂计算（超过 3 行的表达式），禁止 try-catch 业务异常（见 4）；【应当】方法体 ≤ 30 行。
+9. **统一返回对象模型**：响应经 `ApiResponse` 信封 + `Http/Resources`/响应 DTO 对象模型输出，禁止控制器直接返回裸数组/集合混装；分页响应结构全项目统一（对齐现有 paginate 输出契约），禁止各接口各搞一套；禁止未经裁剪直接输出模型全部字段。
+
+## A.4 数据库操作
+
+1. 表结构只经迁移（`database/migrations`）演进：禁止手改库结构、禁止在代码中执行 DDL；迁移文件带日期前缀；`change()` 必须显式保留全部修饰符（凡缺失的既有修饰符都会被丢弃，官方明示）；大表（百万行级）结构/数据变更须评审（【应当】）。
+2. 建表规约：每表 `id` 主键 + `created_at`/`updated_at`；表与字段 `comment` 必填；文本长度设上限；金额列 `decimal`（或分单位整数，见 10）。
+3. 命名与索引命名：表 `snake_case` 复数、字段 `snake_case`、外键 `xxx_id`、布尔 `is_`/`has_` 前缀、时间 `xxx_at`；索引普通 `idx_表名_字段`、唯一 `uniq_表名_字段`（多字段按序拼接），禁止无前缀命名。
+4. 查询一律经 Eloquent/查询构造器参数绑定；动态条件禁止字符串拼接 SQL（含 like 需手动绑定 `%keyword%`）；列名/表名禁止由用户输入决定（官方明示）。
+5. 列表接口强制分页（paginate / cursorPaginate），禁止全量 `get()` 后前端分页；大数据集用 cursorPaginate。
+6. 禁止 N+1：关联数据必须预加载（with/load）或聚合查询；`select` 显式列出所需列；join 时列名加表前缀。
+7. 批量校验/扣减场景用 whereIn 预取替代循环单查；批量写用 insert/upsert/chunk，禁止循环内逐条写库。
+8. 索引：业务唯一性字段（含多字段组合，如"单号"）必须建唯一索引；遵循最左前缀；禁止为 `%xxx%` 后导通配模糊查询建索引（仅前缀匹配可用索引）；禁止冗余索引（已有 `idx_a_b` 再建 `idx_a` 需评审）；where 条件字段必须有索引支撑，新查询上线前 EXPLAIN 评审（【应当】）。
+9. 事务与并发：多表写操作必须 `DB::transaction`；悲观锁（lockForUpdate）必须包在事务内（官方要求）；事务内"先锁定 → 再校验 → 后变更"；多资源加锁必须全项目锁序一致（见 B.3.5，MySQL 官方防死锁首要手段）。
+10. 金额与数值（项目铁律）：金额一律分单位整数 + bcmath 运算（bcmul/bcadd/bccomp 等），禁止 float/double 参与金额计算、比较或累加（PHP 官方明示）；bcmath 入参必须十进制字符串，禁止 float 入参（可能被转为科学计数法/区域小数点导致静默错误）；数量 `decimal(12,2)` 字符串比较同样经 bcmath。
+11. 字符集 utf8mb4 + utf8mb4_unicode_ci（MySQL 官方对新建应用的推荐）。
+
+## A.5 基础设施生命周期
+
+缓存 / 队列 / 会话 / 文件存储 / 部署（当前全部 database/log 驱动，Redis 预留未启用）：
+
+1. 缓存：TTL 显式设置；缓存重建（读改写）必须经原子锁（`Cache::lock`，database 驱动官方确认支持）防击穿/重复重建；`Cache::flexible` 为官方 SWR 实现，引入新缓存场景时优先评估；缓存键纳入业务标识（单号/ID）。
+2. 队列：当前系统未用异步队列（database 驱动预留）。引入前置条件：存在客观上必须异步化的任务（官方以耗时文件解析为例的判定口径）、具备失败重试与幂等设计；引入后必须：Supervisor 守护 worker（numprocs/autorestart）、每次部署后重启 worker（长驻进程加载旧代码）、failed_jobs 监控与有界重试策略。
+3. 会话：database 驱动（多实例共享、重启不丢）；生产 HTTPS 下必须 `SESSION_SECURE_COOKIE=true`；`SESSION_LIFETIME` 显式设置。
+4. 文件存储：统一经磁盘抽象（disk）访问，禁止裸路径读写；上传落盘禁止使用客户端原始文件名（官方明示 unsafe）；上传文件做类型、大小、内容校验。
+5. 部署：生产 MySQL 数据目录必须挂卷持久化（`/var/lib/mysql`，容器/实例重建即丢数据）；生产环境检查清单见 A.2.3/A.2.5。
+
+## A.6 注释 / 日志 / 测试（引用全局）
+
+注释规范（§一）、日志分级与格式（§二）、测试覆盖与质量要求（§六）、本地 hook 与 CI 门禁底线（§八）见全局 `~/.zcode/AGENTS.md`，本项目强制生效，不重复正文。项目级落地细则见 Part C.2 与 Part D.7（门禁矩阵、E2E 纪律）。
+
+---
+
+# Part B — 后端分层架构（Laravel 服务端）
+
+## B.1 目录职责边界
+
+| 目录 | 职责边界 |
+|------|----------|
+| `routes/api.php` | URL 定义、认证与权限中间件；禁止业务逻辑 |
+| `Http/Controllers/Api` | 参数解析、查询聚合与编排（join/where/分页）、调用 Service、统一响应；禁止业务计算与写库 |
+| `Http/Requests` | 入参校验与授权判断（rules / authorize / 白名单） |
+| `Services` | 核心业务逻辑、事务边界、状态机流转、金额计算 |
+| `Models` | 数据映射、关系、作用域、状态常量；禁止业务逻辑 |
+| `Http/Resources` | 输出结构裁剪与字段格式化 |
+| `Exceptions` | 业务异常定义（`*Exception`） |
+| `Support` | 无状态工具（`ApiResponse`、`DeletionGuard` 等） |
+
+> 项目不设 Repository 层（与团队通用分层含 Repository/DTO 的取舍理由记于 CHANGELOG.md）：数据访问经 Eloquent 模型与查询构造器，跨表聚合在 Service 编排。
+
+## B.2 层级依赖（强制）
+
+```
+routes/api.php -> Controller -> Service -> Model
+FormRequest -> 控制器（校验提前于业务）
+Controller/Service -> Support / Exceptions / Resources
+```
+
+1. 依赖方向固定，禁止反向与跨层调用（Controller 禁止直接调用 Repository/Model、`DB::`/`Cache::` facade 与写库）。
+2. 写操作必须经 Service 并在 Service 内声明事务边界；控制器禁止 `DB::transaction`。
+3. 校验集中在 FormRequest（§A.3.2）；授权在路由中间件 + FormRequest authorize（§A.3.6）。
+4. Service 之间可互相调用，但不得绕过对方 Service 直接操作其数据表（确需绕过必须注释说明理由）。
+5. 禁止 Service ↔ Model 之间的循环依赖。
+6. 依赖经构造器注入（Laravel 容器自动解析）：禁止 Service 内 `new XxxService()`、`app()`/`make()` 散落手工装配；Service 禁止出现 Request/Response/session()/redirect() 等 HTTP 层符号与视图输出。构造函数中禁止耗时初始化（远程调用、重 IO），延迟加载用懒注入。
+7. **数据传递纪律**：Service 出入参与跨层数据传递必须为强类型业务对象或标量，禁止裸 `array`（dict）混装直接传递；业务对象定义为 `final readonly class` + 构造器属性提升 + 显式类型声明；每个业务对象只服务单一功能场景，即使字段一致也严禁跨功能复用——唯一例外是数据表映射对象（Eloquent Model）按表映射使用。
+
+## B.3 运行时原则（单据生命周期与数据一致性）
+
+1. **状态机流转**：单据（采购/销售/生产/委外/盘点等）状态迁移只经对应 Service；前置校验用 `STATUS_*` 常量 `===` 比较，禁止 `==`；已审核单据禁止直接修改明细。
+2. **不可逆操作守卫**：审核、关闭、冲销、删除必须做状态前置校验；删除配合 `DeletionGuard` 级守卫检查引用，防止删掉被引用数据。
+3. **编号**：业务单据编号统一走 `DocumentSequenceService`（事务内占号防并发撞号），禁止手写"日期+自增"拼接；编号规则（前缀/位数/日期格式）经 `DocumentNumberConfig` + 序列表管理。
+4. **事务三步**：多表写 = 事务内先锁定（lockForUpdate）、再校验、后变更；库存余额与单据回写字段（如 `received_qty`、`issued_qty`）由库存操作方在同一事务内同步更新，禁止散落在不同事务。事务粒度最小化，只包裹必要写集合；【禁止】事务内做 HTTP 外呼、发邮件、MQ/事件发送、sleep；提交后才派发外部通知（`DB::afterCommit`，【应当】）。
+5. **锁序全序**：多资源加锁必须固定全项目一致的顺序（单据头 → 明细 → 库存/余额），违反锁序的评审直接打回（死锁风险，MySQL 官方首要对策）。
+6. **金额与聚合**：金额计算全部经 bcmath 十进制字符串运算（§A.4.10）；报表/成本聚合用 SQL 聚合函数，禁止 PHP 循环累加。
+7. **审计留痕**：接口入口/业务状态变更/DB 写操作记 info（含单号等业务标识）；数据不一致/重试/参数异常记 warn；系统异常记 error 含堆栈（全局 §二）。
+
+## B.4 外部能力网关
+
+无。前端直连后端 `/api/v1`，无独立网关层（本段省略）。
+
+## B.5 横切关注点（原则）
+
+1. **认证与授权**：Sanctum token + RBAC（路由 `permission:xxx`）；新增接口必须声明所需权限，禁止"登录即可访问"的业务接口；admin 为最高权限保留账号，不可删除（RbacSeeder 保留账号）、生产必须强口令；密码一律哈希存储。
+2. **资源归属校验**：操作他人单据/明细（如委外单所属生产单、退料单关联的领料单）前必须校验归属链路，禁止仅凭 ID 信任调用方。
+3. **批量赋值防护**：模型 `$fillable` 白名单 + FormRequest 白名单双层限制；禁止 `$request->all()` 直传模型。
+4. **注入防护**：所有动态条件走参数绑定（§A.4.4）；上传/导入文件校验见 §A.5.4。
+5. **敏感信息不出系统边界**：日志、响应、前端存储均不得出现密码明文、完整 token、他人敏感数据；种子/示例数据不得使用真实弱口令之外的通用口令；不得在文档中记录生产凭据。
+6. **限流**：见 §A.3.7（当前缺口）。
+
+---
+
+# Part C — 前端规范（Vue 3 + TypeScript）
+
+## C.1 工程形态与技术栈
+
+单页应用 `web/`：Vue ^3.5 `<script setup lang="ts">` 组合式 API（禁止新写 Options API）+ TypeScript strict + Vite + Element Plus ^2.14 + Pinia ^4 + Vue Router ^5 + axios 直连 `/api/v1`；ECharts ^6 报表、Vue Flow ^1.48 工艺路线画布、jsbarcode 条码为增补组件。
+
+1. **组件规范**：组件文件 `PascalCase.vue`；组合式函数 `useXxx.ts`；类型/接口 `PascalCase`（接口不加 `I` 前缀）；变量/函数 `camelCase`；常量 `UPPER_SNAKE_CASE`；props/emits 必须显式类型声明；事件名 kebab-case 表达动作（`update:modelValue`、`@row-action`）；v-for 必须 :key（官方 Essential）；组件样式 scoped。
+2. **类型纪律**：禁止 `any`（含隐式 any）；确需逃逸类型时用 `unknown` + 窄化并注释原因；禁止 `@ts-ignore` 绕过类型检查（确需时注释原因并在评审说明）；类型检查由 `vue-tsc` 把关（`npm run type-check`，build 内含）。
+3. **请求纪律**：组件内禁止裸 axios；一切请求经 `api/` 模块（统一 baseURL、token、响应解包、401 处理）；错误统一由 `http.ts` 解包抛错、页面 `ElMessage.error` 展示后端 message；禁止把原始 axios 错误对象直接塞给用户；禁止遗留调试 console.log。
+4. **状态边界**：跨页面共享（登录态、用户信息）才进 Pinia；页面内部状态用 `ref`/`reactive` 就地管理；禁止把 store 当垃圾桶。
+5. **路由**：页面组件全量懒加载（官方推荐）；导航守卫统一做登录态鉴权；禁止 async component 作路由组件。
+6. **样式**：使用设计令牌 `styles/tokens.css`，禁止硬编码色值/间距；全局样式只放 `styles/`；组件样式 scoped。
+7. **列表/表单页模式**：筛选栏（含日期范围选择器）→ `el-table` → 分页 → 弹窗表单；数量/金额展示与回填统一走 `utils/format.ts`（分→元），禁止页面各自实现格式化；表单校验用 el-form rules（必填/类型/范围/精度）；提交按钮 loading 态防重复提交；提交成功统一 ElMessage 反馈并刷新列表。
+8. **接口契约**：前端类型声明与后端响应结构一致（后端 snake_case 字段照此声明）；后端契约变更必须同步更新 `api/` 模块与调用处（§A.3.1）。
+9. **安全**：`VITE_` 前缀变量会打进客户端 bundle——禁止放置任何密钥/凭据（官方明示）；敏感信息不出系统边界见 B.5.5；禁止 v-html 渲染未净化用户输入（Vue 默认转义，勿关闭）。
+10. **组件栈现状**：Element Plus 与 ECharts 当前为全量引入；按需引入（tree-shaking）为官方推荐，属性能优化候选（TASK.md B 组）；Vue Flow 工艺路线画布契约见 D.5 指向的 spec。
+11. **目录职责**：`api/` 按业务领域一个文件（如 purchase.ts、production.ts）统一走 `http.ts` 封装；`views/` 只编排页面、不含可复用逻辑；`components/` 仅放跨页面通用组件；`layouts/` 布局骨架；`stores/` 仅放跨组件共享状态；`utils/` 纯函数工具；`styles/` 设计令牌与全局样式。新建文件先确定归属目录，归属不明时在评审中提出，禁止随意放置。
+
+## C.2 lint / format / 测试门禁
+
+合入主干前全量全绿（命令矩阵见 D.7）：
+
+1. 工具链：ESLint flat config（组合顺序 js → typescript-eslint → eslint-plugin-vue → prettier 收尾，.vue 配 parserOptions.parser）+ Prettier + Stylelint（standard config）；本地钩子 pre-commit 经 lint-staged 对暂存文件自动修复并重新暂存。
+2. **PHPCS 退出码语义**（后端门禁，当前 CI 缺陷）：PHPCS 4 退出码 1=存在可自动修复问题、2=存在不可自动修复问题、3=混合——门禁脚本统一 `-q --ignore-warnings-on-exit` 后以非 0 为失败；禁止按"2=仅 warning 放行"处理（会把不可修复 error 静默放行）。
+3. Vitest 单测（组件逻辑、utils）+ Playwright E2E（`web/e2e`，用例带 TC 编号）：CI 下 workers=1（官方为稳定性推荐）；retries 语义 = 失败重建整个 worker，用例必须独立可重试（数据自建自清）；storageState 登录态文件（`.auth/`）禁入库（含敏感 cookie/token）。
+4. 本地钩子：pre-commit（web lint-staged + server Pint 修复暂存 PHP）；pre-push（web：type-check → lint → lint:css → format:check → test:unit；server：phpstan → phpcs → pint → composer test；E2E 由云端 CI 兜底）。禁止 `--no-verify` 绕过。
+5. 测试质量（细则见全局 §六）：用例覆盖正常/边界/异常三类；命名表达业务意图（`test_审核后禁止删除`、`TC-PRD-xx`），禁止 `test1` 类命名与空断言；断言针对业务结果而非实现细节；功能改动导致失效的旧测试确认后直接删除，新功能测试与实现同次提交（核心 100% / 非核心 ≥ 80%）。
+
+---
+
+# Part D — 进销存+生产管理系统 项目实际
+
+## D.1 系统定位
+
+进销存 + 生产管理系统：覆盖 主数据 → 采购（订单/入库）→ 销售（订单/出库）→ 生产（工单/领退料/委外/完工入库）→ 库存（余额/流水/盘点）→ 报表 → 系统管理（用户/角色权限/字典/编号规则）→ 仪表盘 全链路；前端 Vue 3 SPA 直连后端 `/api/v1`。
+
+## D.2 技术栈选型（强制，版本来自 2026-08-24 composer.json / package.json manifest 实测；精确锁定值以各 lockfile 为准）
+
+| 职责 | 技术 | 版本 |
+|------|------|------|
+| 后端语言 | PHP | ^8.3 |
+| Web 框架 | Laravel（API-only） | laravel/framework ^13.17 |
+| 认证 | Laravel Sanctum | ^4.3 |
+| ORM / 迁移 | Eloquent / Schema Builder | 框架内置 |
+| 数据库 | MySQL（docker-compose 8.4，utf8mb4_unicode_ci） | 8.4 |
+| 前端框架 | Vue 3（组合式 API） | ^3.5.40 |
+| 类型 | TypeScript + vue-tsc | ~6.0.2 / ^3.3.8 |
+| 构建 | Vite | ^8.2.0 |
+| UI 组件库 | Element Plus + @element-plus/icons-vue | ^2.14.4 / ^2.3.2 |
+| 状态 / 路由 | Pinia / Vue Router | ^4.0.2 / ^5.2.0 |
+| HTTP | axios | ^1.19.0 |
+| 图表 / DAG 画布 / 条码 | ECharts / @vue-flow/core / jsbarcode | ^6.1.0 / ^1.48.2 / ^3.12.3 |
+| 后端工具链 | PHPUnit / Pint / PHPCS / PHPStan（larastan） | ^12.5.12 / ^1.27 / ^4.0 / ^3.10 |
+| 前端工具链 | ESLint / Prettier / Stylelint / Vitest / Playwright | ^10.8.1 / ^3.9.6 / ^17.14.1 / ^4.1.10 / ^1.62.1 |
+| 缓存 / 队列 / 会话 | database 驱动（Redis 预留未启用） | — |
+| 环境编排 | docker-compose（仅 MySQL 8.4） | — |
+| 依赖管理 | Composer / npm（锁定文件同次提交） | — |
+
+## D.3 目录结构（双子工程边界）
+
+`server/` 与 `web/` 是独立工程：各自维护依赖清单与锁定文件；禁止跨工程源码级引用（web 禁止 require server 目录）；前端仅经 `web/src/api/` 调用后端 `/api/v1`，接口契约变更两端同步、同次提交。
+
+```
+php-design/
+├── AGENTS.md                  # 本宪法（评审稿为 AGENTS.md.draft，通过后替换）
+├── CHANGELOG.md               # 工程变更记录（头注职责：先记变更再改正文）
+├── TASK.md                    # 待办与登记台（调研不可得/待决策/TODO 工单）
+├── docker-compose.yml         # MySQL 8.4 开发编排（生产另行加固）
+├── docs/                      # 流程说明 / 设计 / bug / 审查记录 / 调研报告（agmds-research/）
+├── specs/                     # 功能设计（系统设计 + 模块 spec + 迭代 spec）
+├── server/                    # Laravel 13 后端（分层见 Part B.1）
+│   ├── app/Http/{Controllers/Api, Requests, Resources}
+│   ├── app/{Services, Models, Exceptions, Support}
+│   ├── routes/api.php
+│   ├── database/{migrations, seeders, factories}
+│   └── tests/{Feature, Unit}
+└── web/                       # Vue 3 SPA（约定见 Part C）
+    ├── src/{api, views, components, layouts, stores, utils, styles, router}
+    ├── tests/                 # Vitest
+    ├── e2e/                   # Playwright（TC 编号，15 份 spec + helpers.ts）
+    └── playwright.config.ts   # 后端 7000 / 前端 4000 双 webServer + storageState
+```
+
+## D.4 数据契约
+
+1. **单据域模型**：主数据（分类/商品含条码/单位/仓库/库位/供应商/客户/工序/字典项/物料清单/工艺路线）、采购（采购订单/采购入库）、销售（销售订单/销售出库）、生产（生产工单与物料/领料单/退料单/操作报工/工序执行/完工入库/委外加工与收货退货）、库存（余额/流水/盘点含明细）、系统（用户/角色/权限/编号规则配置与序列）。
+2. **状态机**：单据状态 `STATUS_*` 常量定义在模型；状态迁移只经 Service（B.3.1）；"单号 + 状态"组合建唯一约束（唯一索引，§A.4.8）。
+3. **金额与数量**：后端分单位整数 + bcmath（§A.4.10）；前端展示与回填统一 `utils/format.ts`。
+4. **数据一致性**：库存余额（InventoryBalance）与单据回写字段由库存操作方在同一事务内同步更新（B.3.4）；历史单据只增不改，确需修正走冲销/红冲单据；盘点经盘点单流转调整。
+5. **审计**：全表 `created_at`/`updated_at`；业务操作日志按全局 §二 记录业务标识。
+
+## D.5 工艺路线 DAG（图模型契约）
+
+工艺路线为有向无环图（DAG）模型：节点/边/物料绑定/环检测校验等属于功能设计，契约以 `specs/2026-08-20-routing-dag-spec.md` 与 `specs/2026-08-20-outsourcing-spec.md` 为准，本文件不重复（文件职责见头注）。
+
+## D.7 永久环境约束 + 门禁矩阵
+
+**永久环境约束**（Windows 开发机，永久构建/编码规则，非待办）：
+
+- Git Bash 不继承 Windows PATH：执行 php/composer 前需 `export PATH="$PATH:/d/code/envs/php/8.5.9:/d/code/envs/composer/2.10.2"`（以本机实际安装路径为准）。
+- PHPStan 命令必须带 `--memory-limit=1G`（本机实测不带上限时 level 5 分析会失败）。
+- vite dev server 默认绑定 IPv6 `::1`，Playwright 探测 127.0.0.1 会超时：显式 `--host 127.0.0.1`（playwright.config.ts 已落地）。
+- E2E 纪律：跑 Playwright 前必须清理残留的 7000/4000 进程（脏库导致用例假失败）；E2E 数据每次 `migrate:fresh --seed` 自建自清，禁止依赖手工数据；浏览器时区锁定 UTC 与后端对齐。
+- 测试与 E2E 用 SQLite（phpunit.xml / playwright webServer 注入），开发与生产用 MySQL 8.4（docker）；phpunit.xml 将 bcrypt rounds 覆盖为 4 加速。
+- 生产部署必读：`APP_ENV=production` + `APP_DEBUG=false` + 强 `APP_KEY` + `ADMIN_PASSWORD` 取消注释（admin 为最高权限保留账号，弱口令即系统后门）。
+
+**门禁矩阵（合入主干前全量全绿，禁止 `--no-verify` 绕过本地钩子）**：
+
+| 工程 | 命令 | 说明 |
+|------|------|------|
+| server | `vendor/bin/pint` | 代码风格（laravel 预设） |
+| server | `vendor/bin/phpcs -q --ignore-warnings-on-exit` | PSR-12，非 0 即失败（C.2.2） |
+| server | `vendor/bin/phpstan analyse --memory-limit=1G` | 静态分析 level 5 |
+| server | `composer test` | PHPUnit 全量 |
+| web | `npm run lint` / `lint:css` / `format:check` | ESLint / Stylelint / Prettier |
+| web | `npm run type-check` | vue-tsc 类型检查 |
+| web | `npm run test:unit` | Vitest 全量 |
+| web | `npm run test:e2e` | Playwright 全量（云端 CI 兜底） |
+
+CI 检出的【必须】/【禁止】级违规自动阻断合入、无人工放行通道；PHPStan 须 0 错误（level 5）。由违反本文件导致的生产事故，复盘必须引用具体条款编号，并评估是否需要补充 CI 规则。
+
+**完成标准（DoD，合入前逐项自检）**：实现符合本宪法全部【强制】条款并与既有代码风格一致；中文注释覆盖类/方法/参数/返回值/异常/关键行（全局 §一）；配套测试已交付且全量通过（核心 100% / 非核心 ≥ 80%），失效旧测试已删除；本次改动产生的废弃代码已清理；上表门禁全绿；接口契约变更时前端已同步；`specs/` 与行为不符之处已更新或在 PR 说明中标注。
+
+**分支纪律**：main 受保护，禁止直接推代码；功能改动建分支（`feat/xxx`、`fix/xxx`）经 PR 评审合入且 PR 门禁全绿；dev 为集成分支（当前 CI 触发矩阵仅覆盖 main 的 push/PR，dev 若走 PR 合入需同步补充 ci.yml 触发）。提交信息 `type(scope): subject`：subject 中文概括业务意图、正文说明为什么；type 限 feat/fix/docs/style/refactor/perf/test/chore/build/ci。PR 至少 1 人 Code Review 通过方可合并。

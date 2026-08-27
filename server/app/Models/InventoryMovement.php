@@ -12,7 +12,7 @@ class InventoryMovement extends Model
     /** 来源类型枚举：采购/销售/生产模块审核单据时复用 */
     public const SOURCE_TYPES = [
         'purchase_inbound', 'sales_outbound', 'pick', 'return',
-        'finished_inbound', 'outsourcing_out', 'outsourcing_in',
+        'finished_inbound', 'outsourcing_out', 'outsourcing_in', 'outsourcing_return',
         'check_in', 'check_out',
     ];
 
@@ -25,6 +25,7 @@ class InventoryMovement extends Model
         'finished_inbound' => '成品入库',
         'outsourcing_out' => '委外发出',
         'outsourcing_in' => '委外回收',
+        'outsourcing_return' => '余料退回',
         'check_in' => '盘盈',
         'check_out' => '盘亏',
     ];

@@ -1,6 +1,6 @@
 // 越权防护 E2E：只读角色（operator）无增删改按钮；直接调 API 被 403 拦截
 import { expect, test } from '@playwright/test'
-import { loginByAPI, loginByUI } from './helpers'
+import { loginByAPI, loginByUI, sessionHeaders } from './helpers'
 
 test.describe('越权防护', () => {
   test('operator 用户页面无新增按钮，越权 API 调用返回 403', async ({ page }) => {
@@ -21,7 +21,7 @@ test.describe('越权防护', () => {
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
 
-    // 2. 登出（清空 token），operator 登录
+    // 2. 登出（作废 admin 会话），operator 登录
     await page.locator('.user-name').click()
     await page.getByText('退出登录').click()
     await loginByUI(page, opName, 'Operator123')
@@ -32,10 +32,9 @@ test.describe('越权防护', () => {
     await expect(page.getByRole('button', { name: /新\s*建/ })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /删\s*除/ })).toHaveCount(0)
 
-    // 4. 越权 API：operator token 直接调用创建用户接口 → 403
-    const token = await page.evaluate(() => localStorage.getItem('token'))
+    // 4. 越权 API：operator 会话直接调用创建用户接口 → 403
     const res = await page.request.post('/api/v1/users', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: await sessionHeaders(page),
       data: {
         name: '越权尝试',
         username: `hack_${Date.now()}`,

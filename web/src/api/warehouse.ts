@@ -6,6 +6,11 @@ export interface WarehouseItem {
   name: string
   code: string
   address: string | null
+  // 四级地区名称（省/市/区县/乡镇街道），旧数据可能为 null
+  province: string | null
+  city: string | null
+  district: string | null
+  town: string | null
   manager: string | null
   status: number
 }
@@ -23,20 +28,32 @@ export const warehouseApi = {
     const { data } = await http.get('/warehouses', { params })
     return data.data as { items: WarehouseItem[]; total: number; page: number; per_page: number }
   },
-  // 新建仓库
+  // 新建仓库（编码由后端自动生成，载荷不传 code）
   async create(payload: {
     name: string
-    code: string
     address?: string
-    manager?: string
+    province?: string | null
+    city?: string | null
+    district?: string | null
+    town?: string | null
+    manager?: string | null
     status?: number
   }) {
     await http.post('/warehouses', payload)
   },
-  // 更新仓库
+  // 更新仓库（编码不可改，载荷不传 code）
   async update(
     id: number,
-    payload: { name: string; code: string; address?: string; manager?: string; status?: number },
+    payload: {
+      name: string
+      address?: string
+      province?: string | null
+      city?: string | null
+      district?: string | null
+      town?: string | null
+      manager?: string | null
+      status?: number
+    },
   ) {
     await http.put(`/warehouses/${id}`, payload)
   },

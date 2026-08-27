@@ -15,6 +15,8 @@ export interface BomRow {
   code: string
   product_id: number
   product_name: string | null
+  // 商品类型中文标签（成品/半成品，来自商品档案 type 映射；BOM 主商品放宽后列表按此展示类型列）
+  type_label: string | null
   version: string
   quantity: number
   status: number

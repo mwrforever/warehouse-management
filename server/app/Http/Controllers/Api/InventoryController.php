@@ -64,7 +64,15 @@ class InventoryController extends Controller
             ->join('locations', 'locations.id', '=', 'inventory_movements.location_id')
             ->leftJoin('users', 'users.id', '=', 'inventory_movements.operator_id')
             ->select(
-                'inventory_movements.*',
+                // 显式列出列表所需主表列（与下方 map 闭包字段一一对应），避免 select 通配拉取未列字段
+                'inventory_movements.id',
+                'inventory_movements.direction',
+                'inventory_movements.quantity',
+                'inventory_movements.balance_after',
+                'inventory_movements.source_type',
+                'inventory_movements.source_id',
+                'inventory_movements.source_no',
+                'inventory_movements.created_at',
                 'products.name as product_name',
                 'products.code as product_code',
                 'warehouses.name as warehouse_name',
@@ -229,13 +237,16 @@ class InventoryController extends Controller
     }
 
     // 预警级别：min>0 且 quantity<min → 1；max>0 且 quantity>max → 2；否则 0
+    // 比较走 bccomp（D-3 铁律：禁浮点参与数量比较；余额/上下限均 decimal cast 两位小数字符串）
     private function alertLevel($r): int
     {
-        $qty = (float) $r->quantity;
-        if ((float) $r->safety_min > 0 && $qty < (float) $r->safety_min) {
+        $qty = (string) $r->quantity;
+        $min = (string) $r->safety_min;
+        $max = (string) $r->safety_max;
+        if (bccomp($min, '0', 2) > 0 && bccomp($qty, $min, 2) < 0) {
             return 1;
         }
-        if ((float) $r->safety_max > 0 && $qty > (float) $r->safety_max) {
+        if (bccomp($max, '0', 2) > 0 && bccomp($qty, $max, 2) > 0) {
             return 2;
         }
 

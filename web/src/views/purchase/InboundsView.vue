@@ -1,8 +1,14 @@
 <!-- 采购入库单页：筛选列表 + 双入口新建弹窗（从订单生成/独立新建）+ 详情弹窗 + 审核（加库存） -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  type FormInstance,
+  type FormItemRule,
+  type FormRules,
+} from 'element-plus'
 import {
   purchaseApi,
   type AvailableOrder,
@@ -14,10 +20,13 @@ import { supplierApi, type SupplierItem } from '../../api/supplier'
 import { productApi } from '../../api/product'
 import ListFilterBar from '../../components/ListFilterBar.vue'
 import ScanInboundForm, { type ScanItem } from '../../components/ScanInboundForm.vue'
+import { calcMaxQuantity } from '../../composables/useScanInbound'
 import { useListQuery } from '../../composables/useListQuery'
+import { useRemoteOptions } from '../../composables/useRemoteOptions'
 import { warehouseApi, type LocationItem, type WarehouseItem } from '../../api/warehouse'
 import { useAuthStore } from '../../stores/auth'
-import { formatYuan } from '../../utils/format'
+import { fenToYuan, formatYuan, multiplyCents, yuanToFen } from '../../utils/format'
+import { priceRule, quantityRule } from '../../utils/formRules'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -26,8 +35,44 @@ const saving = ref(false)
 const suppliers = ref<SupplierItem[]>([])
 const warehouses = ref<WarehouseItem[]>([])
 const locations = ref<LocationItem[]>([])
-const availableOrders = ref<AvailableOrder[]>([])
-const products = ref<{ id: number; name: string; code: string; barcode: string | null }[]>([])
+
+// 新建/编辑弹窗表单引用：保存前统一触发 el-form 校验（D-17）
+const formRef = ref<FormInstance>()
+
+// 商品下拉选项（BF-3 remote）：远程搜索结果为完整档案；编辑/扫码回显 pin 项仅保证 id/名称/编码展示
+interface ProductOption {
+  id: number
+  name: string
+  code: string
+}
+
+// 来源订单下拉（BF-3/B-106）：可入库订单超 100 条后以单号关键字服务端搜索，初载保留前 100 条
+const {
+  options: availableOrders,
+  loading: availableOrdersLoading,
+  load: loadAvailableOrders,
+  search: searchAvailableOrders,
+  pin: pinAvailableOrder,
+  reset: resetAvailableOrders,
+} = useRemoteOptions<AvailableOrder>({
+  fetch: (kw) => purchaseApi.availableOrders({ keyword: kw, per_page: 100 }).then((r) => r.items),
+  keyOf: (o) => o.id,
+  onError: (e) => ElMessage.error(e.message),
+})
+
+// 商品下拉（BF-3）：商品档案超 100 条后以编码/名称/条码关键字服务端搜索，初载保留前 100 条
+const {
+  options: products,
+  loading: productsLoading,
+  load: loadProducts,
+  search: searchProducts,
+  pin: pinProduct,
+  reset: resetProducts,
+} = useRemoteOptions<ProductOption>({
+  fetch: (kw) => productApi.list({ page: 1, per_page: 100, keyword: kw }).then((r) => r.items),
+  keyOf: (p) => p.id,
+  onError: (e) => ElMessage.error(e.message),
+})
 
 // 列表查询状态（统一组合式：防抖加载/查询/重置/刷新，请求序号守卫并发）
 const { query, list, total, loading, load, search, reset, refresh } = useListQuery({
@@ -56,26 +101,41 @@ const form = reactive({
   }[],
 })
 
+// 表单校验规则（D-17）：表头必填字段（供应商/仓库/库位；「来源订单」为模式专属入口，
+// 其必选校验保留在保存侧手动核对）；明细行字段由行内 :rules 承载（见下方行级规则）
+const rules: FormRules = {
+  supplier_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  warehouse_id: [{ required: true, message: '请选择仓库', trigger: 'change' }],
+  location_id: [{ required: true, message: '请选择库位', trigger: 'change' }],
+}
+// 明细行校验：商品必选；数量按模式分置——从订单生成允许 0（0 = 本次不收货，提交前剔除）
+// 且剩余量可为小数，独立建单必须 > 0（防空数量单据）；单价（元口径）≥ 0 且最多 2 位小数
+const itemProductRules: FormItemRule[] = [
+  { required: true, message: '请选择商品', trigger: 'change' },
+]
+const fromOrderQuantityRules: FormItemRule[] = [quantityRule(true, '数量不能小于 0')]
+const standaloneQuantityRules: FormItemRule[] = [quantityRule(false, '数量必须大于 0')]
+const itemPriceRules: FormItemRule[] = [priceRule]
+
+// 订单行剩余量映射（product_id → remaining_qty）：从订单生成时记录，供扫码数量上限计算（BUG-03）；
+// 独立建单与编辑草稿（详情接口无剩余量字段）保持空映射 = 不设上限，保存时后端 1308 兜底
+const orderRemaining = ref(new Map<number, number>())
+
 // 状态标签语义色（purchase.md：草稿灰/已审核绿）
 function statusTagType(status: number) {
   return status === 0 ? 'info' : 'success'
 }
 
-// 明细行金额（元，实时计算：数量×单价，保留 2 位小数）
-function lineAmountYuan(item: { quantity: number; price: number }): number {
-  return Number((Number(item.quantity) * Number(item.price)).toFixed(2))
+// 行金额实时计算（元展示）：元价先精确转分，再经 multiplyCents 求积（与后端 Cents::multiply 同口径 half-up），禁浮点乘法
+function rowAmount(item: { quantity: number; price: number }): string {
+  return formatYuan(multiplyCents(item.quantity, yuanToFen(item.price)))
 }
 
-// 明细合计（元，实时计算）
-function totalYuan(): string {
-  return form.items
-    .reduce((sum, i) => sum + lineAmountYuan(i), 0)
-    .toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
-// 行金额（分→元展示，仅读列）
-function rowAmountFen(item: { quantity: number; price: number }): string {
-  return formatYuan(Math.round(Number(item.quantity) * Number(item.price) * 100))
+// 明细合计（元展示）：Σ 行金额按分整数累加（无精度损失），统一 formatYuan 分转元展示
+function totalAmount(): string {
+  return formatYuan(
+    form.items.reduce((sum, i) => sum + multiplyCents(i.quantity, yuanToFen(i.price)), 0),
+  )
 }
 
 // 从订单生成：选订单 → 预填供应商+明细（剩余量）
@@ -84,10 +144,13 @@ async function onOrderChange(orderId: number | undefined) {
   try {
     const data = await purchaseApi.fromOrder(orderId)
     form.supplier_id = data.supplier_id
+    // 记录订单行剩余量，扫码弹窗据此限制累计数量不超剩余量（BUG-03）
+    orderRemaining.value = new Map(data.items.map((i) => [i.product_id, Number(i.remaining_qty)]))
     form.items = data.items.map((i: FromOrderItem) => ({
       product_id: i.product_id,
       quantity: Number(i.remaining_qty),
-      price: Number(i.price) / 100,
+      // 订单价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+      price: fenToYuan(i.price),
       order_item_id: i.order_item_id,
     }))
   } catch (e) {
@@ -96,14 +159,19 @@ async function onOrderChange(orderId: number | undefined) {
   }
 }
 
-// 仓库切换 → 联动库位下拉
+// 仓库切换 → 联动库位下拉（序号令牌防响应乱序：快速切换 A→B 时 A 的迟到响应不得覆盖 B 的库位）
+let warehouseSeq = 0
 async function onWarehouseChange(whId: number | undefined) {
+  const session = ++warehouseSeq
   form.location_id = undefined
   locations.value = []
   if (!whId) return
   try {
-    locations.value = (await warehouseApi.locations(whId)).items
+    const data = await warehouseApi.locations(whId)
+    if (session !== warehouseSeq) return
+    locations.value = data.items
   } catch (e) {
+    if (session !== warehouseSeq) return
     ElMessage.error((e as Error).message)
   }
 }
@@ -129,10 +197,22 @@ const scanExcludedIds = computed(() =>
   form.items.map((i) => i.product_id).filter((x): x is number => x != null),
 )
 
+// 扫码数量上限（BUG-03，spec §4.4 由宿主页传入）：订单生成场景 = 订单行剩余量 − 表单该商品已填数量
+// （即本次还可扫入的量），弹窗内累计不超此值则关窗合并后必不超剩余量；
+// 表单已超剩余量时钳制为 0（本次不可再扫入）而非负值；无映射商品（独立建单/订单外商品）返回 Infinity 维持原无上限行为
+function scanMaxQuantity(it: ScanItem): number {
+  return calcMaxQuantity(
+    orderRemaining.value.get(it.product_id),
+    form.items.find((i) => i.product_id === it.product_id)?.quantity ?? 0,
+  )
+}
+
 // 扫码弹窗关闭：扫描行按商品合并进明细（同商品数量相加；累加关时弹窗内已拦重复，不会撞已有行；
-// 扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+// 订单场景超量已在弹窗内按剩余量拦截；扫码新增行不带 order_item_id，仅从订单生成的行保留订单关联）
+// 扫到的商品并入商品下拉（pin）：扫码结果可能不在下拉前 100 条内，不 pin 则明细行只显示裸 id
 function onScanItems(items: ScanItem[]) {
   for (const it of items) {
+    pinProduct({ id: it.product_id, name: it.name, code: it.code })
     const existing = form.items.find((i) => i.product_id === it.product_id)
     if (existing) {
       existing.quantity = Number((existing.quantity + it.quantity).toFixed(2))
@@ -147,6 +227,7 @@ function openCreate(m: 'from-order' | 'standalone') {
   mode.value = m
   editingId.value = null
   fromOrderId.value = undefined
+  orderRemaining.value = new Map() // 清空上次订单的剩余量映射，选新订单时重新记录
   Object.assign(form, {
     supplier_id: undefined,
     warehouse_id: undefined,
@@ -167,6 +248,17 @@ async function openEdit(row: PurchaseInboundItem) {
     mode.value = d.order_id ? 'from-order' : 'standalone'
     editingId.value = row.id
     fromOrderId.value = d.order_id ?? undefined
+    // 来源订单回显 pin：草稿关联的订单可能不在下拉前 100 条内，不 pin 则下拉只显示裸 id；
+    // 草稿供应商即来源订单供应商（从订单生成预填），借其名称拼回显 label
+    if (d.order_id) {
+      pinAvailableOrder({
+        id: d.order_id,
+        no: d.order_no ?? '',
+        supplier_name: d.supplier_name,
+        order_date: '',
+      })
+    }
+    orderRemaining.value = new Map() // 详情接口无剩余量字段：扫码不设上限，保存时后端 1308 兜底
     Object.assign(form, {
       supplier_id: d.supplier_id,
       warehouse_id: d.warehouse_id,
@@ -175,10 +267,15 @@ async function openEdit(row: PurchaseInboundItem) {
       items: d.items.map((i) => ({
         product_id: i.product_id,
         quantity: Number(i.quantity),
-        price: Number(i.price) / 100,
+        // 详情价（整数分）→ 元回填输入框：fenToYuan 字符串拆分精确换算，防 100 倍错位与浮点尾差
+        price: fenToYuan(i.price),
         order_item_id: i.order_item_id ?? undefined,
       })),
     })
+    // 明细商品回显 pin：历史商品可能不在下拉前 100 条内，保证明细行显示名称而非裸 id
+    for (const i of d.items) {
+      pinProduct({ id: i.product_id, name: i.product_name, code: i.product_code })
+    }
     locations.value = (await warehouseApi.locations(d.warehouse_id)).items
     dialogVisible.value = true
   } catch (e) {
@@ -186,44 +283,40 @@ async function openEdit(row: PurchaseInboundItem) {
   }
 }
 
+// 弹窗开关边界（BF-3 remote 会话）：打开初载下拉前 100 条，关闭清空选项与 pin 集并作废在途，
+// 防止上一张单据的回显商品/订单串入下一张新单的下拉
+watch(dialogVisible, (open) => {
+  if (open) {
+    loadAvailableOrders()
+    loadProducts()
+  } else {
+    resetAvailableOrders()
+    resetProducts()
+  }
+})
+
 // 保存（载荷：价格 元→分；从订单生成模式带 order_id 与 order_item_id；编辑走更新接口）
 async function save() {
+  // 提交前统一 el-form 校验（D-17）：表头必填 + 明细行必选/范围/精度在前端拦截，避免发出可预期的 422 请求
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
   if (mode.value === 'from-order' && !fromOrderId.value) {
     ElMessage.warning('请选择来源订单')
-    return
-  }
-  if (!form.supplier_id) {
-    ElMessage.warning('请选择供应商')
-    return
-  }
-  if (!form.warehouse_id || !form.location_id) {
-    ElMessage.warning('仓库与库位不能为空')
     return
   }
   if (!form.items.length) {
     ElMessage.warning('请至少添加一条明细')
     return
   }
-  if (form.items.some((i) => !i.product_id)) {
-    ElMessage.warning('请选择商品')
-    return
-  }
-  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤），负数量直接拦截（与后端 1302 同口径）；
-  // 手动新增：仍要求 > 0（防空数量单据）
+  // 从订单生成：数量 0 = 本次不收货（提交前剔除过滤，行内规则已允许 0 但拦截负数）；
+  // 手动新增的数量下限已在行内规则拦截
   let keepRows = form.items
   if (mode.value === 'from-order') {
-    if (form.items.some((i) => Number(i.quantity) < 0)) {
-      ElMessage.warning('数量不能小于 0')
-      return
-    }
     keepRows = form.items.filter((i) => Number(i.quantity) > 0)
     if (!keepRows.length) {
       ElMessage.warning('请至少录入一个收货数量大于 0 的商品')
       return
     }
-  } else if (form.items.some((i) => Number(i.quantity) <= 0)) {
-    ElMessage.warning('数量必须大于 0')
-    return
   }
   const payload = {
     supplier_id: form.supplier_id!,
@@ -234,7 +327,8 @@ async function save() {
     items: keepRows.map((i) => ({
       product_id: i.product_id!,
       quantity: i.quantity,
-      price: Math.round(Number(i.price) * 100),
+      // 价格 元 → 分：yuanToFen 字符串精确换算（满足后端整数分校验），禁 Math.round(元×100) 浮点路径
+      price: yuanToFen(i.price),
       ...(i.order_item_id ? { order_item_id: i.order_item_id } : {}),
     })),
   }
@@ -305,11 +399,17 @@ async function openDetail(row: PurchaseInboundItem) {
 
 onMounted(async () => {
   search()
+  // 订单/商品下拉初载（BF-3 remote 模式保留前 100 条）：失败由各自 onError 提示，不阻塞主列表
+  void loadAvailableOrders()
+  void loadProducts()
   try {
-    suppliers.value = (await supplierApi.list({ per_page: 100, status: 1 })).items
-    warehouses.value = (await warehouseApi.list({ per_page: 100, status: 1 })).items
-    availableOrders.value = (await purchaseApi.availableOrders()).items
-    products.value = (await productApi.list({ per_page: 100 })).items
+    // 供应商/仓库两路下拉互不依赖，并行加载缩短首屏等待
+    const [sup, wh] = await Promise.all([
+      supplierApi.list({ per_page: 100, status: 1 }),
+      warehouseApi.list({ per_page: 100, status: 1 }),
+    ])
+    suppliers.value = sup.items
+    warehouses.value = wh.items
   } catch {
     // 下拉加载失败不阻塞主流程
   }
@@ -431,13 +531,16 @@ onMounted(async () => {
       width="900px"
       :close-on-click-modal="false"
     >
-      <el-form label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <div class="form-grid">
           <el-form-item v-if="mode === 'from-order'" label="来源订单" required>
             <el-select
               v-model="fromOrderId"
-              placeholder="选择已审核/部分入库订单"
+              placeholder="输入单号搜索已审核/部分入库订单"
               filterable
+              remote
+              :remote-method="searchAvailableOrders"
+              :loading="availableOrdersLoading"
               style="width: 100%"
               @change="onOrderChange"
             >
@@ -449,7 +552,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="供应商" required>
+          <el-form-item label="供应商" prop="supplier_id" required>
             <el-select
               v-model="form.supplier_id"
               placeholder="选择供应商"
@@ -465,7 +568,7 @@ onMounted(async () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="仓库" required>
+          <el-form-item label="仓库" prop="warehouse_id" required>
             <el-select
               v-model="form.warehouse_id"
               placeholder="选择仓库"
@@ -475,7 +578,7 @@ onMounted(async () => {
               <el-option v-for="w in warehouses" :key="w.id" :label="w.name" :value="w.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="库位" required>
+          <el-form-item label="库位" prop="location_id" required>
             <el-select v-model="form.location_id" placeholder="选择库位" style="width: 100%">
               <el-option v-for="l in locations" :key="l.id" :label="l.name" :value="l.id" />
             </el-select>
@@ -490,51 +593,68 @@ onMounted(async () => {
         <el-table :data="form.items" size="small" max-height="360" class="data-table">
           <el-table-column label="商品" min-width="220">
             <template #default="{ row, $index }">
-              <el-select
-                v-model="row.product_id"
-                placeholder="选择商品"
-                filterable
-                style="width: 100%"
-                :disabled="mode === 'from-order'"
-                @change="onProductChange(row, $index)"
+              <el-form-item
+                :prop="`items.${$index}.product_id`"
+                :rules="itemProductRules"
+                label-width="0"
               >
-                <el-option
-                  v-for="p in products"
-                  :key="p.id"
-                  :label="`${p.name}（${p.code}）`"
-                  :value="p.id"
-                />
-              </el-select>
+                <el-select
+                  v-model="row.product_id"
+                  placeholder="搜索商品编码/名称"
+                  filterable
+                  remote
+                  :remote-method="searchProducts"
+                  :loading="productsLoading"
+                  style="width: 100%"
+                  :disabled="mode === 'from-order'"
+                  @change="onProductChange(row, $index)"
+                >
+                  <el-option
+                    v-for="p in products"
+                    :key="p.id"
+                    :label="`${p.name}（${p.code}）`"
+                    :value="p.id"
+                  />
+                </el-select>
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="数量" width="140">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity"
-                :min="mode === 'from-order' ? 0 : 1"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
-              <div v-if="mode === 'from-order' && Number(row.quantity) === 0" class="skip-hint">
-                本次不收货
-              </div>
+            <template #default="{ row, $index }">
+              <el-form-item
+                :prop="`items.${$index}.quantity`"
+                :rules="mode === 'from-order' ? fromOrderQuantityRules : standaloneQuantityRules"
+                label-width="0"
+              >
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="mode === 'from-order' ? 0 : 1"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+                <div v-if="mode === 'from-order' && Number(row.quantity) === 0" class="skip-hint">
+                  本次不收货
+                </div>
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="含税单价（元）" width="150">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="row.price"
-                :min="0"
-                :precision="2"
-                :controls="false"
-                style="width: 100%"
-              />
+            <template #default="{ row, $index }">
+              <el-form-item :prop="`items.${$index}.price`" :rules="itemPriceRules" label-width="0">
+                <el-input-number
+                  v-model="row.price"
+                  :min="0"
+                  :precision="2"
+                  :controls="false"
+                  style="width: 100%"
+                />
+              </el-form-item>
             </template>
           </el-table-column>
           <el-table-column label="金额" width="130" align="right">
             <template #default="{ row }">
-              <span class="amount-cell">¥{{ rowAmountFen(row) }}</span>
+              <span class="amount-cell">¥{{ rowAmount(row) }}</span>
             </template>
           </el-table-column>
           <el-table-column v-if="mode === 'standalone'" label="" width="60">
@@ -547,7 +667,7 @@ onMounted(async () => {
           <el-button link type="primary" @click="addRow">+ 添加明细行</el-button>
         </div>
         <div class="total-bar">
-          合计：<span class="total-amount">¥{{ totalYuan() }}</span>
+          合计：<span class="total-amount">¥{{ totalAmount() }}</span>
         </div>
       </el-form>
       <template #footer>
@@ -555,11 +675,12 @@ onMounted(async () => {
         <el-button class="btn-primary" :loading="saving" @click="save">保 存</el-button>
       </template>
     </el-dialog>
-    <!-- 扫码录入独立弹窗（spec §4.4：扫描行关闭时回带合并；独立/从订单模式均可用） -->
+    <!-- 扫码录入独立弹窗（spec §4.4：扫描行关闭时回带合并；订单场景上限=行剩余量−已填量） -->
     <ScanInboundForm
       v-model:open="scanVisible"
       title="扫码录入明细"
       :excluded-ids="scanExcludedIds"
+      :max-quantity="scanMaxQuantity"
       @add-items="onScanItems"
     />
     <!-- 详情弹窗 -->
@@ -615,7 +736,7 @@ onMounted(async () => {
 <style scoped>
 /* 采购入库单页样式（nexus-factory）：与订单页同骨架；独立入库「来源订单」列灰字占位 */
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
   padding: var(--space-2xl);
@@ -623,7 +744,7 @@ onMounted(async () => {
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: var(--surface);
 }
 .btn-primary:hover {
   opacity: 0.9;
@@ -645,12 +766,12 @@ onMounted(async () => {
   font-weight: 600;
 }
 .muted {
-  color: var(--color-muted-text, #94a3b8);
+  color: var(--color-muted-text, var(--p-400));
 }
 .skip-hint {
   margin-top: 2px;
   font-size: 12px;
-  color: var(--color-muted-text, #94a3b8);
+  color: var(--color-muted-text, var(--p-400));
 }
 .form-grid {
   display: grid;

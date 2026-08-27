@@ -123,6 +123,19 @@ class DictionaryTest extends TestCase
             ->assertJsonPath('code', 1008);
     }
 
+    public function test_get_by_code_rejects_user_without_dictionary_list_permission(): void
+    {
+        // 异常路径（D-11）：无 dictionary.list 权限的角色访问按编码取值 → 403（与 /dictionaries 列表同口径）
+        $role = Role::create(['name' => '仅登录', 'code' => 'viewer']);
+        $u = User::create(['name' => '访客', 'username' => 'viewer', 'password' => 'viewer123', 'status' => 1]);
+        $u->roles()->sync([$role->id]);
+        $token = $u->createToken('api')->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/dictionaries/code/unit')
+            ->assertStatus(403)
+            ->assertJsonPath('code', 403)
+            ->assertJsonPath('message', '无权限操作');
+    }
+
     public function test_delete_dictionary_cascades_items(): void
     {
         // 正常路径：删除字典级联删除字典项

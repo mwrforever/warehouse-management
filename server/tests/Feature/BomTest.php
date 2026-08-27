@@ -25,11 +25,15 @@ class BomTest extends TestCase
 
     private Category $finCat;
 
+    private Category $semiCat;
+
     private Unit $unit;
 
     private Product $material;
 
     private Product $finished;
+
+    private Product $semiFinished;
 
     protected function setUp(): void
     {
@@ -42,6 +46,7 @@ class BomTest extends TestCase
         $this->token = $u->createToken('api')->plainTextToken;
         $this->rawCat = Category::create(['name' => '原材料', 'parent_id' => 0]);
         $this->finCat = Category::create(['name' => '成品', 'parent_id' => 0]);
+        $this->semiCat = Category::create(['name' => '半成品', 'parent_id' => 0]);
         $this->unit = Unit::create(['name' => '个', 'code' => 'pc']);
         $this->material = Product::create([
             'name' => '铝材',
@@ -56,6 +61,15 @@ class BomTest extends TestCase
             'code' => 'FIN-002',
             'type' => 'finished',
             'category_id' => $this->finCat->id,
+            'unit_id' => $this->unit->id,
+            'status' => 1,
+        ]);
+        // 半成品：BOM 主商品放宽后与其共用同一维护口径（type=semi_finished）
+        $this->semiFinished = Product::create([
+            'name' => '半成品A',
+            'code' => 'SEMI-001',
+            'type' => 'semi_finished',
+            'category_id' => $this->semiCat->id,
             'unit_id' => $this->unit->id,
             'status' => 1,
         ]);
@@ -75,22 +89,71 @@ class BomTest extends TestCase
         $this->assertDatabaseHas('bom_headers', ['code' => $code, 'status' => 1]);
     }
 
-    public function test_store_product_not_finished_fails_with_1118(): void
+    public function test_store_product_raw_material_fails_with_1118(): void
     {
-        // 异常路径：BOM 关联商品不是成品 1118
+        // 异常路径：BOM 关联商品是原材料（仅成品/半成品可维护 BOM）1118（信封契约：code/message/data 统一结构，D-12）
         $this->withToken($this->token)->postJson('/api/v1/boms', [
             'product_id' => $this->material->id, 'version' => 'v1', 'quantity' => 1,
             'items' => [['material_id' => $this->material->id, 'quantity' => 1, 'unit_id' => $this->unit->id]],
-        ])->assertJsonPath('code', 1118);
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1118)
+            ->assertJsonPath('message', 'BOM 关联商品必须是成品或半成品')
+            ->assertJsonPath('data', null);
+    }
+
+    public function test_store_semi_finished_product_succeeds(): void
+    {
+        // 正常路径：主商品为半成品时 BOM 创建放行（1118 放宽为成品/半成品，面向中间产物维护物料清单）
+        $res = $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->semiFinished->id, 'version' => 'v1', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ]);
+        $res->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('bom_headers', ['code' => $res->json('data.code'), 'product_id' => $this->semiFinished->id, 'status' => 1]);
+        $this->assertDatabaseCount('bom_items', 1);
+    }
+
+    public function test_store_semi_finished_duplicate_enabled_version_fails_with_1120(): void
+    {
+        // 异常路径：半成品与成品共用同一「同商品启用版本唯一」口径——再建启用版被 1120 拦截
+        $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->semiFinished->id, 'version' => 'v1', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->semiFinished->id, 'version' => 'v2', 'quantity' => 1, 'status' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 3, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 1120);
+    }
+
+    public function test_store_finished_and_semi_finished_bom_coexist(): void
+    {
+        // 正常路径：成品与半成品各自维护启用版 BOM，互不干扰（启用唯一按 product_id 独立判定）
+        $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->finished->id, 'version' => 'v1', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0);
+        $this->withToken($this->token)->postJson('/api/v1/boms', [
+            'product_id' => $this->semiFinished->id, 'version' => 'v1', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 1, 'unit_id' => $this->unit->id]],
+        ])->assertJsonPath('code', 0);
+        $this->assertSame(2, BomHeader::where('status', 1)->count());
+        $this->assertDatabaseHas('bom_headers', ['product_id' => $this->finished->id, 'status' => 1]);
+        $this->assertDatabaseHas('bom_headers', ['product_id' => $this->semiFinished->id, 'status' => 1]);
     }
 
     public function test_store_material_is_finished_fails_with_1119(): void
     {
-        // 异常路径：明细物料是成品（不允许成品嵌套）1119
+        // 异常路径：明细物料是成品（不允许成品嵌套）1119（信封契约同 1118，D-12）
         $this->withToken($this->token)->postJson('/api/v1/boms', [
             'product_id' => $this->finished->id, 'version' => 'v1', 'quantity' => 1,
             'items' => [['material_id' => $this->finished->id, 'quantity' => 1, 'unit_id' => $this->unit->id]],
-        ])->assertJsonPath('code', 1119);
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1119)
+            ->assertJsonPath('message', 'BOM 明细物料必须是原料或半成品')
+            ->assertJsonPath('data', null);
     }
 
     public function test_store_duplicate_enabled_version_fails_with_1120(): void
@@ -141,14 +204,39 @@ class BomTest extends TestCase
 
     public function test_store_duplicate_material_rows_fails_with_1123(): void
     {
-        // 异常路径：明细存在重复物料 1123
+        // 异常路径：明细存在重复物料 1123（信封契约同 1118，D-12）
         $this->withToken($this->token)->postJson('/api/v1/boms', [
             'product_id' => $this->finished->id, 'version' => 'v1', 'quantity' => 1,
             'items' => [
                 ['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id],
                 ['material_id' => $this->material->id, 'quantity' => 1, 'unit_id' => $this->unit->id],
             ],
-        ])->assertJsonPath('code', 1123);
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1123)
+            ->assertJsonPath('message', 'BOM 明细存在重复物料')
+            ->assertJsonPath('data', null);
+    }
+
+    public function test_update_product_not_finished_fails_with_1118(): void
+    {
+        // 异常路径（D-12）：update 路径同样走 validateBom 三处业务校验——
+        // 散装响应改统一 fail 后，控制器早退返回信封（锁 update 调用链不被重构破坏）
+        $bom = BomHeader::create([
+            'code' => 'BOM20260812-002', 'product_id' => $this->finished->id,
+            'version' => 'v1', 'quantity' => 1, 'status' => 0,
+        ]);
+        $bom->items()->create(['material_id' => $this->material->id, 'quantity' => 2, 'unit_id' => $this->unit->id]);
+        $this->withToken($this->token)->putJson("/api/v1/boms/{$bom->id}", [
+            'product_id' => $this->material->id, 'version' => 'v2', 'quantity' => 1,
+            'items' => [['material_id' => $this->material->id, 'quantity' => 1, 'unit_id' => $this->unit->id]],
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('code', 1118)
+            ->assertJsonPath('message', 'BOM 关联商品必须是成品或半成品')
+            ->assertJsonPath('data', null);
+        // 校验失败不落库：单头版本仍为 v1（未进入更新事务）
+        $this->assertSame('v1', $bom->refresh()->version);
     }
 
     public function test_items_returns_material_and_unit_names(): void

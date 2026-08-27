@@ -6,8 +6,10 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use Database\Seeders\RbacSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use RuntimeException;
 use Tests\TestCase;
 
 class RbacSeederTest extends TestCase
@@ -22,6 +24,22 @@ class RbacSeederTest extends TestCase
         $admin = User::where('username', 'admin')->first();
         $this->assertNotNull($admin);
         $this->assertTrue(Hash::check('Strong@Pass2026', $admin->password));
+    }
+
+    public function test_first_run_without_env_password_throws_and_creates_no_admin(): void
+    {
+        // 异常路径（D-19a 回归）：首次建号且未注入 ADMIN_PASSWORD → 种子终止并中文提示设置方法，
+        // 不得回退 admin123 通用口令（AGENTS.md §8.5 种子禁止通用口令兜底）
+        config(['app.admin_password' => null]);
+        try {
+            $this->seed(RbacSeeder::class);
+            $this->fail('无 ADMIN_PASSWORD 时首次建号应抛异常终止种子');
+        } catch (RuntimeException $e) {
+            // 提示信息必须包含设置方法（环境变量名），便于部署者自助修复
+            $this->assertStringContainsString('ADMIN_PASSWORD', $e->getMessage());
+        }
+        // fail-fast：异常发生在建号之前，admin 不得被半创建
+        $this->assertDatabaseMissing('users', ['username' => 'admin']);
     }
 
     public function test_rerun_rotates_existing_admin_password_by_env(): void

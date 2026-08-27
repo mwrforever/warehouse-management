@@ -34,9 +34,42 @@ export interface ProductionOperation {
   process_code: string
   status: number
   status_label: string
-  qualified_qty: number
-  defective_qty: number
-  hours: number
+  qualified_qty: string // 后端 decimal:2 字符串
+  defective_qty: string // 后端 decimal:2 字符串
+  hours: string // 后端 decimal:2 字符串
+  // 工艺路线联动字段（路由 DAG 下单快照；旧工单可能无值，均为可选）
+  node_no?: string | null
+  output_product_id?: number | null
+  output_product_name?: string | null
+  is_outsourced?: number
+  // 前置工序（DAG 前驱：完工校验与画布连线回显用）
+  predecessors?: { id: number; node_no: string | null; process_name: string | null }[]
+}
+
+// 工单工序图节点（详情接口 graph 字段；画布按 operation id 渲染节点、按 edges 连线）
+export interface OperationGraphNode {
+  id: number
+  node_no: string | null
+  process_name: string | null
+  status: number
+  status_label: string
+  is_outsourced: number
+  qualified_qty: string // 后端 decimal:2 字符串
+  defective_qty: string // 后端 decimal:2 字符串
+  hours: string // 后端 decimal:2 字符串
+}
+
+// 工单工序图连线（from/to 双端同时带 operation id 与节点号，便于画布定位与提示）
+export interface OperationGraphEdge {
+  from_operation_id: number
+  to_operation_id: number
+  from_node_no: string | null
+  to_node_no: string | null
+}
+
+export interface OperationGraphData {
+  nodes: OperationGraphNode[]
+  edges: OperationGraphEdge[]
 }
 
 export interface ProductionOrderDetail {
@@ -59,6 +92,9 @@ export interface ProductionOrderDetail {
   remark: string | null
   materials: ProductionMaterial[]
   operations: ProductionOperation[]
+  // 工艺路线联动字段（按路由下达的工单回传完整工序图）
+  routing_id?: number | null
+  graph?: OperationGraphData | null
 }
 
 export interface ReleaseWarning {
@@ -71,10 +107,10 @@ export interface ReleaseWarning {
 export interface OperationReportRecord {
   id: number
   operator: string | null
-  qualified_qty: number
-  defective_qty: number
-  hours: number
-  report_time: string
+  qualified_qty: string // 后端 decimal:2 序列化为字符串（与图节点字段同口径）
+  defective_qty: string // 后端 decimal:2 序列化为字符串
+  hours: string // 后端 decimal:2 序列化为字符串
+  reported_at: string
   remark: string | null
 }
 
@@ -161,10 +197,16 @@ export interface OutsourcingItem {
   order_id: number
   order_no: string
   operation_id: number
+  // 委外工序节点号（index join 工序行回传；无路线历史单为空）
+  node_no?: string | null
   process_name: string
+  // 回收品（节点输出半成品/成品；无路线历史单为空）
+  output_product_name?: string | null
   supplier_id: number
   supplier_name: string
-  quantity: number
+  quantity: string // 后端 decimal:2 字符串
+  // 已回收累计（回收进度；后端 decimal:2 字符串）
+  received_qty?: string
   status: number
   status_label: string
   approved_at: string | null
@@ -178,7 +220,11 @@ export interface OutsourcingDetail {
   order_id: number
   order_no: string
   operation_id: number
+  // 委外工序展示（节点号+工序名，退回弹窗口径）
+  node_no?: string | null
   process_name: string
+  // 回收品（节点输出快照，编辑弹窗只读展示）
+  output_product_name?: string | null
   supplier_id: number
   supplier_name: string
   status: number
@@ -187,11 +233,66 @@ export interface OutsourcingDetail {
   warehouse_name: string
   location_id: number
   location_name: string
-  quantity: number
-  received_qty: number
+  quantity: string // 后端 decimal:2 字符串
+  received_qty: string // 后端 decimal:2 字符串
   approved_at: string | null
   operator: string | null
   remark: string | null
+  // 组件明细（余料退回数据源：可退=已发−已退；id 供退回载荷 item_id；数量均为后端 decimal:2 字符串）
+  items?: {
+    id: number
+    material_id: number
+    material_name: string
+    required_qty: string
+    issued_qty: string
+    returned_qty: string
+    unit_name: string
+  }[]
+}
+
+// 委外节点预填组件行（from-operation 响应：应发=委外数量×qty_per_unit 的折算基数）
+export interface OutsourcingPrefillItem {
+  material_id: number
+  material_name: string
+  material_code: string
+  qty_per_unit: number
+  unit_id: number
+  unit_name: string
+  stock: number
+}
+
+// 委外节点预填（工序节点输入材料×单位用量 + 回收品 + 剩余可委外量）
+export interface OutsourcingPrefill {
+  operation_id: number
+  node_no: string
+  process_name: string
+  order_id: number
+  order_no: string
+  plan_qty: number
+  outsourced_qty: number
+  remaining_qty: number
+  output_product_id: number
+  output_product_name: string
+  items: OutsourcingPrefillItem[]
+}
+
+// 委外发料组件载荷行（后端 bcmath 权威：应发 > 0 且 ≤ 单位用量×委外量）
+export interface OutsourcingItemRow {
+  material_id: number
+  required_qty: number
+  unit_id: number
+}
+
+// 委外余料退回记录（退回流水列表项）
+export interface OutsourcingReturnRecord {
+  id: number
+  no: string
+  material_name: string
+  quantity: number
+  warehouse_name: string
+  location_name: string
+  returned_at: string
+  operator: string | null
 }
 
 export interface OutsourcingReceiptRecord {
@@ -274,6 +375,8 @@ export interface OutsourcingPayload {
   warehouse_id: number
   location_id: number
   quantity: number
+  // 发料组件必填（min:1）；应发 ≤ 单位用量×委外量（后端 422 权威）
+  items: OutsourcingItemRow[]
   remark?: string
 }
 
@@ -454,17 +557,24 @@ export const productionApi = {
     const { data } = await http.post(`/production/returns/${id}/approve`)
     return data.data.no
   },
-  // 委外单分页列表
+  // 委外单分页列表（单号/工单/工序/状态过滤；order_id/operation_id 供列表联动筛选）
   async outsourcings(params: {
     page?: number
     per_page?: number
     keyword?: string
     status?: number
+    order_id?: number
+    operation_id?: number
   }) {
     const { data } = await http.get('/production/outsourcings', {
       params: { per_page: 10, ...params },
     })
     return data.data as PageResult<OutsourcingItem>
+  },
+  // 委外节点预填（组件清单×单位用量 + 回收品 + 剩余可委外量；结构不符 422）
+  async fromOperation(operationId: number) {
+    const { data } = await http.get(`/production/outsourcings/from-operation/${operationId}`)
+    return data.data as OutsourcingPrefill
   },
   // 委外单详情（含已回收累计）
   async outsourcingDetail(id: number) {
@@ -484,12 +594,12 @@ export const productionApi = {
   async deleteOutsourcing(id: number) {
     await http.delete(`/production/outsourcings/${id}`)
   },
-  // 发出（审核，扣成品库存）
+  // 发出（审核，按发料组件逐行扣库存）
   async approveOutsourcing(id: number) {
     const { data } = await http.post(`/production/outsourcings/${id}/approve`)
     return data.data.no
   },
-  // 回收（创建即审核回收单，加成品库存）
+  // 回收（创建即审核回收单，回收品=节点输出入库）
   async receiptOutsourcing(
     id: number,
     payload: { quantity: number; warehouse_id: number; location_id: number; remark?: string },
@@ -501,6 +611,24 @@ export const productionApi = {
   async outsourcingReceipts(id: number) {
     const { data } = await http.get(`/production/outsourcings/${id}/receipts`)
     return data.data as PageResult<OutsourcingReceiptRecord>
+  },
+  // 委外余料退回记录（退回流水）
+  async outsourcingReturns(id: number) {
+    const { data } = await http.get(`/production/outsourcings/${id}/returns`)
+    return data.data as PageResult<OutsourcingReturnRecord>
+  },
+  // 创建余料退回（创建即审核，库存回补；响应退回单号）
+  async createOutsourcingReturn(
+    id: number,
+    payload: {
+      items: { item_id: number; quantity: number }[]
+      warehouse_id: number
+      location_id: number
+      remark?: string
+    },
+  ) {
+    const { data } = await http.post(`/production/outsourcings/${id}/returns`, payload)
+    return data.data.no
   },
   // 成品入库单分页列表
   async finishedInbounds(params: {

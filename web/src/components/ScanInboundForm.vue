@@ -41,7 +41,9 @@ const emit = defineEmits<{
 
 const scan = useScanInbound({
   excludedIds: () => props.excludedIds ?? [],
-  maxQuantity: props.maxQuantity,
+  // 函数形式每次读取最新 props.maxQuantity：宿主以 inline/computed 传函数时引用会随渲染变化，
+  // setup 直传引用会过期导致上限校验失效
+  maxQuantity: (item) => props.maxQuantity?.(item) ?? Infinity,
   blockedType: props.blockedType,
   resolveProduct: props.resolveProduct,
   onError: (msg) => {
@@ -58,7 +60,7 @@ watch(
       await nextTick()
       scan.inputRef.value?.focus()
     } else {
-      // 关闭时取消进行中的防抖/请求并重置，防止卸载后 setState（spec §7）
+      // 关闭时重置并递增会话序号，作废在途条码请求的迟到回写，防止幽灵行残留（spec §7）
       scan.reset()
     }
   },
@@ -94,18 +96,23 @@ watch(scan.pending, async (p) => {
     :close-on-click-modal="false"
     @update:model-value="onClose"
   >
-    <!-- 两个开关：逐件扫描默认关 / 自动累加默认开（正交语义见 spec §4.4） -->
-    <div class="switches">
-      <el-switch v-model="scan.perItem.value" active-text="逐件扫描" inactive-text="逐件扫描" />
-      <el-switch
-        v-model="scan.autoAccumulate.value"
-        active-text="自动累加"
-        inactive-text="自动累加"
-      />
-      <span class="switch-hint">
-        {{ scan.perItem.value ? '扫一次数量直接 +1' : '扫一次后填写本次数量' }}｜
-        {{ scan.autoAccumulate.value ? '同条码自动合并累加' : '同条码再次扫描将报错' }}
-      </span>
+    <!-- 两个开关分两行展示（逐件扫描默认关 / 自动累加默认开，正交语义见 spec §4.4）：
+         每行「开关名 + 开关 + 当前模式说明」，说明只描述开关打开时的语义，不另起提示行 -->
+    <div class="scan-modes">
+      <div class="mode-row">
+        <span class="mode-name">逐件扫描</span>
+        <el-switch v-model="scan.perItem.value" />
+        <span class="mode-state">{{
+          scan.perItem.value ? '扫一次数量 +1' : '扫一次后填写本次数量'
+        }}</span>
+      </div>
+      <div class="mode-row">
+        <span class="mode-name">自动累加</span>
+        <el-switch v-model="scan.autoAccumulate.value" />
+        <span class="mode-state">{{
+          scan.autoAccumulate.value ? '同条码自动合并累加' : '同条码重复扫描将报错'
+        }}</span>
+      </div>
     </div>
 
     <el-input
@@ -153,13 +160,24 @@ watch(scan.pending, async (p) => {
 </template>
 
 <style scoped>
-.switches {
+.scan-modes {
   display: flex;
-  align-items: center;
-  gap: var(--space-xl);
+  flex-direction: column;
+  gap: var(--space-md);
   margin-bottom: var(--space-lg);
 }
-.switch-hint {
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+.mode-name {
+  width: 68px;
+  flex: none;
+  font-size: 13px;
+  color: var(--color-foreground);
+}
+.mode-state {
   font-size: 12px;
   color: var(--color-secondary);
 }

@@ -59,11 +59,13 @@ describe('purchase api', () => {
     expect(http.post).toHaveBeenCalledWith('/purchase/orders/9/approve')
   })
 
-  it('availableOrders 查询可入库订单', async () => {
-    // 正常路径：从订单生成下拉数据源
+  it('availableOrders 查询可入库订单（keyword/per_page 透传，BF-3 remote 下拉数据源）', async () => {
+    // 正常路径：从订单生成下拉数据源——单号关键字与分页上限经 params 透传（后端分页钳制 100）
     ;(http.get as Mock).mockResolvedValue({ data: { code: 0, data: { items: [], total: 0 } } })
-    await purchaseApi.availableOrders()
-    expect(http.get).toHaveBeenCalledWith('/purchase/orders/available')
+    await purchaseApi.availableOrders({ keyword: 'PO2026', per_page: 100 })
+    expect(http.get).toHaveBeenCalledWith('/purchase/orders/available', {
+      params: { keyword: 'PO2026', per_page: 100 },
+    })
   })
 
   it('fromOrder 预填携带订单 ID', async () => {

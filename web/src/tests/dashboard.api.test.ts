@@ -17,7 +17,7 @@ describe('dashboard api', () => {
     // 正常路径：路径正确 + 解包统一响应
     const payload = {
       inventory_total_qty: '100.00',
-      inventory_value: '150.00',
+      inventory_value: 15000,
       today_inbound_qty: '5.00',
       today_outbound_qty: '3.00',
       pending_approvals: 2,

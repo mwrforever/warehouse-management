@@ -191,7 +191,7 @@ interface MenuGroup {
   items: MenuItem[]
 }
 
-// 菜单 IA（8 组 30 项，与设计稿一致；权限码与旧版完全一致，仅视觉重设计）
+// 菜单 IA（8 组 31 项；权限码与旧版一致，工艺路线为路由 DAG 需求新增）
 const menu: MenuGroup[] = [
   {
     title: null,
@@ -403,6 +403,14 @@ const menu: MenuGroup[] = [
         desc: '物料清单维护',
       },
       {
+        to: '/master/routings',
+        label: '工艺路线',
+        icon: Connection,
+        perm: 'routing.list',
+        tip: '工序 DAG 网络',
+        desc: '成品工艺路线与工序编排',
+      },
+      {
         to: '/master/processes',
         label: '工序管理',
         icon: Operation,
@@ -607,8 +615,8 @@ function onTipOut(e: MouseEvent) {
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, var(--a-500), var(--a-700));
-  color: #fff;
-  box-shadow: 0 8px 20px rgba(5, 150, 105, 0.3);
+  color: var(--surface);
+  box-shadow: 0 8px 20px var(--a-600-30);
   flex: none;
 }
 .brand-mark .el-icon {
@@ -617,7 +625,7 @@ function onTipOut(e: MouseEvent) {
 .side-brand .txt b {
   display: block;
   font-size: 15px;
-  color: #fff;
+  color: var(--surface);
   font-weight: 700;
   letter-spacing: 0.3px;
   white-space: nowrap;
@@ -651,7 +659,7 @@ function onTipOut(e: MouseEvent) {
 /* 分组间细分隔线：把"分组"从连续的菜单行中切分出来，形成分区节奏 */
 .nav-group + .nav-group {
   margin-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid var(--dark-line-weak);
   padding-top: 12px;
 }
 /* 分组标题 = 分区标签：小号加宽字距 + 弱化图标，与菜单项（亮色可点行）在字号、明度上强区分；
@@ -685,7 +693,7 @@ function onTipOut(e: MouseEvent) {
   padding: 0 5px;
   border-radius: 99px;
   color: var(--p-500);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--dark-line-highlight);
   font-variant-numeric: tabular-nums;
   transition:
     color 0.15s,
@@ -710,7 +718,7 @@ function onTipOut(e: MouseEvent) {
 }
 /* 分组标题悬停：淡底 + 提亮，反馈"可点"但保持标签质感，与菜单项的圆角药丸悬停区分 */
 .nav-group-title:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--dark-bg);
   color: var(--p-200);
 }
 .nav-group-title:hover .g-icon {
@@ -718,7 +726,7 @@ function onTipOut(e: MouseEvent) {
 }
 .nav-group-title:hover .g-count {
   color: var(--a-400);
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: var(--a-400-35);
 }
 .nav-group-title:hover .chev {
   color: var(--a-400);
@@ -762,8 +770,8 @@ function onTipOut(e: MouseEvent) {
   transition: color 0.15s;
 }
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: var(--dark-bg-hover);
+  color: var(--surface);
 }
 .nav-item:hover .n-icon {
   color: var(--p-200);
@@ -786,8 +794,8 @@ function onTipOut(e: MouseEvent) {
   transform: scaleX(1);
 }
 .nav-item.router-link-active {
-  background: rgba(16, 185, 129, 0.13);
-  color: #fff;
+  background: var(--a-500-12);
+  color: var(--surface);
   font-weight: 600;
 }
 .nav-item.router-link-active::before {
@@ -836,7 +844,7 @@ function onTipOut(e: MouseEvent) {
 
 .side-foot {
   padding: 14px 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid var(--dark-line-weak);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -846,7 +854,7 @@ function onTipOut(e: MouseEvent) {
   height: 30px;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--p-600), var(--p-800));
-  color: #fff;
+  color: var(--surface);
   display: grid;
   place-items: center;
   font-size: 12px;
@@ -1034,7 +1042,7 @@ function onTipOut(e: MouseEvent) {
   z-index: 500;
   pointer-events: none;
   background: var(--p-800);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--dark-line-strong);
   border-radius: 10px;
   box-shadow: var(--sh-lg);
   padding: 9px 13px;
@@ -1053,7 +1061,7 @@ function onTipOut(e: MouseEvent) {
   display: block;
   font-size: 12.5px;
   font-weight: 600;
-  color: #fff;
+  color: var(--surface);
   letter-spacing: 0.2px;
 }
 .side-tip i {

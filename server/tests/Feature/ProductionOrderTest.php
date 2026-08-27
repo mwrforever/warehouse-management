@@ -7,11 +7,13 @@ namespace Tests\Feature;
 use App\Models\BomHeader;
 use App\Models\Category;
 use App\Models\Location;
+use App\Models\OutsourcingOrder;
 use App\Models\PickList;
 use App\Models\Process;
 use App\Models\Product;
 use App\Models\ProductionOrder;
 use App\Models\Role;
+use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\User;
 use App\Models\Warehouse;
@@ -189,6 +191,30 @@ class ProductionOrderTest extends TestCase
         $order->save();
         $this->withToken($this->token)->putJson("/api/v1/production/orders/{$order->id}", $this->payload())
             ->assertJsonPath('code', 1503);
+    }
+
+    public function test_update_rejected_when_referenced_by_outsourcing_with_1504(): void
+    {
+        // 异常路径（B-1）：草稿工单工序被委外单引用 → update 重建工序前拒绝（1504 族，与 destroy
+        // 引用检查同口径）——修复前 update 直接全删工序行，撞 outsourcing_orders.operation_id
+        // FK RESTRICT 抛 QueryException 500 且无自愈路径；委外单为 store 补状态校验前已可产生
+        // 的草稿数据形态（前端 ?order_id= 直达亦可绕过 UI 门控），故直接落库构造历史卡死形态
+        $no = $this->createOrder($this->payload());
+        $order = ProductionOrder::where('no', $no)->first();
+        $supplier = Supplier::create(['name' => '测试供应商', 'code' => 'SUP-001', 'status' => 1]);
+        OutsourcingOrder::create([
+            'no' => 'OS-TEST-001', 'order_id' => $order->id, 'operation_id' => $order->operations()->first()->id,
+            'supplier_id' => $supplier->id, 'status' => OutsourcingOrder::STATUS_DRAFT,
+            'warehouse_id' => 1, 'location_id' => 1, 'quantity' => 5,
+        ]);
+        $this->withToken($this->token)
+            ->putJson("/api/v1/production/orders/{$order->id}", $this->payload(['quantity' => 5]))
+            ->assertJsonPath('code', 1504)
+            ->assertJsonPath('message', '工单已被委外单使用，不可修改');
+        // 事务回滚：工序行原样保留（未被半删重建），工单数量未被改动
+        $this->assertSame(3, $order->operations()->count());
+        $order->refresh();
+        $this->assertSame('10.00', $order->quantity);
     }
 
     public function test_destroy_draft_ok_and_released_rejected_with_1504(): void

@@ -6,6 +6,10 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Testing\TestResponse;
+use Laravel\Sanctum\PersonalAccessToken;
+use Symfony\Component\HttpFoundation\Cookie;
 use Tests\TestCase;
 
 class AuthTest extends TestCase
@@ -92,6 +96,16 @@ class AuthTest extends TestCase
         $this->getJson('/api/v1/auth/me')->assertStatus(401);
     }
 
+    public function test_me_without_token_non_json_accept_returns_401_not_500(): void
+    {
+        // 异常路径：Accept 非 JSON（监控探测/curl/浏览器直访）的未认证 API 请求必须 401 而非 500
+        // （框架默认 redirectGuestsTo(route('login')) 在本项目无 login 命名路由时抛
+        // RouteNotFoundException 变 500；已覆盖为 null 统一走 401 渲染）
+        $this->withHeaders(['Accept' => '*/*'])->get('/api/v1/auth/me')
+            ->assertStatus(401)
+            ->assertJsonPath('code', 401);
+    }
+
     public function test_logout_revokes_token(): void
     {
         // 正常路径：登出后 token 失效
@@ -102,5 +116,107 @@ class AuthTest extends TestCase
         // 故先重置 guard，再验证被撤销的 token 无法访问 me
         $this->app['auth']->forgetGuards();
         $this->withToken($token)->getJson('/api/v1/auth/me')->assertStatus(401);
+    }
+
+    public function test_token_default_expires_at_is_null(): void
+    {
+        // 边界路径（默认行为保持）：未配置 SANCTUM_EXPIRATION 时 token 永不过期（本地开发现状）
+        $token = $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->json('data.token');
+        $this->assertNull(PersonalAccessToken::findToken($token)?->expires_at);
+    }
+
+    public function test_token_expiration_config_rejects_expired_token(): void
+    {
+        // 正常路径（生产加固）：Sanctum 4 的过期判定在请求时按 created_at + 配置分钟数执行
+        // （Guard::isValidAccessToken，官方文档机制），不写库 expires_at 列；此处验证配置生效
+        config(['sanctum.expiration' => 1]);
+        $token = $this->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123'])
+            ->json('data.token');
+        // 有效期内：token 正常访问 me
+        $this->withToken($token)->getJson('/api/v1/auth/me')->assertOk()->assertJsonPath('code', 0);
+        // 越过有效期：同 token 立即 401（Guard 按签发时刻 + 配置分钟数判定，无需写库 expires_at）。
+        // 测试框架在同一 app 实例内缓存 guard 的已认证用户（真实 HTTP 每次请求独立容器不受影响），
+        // 故先重置 guard，让下一次请求按新时间重新走完整鉴权
+        Carbon::setTestNow(now()->addMinutes(5));
+        $this->app['auth']->forgetGuards();
+        $this->withToken($token)->getJson('/api/v1/auth/me')->assertStatus(401);
+        Carbon::setTestNow();
+    }
+
+    public function test_spa_login_establishes_cookie_session_for_api(): void
+    {
+        // 正常路径（SPA 会话通道）：csrf-cookie 握手 + cookie 会话登录后，
+        // 不带 Authorization 头、仅凭会话 cookie 即可访问 me——会话鉴权链路（R4-3）生效
+        $this->spaLogin();
+
+        $me = $this->withCredentials()
+            ->withHeader('Origin', 'http://localhost:4000')
+            ->getJson('/api/v1/auth/me');
+        $me->assertOk()
+            ->assertJsonPath('code', 0)
+            ->assertJsonPath('data.username', 'admin');
+    }
+
+    public function test_spa_logout_invalidates_cookie_session(): void
+    {
+        // 正常路径（SPA 会话通道）：会话登出后，同一会话 cookie 再访问 me 返回 401
+        // （会话作废 + CSRF token 轮换，防会话固定）
+        $this->spaLogin();
+
+        $this->withCredentials()
+            ->withHeader('Origin', 'http://localhost:4000')
+            ->withHeader('X-CSRF-TOKEN', session()->token())
+            ->postJson('/api/v1/auth/logout')
+            ->assertOk()
+            ->assertJsonPath('code', 0);
+
+        // 测试框架在同一 app 实例内缓存 sanctum 守卫的已认证用户（真实 HTTP 每次请求独立容器不受影响），
+        // 故先重置守卫，再验证会话已作废、重放会话 cookie 无法访问 me
+        $this->app['auth']->forgetGuards();
+
+        // 登出后原会话 cookie 已失效：不再携带任何凭证重放会话 cookie 访问业务接口
+        $this->withCredentials()
+            ->withHeader('Origin', 'http://localhost:4000')
+            ->getJson('/api/v1/auth/me')
+            ->assertStatus(401);
+    }
+
+    /**
+     * SPA 握手登录：GET /sanctum/csrf-cookie 建立会话（204）→ 响应 cookie 透传 → 携带
+     * 前端 Origin 与 CSRF 头走会话通道登录。成功后响应 cookie 已就位，可直接发起业务请求。
+     *
+     * 动机：完整模拟浏览器行为（先握手拿 cookie，再 POST 登录），证明会话通道真实可用，
+     * 而非仅依赖 Sanctum::actingAs 之类的捷径。
+     */
+    private function spaLogin(): void
+    {
+        // 握手端点可达（204 no content），并下发 XSRF-TOKEN 与 laravel_session cookie
+        $handshake = $this->get('/sanctum/csrf-cookie');
+        $handshake->assertNoContent();
+        $this->persistResponseCookies($handshake);
+
+        // 会话通道登录：cookie 会话续接 + CSRF 头 + 前端 Origin（命中 SANCTUM_STATEFUL_DOMAINS 才走会话链路）
+        $login = $this->withCredentials()
+            ->withHeader('Origin', 'http://localhost:4000')
+            ->withHeader('X-CSRF-TOKEN', session()->token())
+            ->postJson('/api/v1/auth/login', ['username' => 'admin', 'password' => 'admin123']);
+        $login->assertOk()
+            ->assertJsonPath('code', 0)
+            // 双通道兼容性：登录响应仍返回 token（token 兼容通道，前端批次切换前保留，测试基线不碎）
+            ->assertJsonStructure(['data' => ['token', 'user' => ['id', 'name', 'username']]]);
+        $this->persistResponseCookies($login);
+    }
+
+    /**
+     * 把响应 Set-Cookie 的原始值透传给后续请求：Laravel 测试客户端不会自动携带 cookie，
+     * 需手动收集后经 withUnencryptedCookies 原样回传（服务端 EncryptCookies 对称解密，与原浏览器行为一致）
+     */
+    private function persistResponseCookies(TestResponse $response): void
+    {
+        $cookies = collect($response->headers->getCookies())
+            ->mapWithKeys(fn (Cookie $cookie) => [$cookie->getName() => $cookie->getValue()])
+            ->all();
+        $this->withUnencryptedCookies($cookies);
     }
 }

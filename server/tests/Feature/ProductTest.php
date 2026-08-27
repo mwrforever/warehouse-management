@@ -108,6 +108,52 @@ class ProductTest extends TestCase
         $this->assertSame('PRD000002', $res->json('data.code'));
     }
 
+    public function test_store_auto_code_retries_when_future_code_manually_occupied(): void
+    {
+        // 异常路径（B-1 回归）：手填编码占用未来自动号后，自动编码撞 products.code 唯一索引，
+        // 须进入换号重试跳号成功（而非 500 且序列随事务回滚永不自愈）
+        $this->seed(DocumentNumberConfigSeeder::class);
+        // 老库衔接：已有 PRD000001 → 序列以 1 为起点
+        Product::create(['name' => '旧件', 'code' => 'PRD000001', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        // 自动生成一件推进序列到 2（下一次自动号应为 PRD000003）
+        $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '自动编码件', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ])->assertJsonPath('code', 0);
+        // 手填占用未来自动号 PRD000003（1114 预检只查当前是否已存在，该号此刻空闲，允许创建）
+        Product::create(['name' => '占号件', 'code' => 'PRD000003', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1]);
+        // 自动编码：PRD000003 撞唯一索引 → 换号重试 → PRD000004 创建成功且序列推进（而非每次取同号 500）
+        $res = $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '自动编码件二', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ]);
+        $res->assertStatus(200)->assertJsonPath('code', 0);
+        $this->assertSame('PRD000004', $res->json('data.code'));
+        $this->assertDatabaseHas('products', ['code' => 'PRD000004', 'barcode' => 'PRD000004']);
+        $this->assertDatabaseHas('document_sequences', ['type' => 'prd', 'date' => '', 'seq' => 4]);
+    }
+
+    public function test_store_auto_code_retries_when_future_barcode_manually_occupied(): void
+    {
+        // 异常路径（B-1 回归）：手填条码占用未来自动号后，自动生成的 barcode=code 撞 products.barcode
+        // 唯一索引，同样进入换号重试（而非 500）
+        $this->seed(DocumentNumberConfigSeeder::class);
+        // 既有商品手填条码 PRD000001（1115 预检只查当前占用，该值此刻空闲，允许创建）——占住第一个自动号
+        Product::create(['name' => '手填条码件', 'code' => 'MAT-001', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'barcode' => 'PRD000001', 'status' => 1]);
+        // 自动编码：PRD000001 编码本身不撞，但 barcode=PRD000001 撞条码唯一索引 → 换号 PRD000002 成功
+        $res = $this->withToken($this->token)->postJson('/api/v1/products', [
+            'name' => '自动编码件', 'type' => 'raw_material',
+            'category_id' => $this->rawCat->id, 'unit_id' => $this->unit->id, 'status' => 1,
+        ]);
+        $res->assertStatus(200)->assertJsonPath('code', 0);
+        $this->assertSame('PRD000002', $res->json('data.code'));
+        $this->assertSame('PRD000002', $res->json('data.barcode'));
+        $this->assertDatabaseHas('document_sequences', ['type' => 'prd', 'date' => '', 'seq' => 2]);
+    }
+
     public function test_store_manual_code_still_enforced_unique_1114(): void
     {
         // 边界路径：手填编码仍走唯一校验 1114（自动生成不覆盖手动行为）

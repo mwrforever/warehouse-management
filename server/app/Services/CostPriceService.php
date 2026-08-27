@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Cache;
 
 class CostPriceService
 {
-    /** 缓存键：成本价 map [product_id => 单价（分，2 位小数字符串）] */
+    /** 缓存键：成本价 map [product_id => 单价（分单位整数）] */
     public const CACHE_KEY = 'cost_price_map';
 
     /**
@@ -25,7 +25,7 @@ class CostPriceService
      * 调用方按自身商品集直接 isset 判定（map 为超集，无需再过滤）。
      * CACHE_STORE=database 下读缓存表 1 次远优于历史明细扫描+filesort；失效路径唯一故可长期缓存。
      *
-     * @return array<int, string> [product_id => 单价（分，2 位小数字符串，跨库形态经 bcmath 归一）]
+     * @return array<int, int> [product_id => 单价（分单位整数，R2 后 price 列 bigint、模型 integer cast，跨库均为 int）]
      */
     public function latestPriceMap(): array
     {
@@ -53,8 +53,8 @@ class CostPriceService
                 ->cursor() as $item
         ) {
             // 升序末条生效（无条件覆盖：末条即该商品最新价，与旧 DESC 首条语义等价）；
-            // bcadd 归一跨库形态（SQLite int / MySQL decimal 字符串）
-            $prices[(int) $item->product_id] = bcadd((string) $item->price, '0', 2);
+            // price 列为 bigint 分整数（模型 integer cast），跨库形态统一为 int
+            $prices[(int) $item->product_id] = (int) $item->price;
         }
 
         return $prices;

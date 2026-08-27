@@ -4,9 +4,17 @@
 
 namespace Tests\Feature;
 
+use App\Models\Category;
 use App\Models\DocumentSequence;
 use App\Models\Permission;
+use App\Models\Process;
+use App\Models\Product;
 use App\Models\Role;
+use App\Models\RoutingHeader;
+use App\Models\RoutingNode;
+use App\Models\RoutingNodeMaterial;
+use App\Models\Unit;
+use Database\Seeders\RbacSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -162,5 +170,135 @@ class ProductionStructureTest extends TestCase
         $this->assertSame('os', DocumentSequence::TYPE_OS);
         $this->assertSame('osr', DocumentSequence::TYPE_OSR);
         $this->assertSame('fi', DocumentSequence::TYPE_FI);
+    }
+
+    /** 工艺路线四表结构：routing_headers/nodes/node_materials/edges 存在且唯一约束生效（Task Routing-1） */
+    public function test_routing_tables_structure(): void
+    {
+        $this->seed(RbacSeeder::class);
+        $category = Category::create(['name' => '分类', 'code' => 'CAT-RT']);
+        $unit = Unit::create(['name' => '个', 'code' => 'PCS-RT', 'status' => 1]);
+        $product = Product::create([
+            'name' => '成品RT', 'code' => 'FIN-RT', 'type' => 'finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $semi = Product::create([
+            'name' => '半成品RT', 'code' => 'SEMI-RT', 'type' => 'semi_finished',
+            'category_id' => $category->id, 'unit_id' => $unit->id, 'status' => 1,
+        ]);
+        $process = Process::create(['name' => '工序RT', 'code' => 'PROC-RT', 'sort' => 1, 'status' => 1]);
+        $routing = RoutingHeader::create([
+            'code' => 'RTG001', 'product_id' => $product->id, 'version' => 'v1',
+            'quantity' => 1, 'status' => 1, 'remark' => null,
+        ]);
+        $node = RoutingNode::create([
+            'routing_id' => $routing->id, 'node_no' => 'OP10', 'process_id' => $process->id,
+            'name' => '工序RT', 'output_product_id' => $semi->id, 'output_qty' => 1,
+            'is_outsourced' => 0, 'remark' => null,
+        ]);
+        RoutingNodeMaterial::create([
+            'node_id' => $node->id, 'material_id' => $semi->id, 'qty_per_unit' => 1, 'unit_id' => $unit->id,
+        ]);
+
+        // 唯一约束：同路线同 node_no 双插冲突
+        $this->expectException(QueryException::class);
+        RoutingNode::create([
+            'routing_id' => $routing->id, 'node_no' => 'OP10', 'process_id' => $process->id,
+            'name' => '重复节点', 'output_product_id' => $semi->id, 'output_qty' => 1,
+            'is_outsourced' => 0, 'remark' => null,
+        ]);
+    }
+
+    /** 工单工序 DAG 扩列与边表：node_no/output_product_id/is_outsourced + work_order_operation_edges（Task Routing-1） */
+    public function test_work_order_dag_columns_and_edges(): void
+    {
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'node_no'));
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'output_product_id'));
+        $this->assertTrue(\Schema::hasColumn('work_order_operations', 'is_outsourced'));
+        $this->assertTrue(\Schema::hasColumn('production_order_materials', 'node_no'));
+        $this->assertTrue(\Schema::hasColumn('production_orders', 'routing_id'));
+        $this->assertTrue(\Schema::hasTable('work_order_operation_edges'));
+    }
+
+    /** 委外组件模型：orders 扩列 + items/returns 两表结构 + 唯一约束（Task OS-1） */
+    public function test_outsourcing_component_tables_structure(): void
+    {
+        // 正常路径：委外单扩列（回收品=节点输出；已回收累计不落列，实时 SUM 派生——
+        // received_qty 列评审波已删，见 spec 5 §13 偏离记录 13）且发料组件/余料退回两表已建立
+        $this->assertTrue(\Schema::hasColumn('outsourcing_orders', 'output_product_id'));
+        $this->assertTrue(\Schema::hasTable('outsourcing_order_items'));
+        $this->assertTrue(\Schema::hasTable('outsourcing_returns'));
+    }
+
+    /** 组件同单同物料唯一（Task OS-1） */
+    public function test_outsourcing_order_items_unique(): void
+    {
+        // 边界路径：同委外单同物料双插被唯一约束拒绝（应发组件防重复）
+        // 建最小基数据：分类/单位/商品/BOM/工序/供应商/仓库/库位直插，ProductionOrder/WorkOrderOperation 建真实行（FK 约束）
+        $unitId = DB::table('units')->insertGetId([
+            'name' => '个', 'code' => 'PC-OSU', 'status' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $catId = DB::table('categories')->insertGetId(['name' => '成品OS', 'created_at' => now(), 'updated_at' => now()]);
+        $finId = DB::table('products')->insertGetId([
+            'name' => '成品OS', 'code' => 'FIN-OSU', 'type' => 'finished', 'category_id' => $catId,
+            'unit_id' => $unitId, 'status' => 1, 'safety_min' => 0, 'safety_max' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $matId = DB::table('products')->insertGetId([
+            'name' => '原料OS', 'code' => 'MAT-OSU', 'type' => 'raw_material', 'category_id' => $catId,
+            'unit_id' => $unitId, 'status' => 1, 'safety_min' => 0, 'safety_max' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $bomId = DB::table('bom_headers')->insertGetId([
+            'code' => 'BOM-OSU-001', 'product_id' => $finId, 'version' => 'v1',
+            'quantity' => 1, 'status' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $orderId = DB::table('production_orders')->insertGetId([
+            'no' => 'MO20260824-001', 'product_id' => $finId, 'quantity' => 10,
+            'plan_date' => now()->toDateString(), 'bom_id' => $bomId, 'status' => 0,
+            'completed_qty' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $procId = DB::table('processes')->insertGetId([
+            'name' => '组装OS', 'code' => 'PROC-OSU', 'sort' => 1, 'status' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $opId = DB::table('work_order_operations')->insertGetId([
+            'order_id' => $orderId, 'process_id' => $procId, 'seq' => 1, 'status' => 0,
+            'qualified_qty' => 0, 'defective_qty' => 0, 'hours' => 0,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $supplierId = DB::table('suppliers')->insertGetId([
+            'name' => '供应商OS', 'code' => 'SUP-OSU', 'status' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $whId = DB::table('warehouses')->insertGetId([
+            'name' => '主仓OS', 'code' => 'WH-OSU', 'status' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $locId = DB::table('locations')->insertGetId([
+            'warehouse_id' => $whId, 'name' => 'A-01', 'code' => 'LOC-OSU', 'status' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // 直插委外单（绕过建单接口，聚焦组件唯一约束；数量即应发折算基准）
+        $osId = DB::table('outsourcing_orders')->insertGetId([
+            'no' => 'OS20260824-001', 'order_id' => $orderId, 'operation_id' => $opId,
+            'supplier_id' => $supplierId, 'status' => 1, 'warehouse_id' => $whId, 'location_id' => $locId,
+            'quantity' => 10, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->assertGreaterThan(0, $osId);
+        // 首次插入组件行成功
+        DB::table('outsourcing_order_items')->insert([
+            'outsourcing_id' => $osId, 'material_id' => $matId, 'required_qty' => 2,
+            'issued_qty' => 0, 'returned_qty' => 0, 'unit_id' => $unitId,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // 同单同物料重复插入 → 唯一约束拒绝
+        $this->expectException(QueryException::class);
+        DB::table('outsourcing_order_items')->insert([
+            'outsourcing_id' => $osId, 'material_id' => $matId, 'required_qty' => 2,
+            'issued_qty' => 0, 'returned_qty' => 0, 'unit_id' => $unitId,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
     }
 }

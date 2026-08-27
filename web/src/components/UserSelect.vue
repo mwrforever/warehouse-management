@@ -1,20 +1,24 @@
 <!-- 用户选择器：用户数 ≤50 渲染 el-select 下拉直选；>50 切换为点击输入框弹出分页搜索弹窗（300ms 防抖实时搜索 + 分页表格）
+     形态由首次加载的用户总数一次性判定（mode），搜索/翻页只更新列表与分页 total，不翻转形态（BUG-01）
      modelValue 绑定用户姓名（与报工 operator 字段口径一致）；数据模块级缓存，卸载后再次挂载不重复请求 -->
 <script lang="ts">
 // 用户选项模块级缓存：跨组件挂载复用（同一 SPA 会话内用户列表稳定，避免每次进页重复请求）。
 // 缓存置于普通 script 块而非 setup 块：可导出重置钩子供测试隔离（模块级变量跨用例共享会污染断言）。
 // UserItem 类型由下方 <script setup> 块导入（import 提升，两块共享同一模块作用域）
 let cachedUsers: UserItem[] | null = null
+// 缓存的真实用户总数：后端 per_page 钳制 100，items.length ≤100 而 total 可更大，
+// 若只缓存 items 会导致二次挂载分页总数漂移为 100（BUG-11）
+let cachedTotal: number | null = null
 
 // 测试隔离钩子：重置模块级缓存（pre-flight Finding B 裁决：用例 beforeEach 调用）
 export function __resetUserSelectCache() {
   cachedUsers = null
+  cachedTotal = null
 }
 </script>
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { userApi, type UserItem } from '../api/user'
 import { useDebouncedRef } from '../utils/async'
 
@@ -35,37 +39,51 @@ const emit = defineEmits<{
 }>()
 
 const users = ref<UserItem[]>([])
+// total 仅作弹窗分页器总数（搜索命中数）；组件形态由 mode 决定，不依赖此值（BUG-01）
 const total = ref(0)
+// 组件形态：首次加载按用户总数一次性判定，后续搜索/翻页不翻转（防止弹窗交互中被卸载且无法恢复）
+const mode = ref<'select' | 'dialog'>('select')
 const loading = ref(false)
 const dialogLoading = ref(false)
 
 // 弹窗搜索：300ms 防抖实时搜索 + 查询按钮
 const searchKw = useDebouncedRef('', 300)
 const searchPage = ref(1)
+// 请求序号守卫（useListQuery 同款模式）：防抖搜索与「查 询」/翻页并发时，
+// 先发后至的响应直接丢弃，避免旧结果覆盖新数据导致点选到非预期用户（BUG-05）
+let requestSeq = 0
 
-// 选中值：即用户姓名
-function pick(name: string) {
-  emit('update:modelValue', name)
-  emit('change', name)
+// 选中值：即用户姓名；清除（空串/显式 null）统一归一为 null，保持 string|null 契约
+//（审计发现：下拉模式清除发空串、弹窗模式清除不回写父级，两个入口归一后语义一致）
+function pick(name: string | null) {
+  const value = name || null
+  emit('update:modelValue', value)
+  emit('change', value)
 }
 
 // 首次加载：拉取全量用户判断走下拉还是弹窗；失败降级为占位不阻塞页面（spec §7）
 async function loadOptions() {
   loading.value = true
   try {
-    if (cachedUsers !== null) {
+    if (cachedUsers !== null && cachedTotal !== null) {
       users.value = cachedUsers
-      total.value = cachedUsers.length
+      total.value = cachedTotal // 恢复真实总数，而非 items.length（后端 per_page 钳制导致 ≤100）
+      mode.value = cachedTotal <= 50 ? 'select' : 'dialog'
       return
     }
     const res = await userApi.list({ per_page: 100 })
     cachedUsers = res.items
+    cachedTotal = res.total
     users.value = res.items
     total.value = res.total
-  } catch (e) {
-    // 用户接口失败：清缓存以便下次重试，页面仅显示占位
+    // 形态只在此处按用户总数判定一次；searchDialog/changeDialogPage 回写搜索 total 时不触碰
+    mode.value = res.total <= 50 ? 'select' : 'dialog'
+  } catch {
+    // 初始加载失败静默降级（BUG-12）：无 user.list 权限的自定义角色打开报工页属预期角色配置
+    // 而非异常，弹错只会持续打扰；下拉为空 + 保留预填值（报工默认当前登录人）已满足主流程。
+    // 清缓存以便下次挂载重试；形态保持默认下拉，不阻塞宿主页
     cachedUsers = null
-    ElMessage.error((e as Error).message)
+    cachedTotal = null
   } finally {
     loading.value = false
   }
@@ -73,21 +91,25 @@ async function loadOptions() {
 
 // 弹窗内搜索：防抖自动查 + 手动查询按钮
 async function searchDialog() {
+  const seq = ++requestSeq
   dialogLoading.value = true
   searchPage.value = 1
   try {
     const res = await userApi.list({ per_page: 10, keyword: searchKw.debounced.value || undefined })
+    if (seq !== requestSeq) return // 已有更新的请求，丢弃本次过期响应
     users.value = res.items
     total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
+  } catch {
+    // 搜索失败与初始加载同语义：静默降级不弹错（含 403 无权限），保留表格已有结果，
+    // 用户再次输入/翻页即天然重试——辅助选择器的失败不应打断报工主流程
   } finally {
-    dialogLoading.value = false
+    if (seq === requestSeq) dialogLoading.value = false
   }
 }
 watch(searchKw.debounced, () => searchDialog())
 
 async function changeDialogPage(p: number) {
+  const seq = ++requestSeq
   dialogLoading.value = true
   try {
     const res = await userApi.list({
@@ -95,12 +117,13 @@ async function changeDialogPage(p: number) {
       per_page: 10,
       keyword: searchKw.debounced.value || undefined,
     })
+    if (seq !== requestSeq) return // 翻页与搜索并发时同理，只认最后一次请求
     users.value = res.items
     total.value = res.total
-  } catch (e) {
-    ElMessage.error((e as Error).message)
+  } catch {
+    // 翻页失败同搜索失败：静默降级（BUG-12 取舍见 searchDialog）
   } finally {
-    dialogLoading.value = false
+    if (seq === requestSeq) dialogLoading.value = false
   }
 }
 
@@ -108,9 +131,9 @@ onMounted(loadOptions)
 </script>
 
 <template>
-  <!-- 下拉模式：用户 ≤50，el-select 直接选择 -->
+  <!-- 下拉模式：用户 ≤50，el-select 直接选择（形态由 mode 决定，与搜索回写的分页 total 解耦） -->
   <el-select
-    v-if="total <= 50"
+    v-if="mode === 'select'"
     :model-value="modelValue"
     filterable
     :clearable="clearable"
@@ -140,6 +163,7 @@ onMounted(loadOptions)
         :clearable="clearable"
         :disabled="disabled"
         :placeholder="placeholder"
+        @clear="pick(null)"
       />
     </template>
     <div class="user-dialog">

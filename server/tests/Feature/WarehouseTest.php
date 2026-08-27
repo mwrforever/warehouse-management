@@ -1,12 +1,13 @@
 <?php
 
-// 仓库/库位接口测试：CRUD/编码唯一/子资源/删除保护（正常+边界+异常）
+// 仓库/库位接口测试：CRUD/编码自动生成（老库衔接）/区域落库/子资源/删除保护（正常+边界+异常）
 
 namespace Tests\Feature;
 
 use App\Models\BomHeader;
 use App\Models\Category;
 use App\Models\Customer;
+use App\Models\DocumentNumberConfig;
 use App\Models\InventoryBalance;
 use App\Models\Location;
 use App\Models\Product;
@@ -44,35 +45,73 @@ class WarehouseTest extends TestCase
             ->assertJsonPath('data.items.0.code', 'WH01');
     }
 
-    public function test_store_and_duplicate_code_fails_with_1105(): void
+    public function test_store_auto_generates_code_without_code_input(): void
     {
-        // 正常路径：创建成功
-        $this->withToken($this->token)->postJson('/api/v1/warehouses', [
+        // 正常路径：新建不再接收 code，由 DocumentSequenceService 自动生成（'wh' 配置缺失时
+        // 按 type 大写兜底 → WH 前缀），响应回填且两次创建编码不重复
+        $res = $this->withToken($this->token)->postJson('/api/v1/warehouses', [
             'name' => '测试仓',
-            'code' => 'WH02',
             'address' => '厂区B',
             'manager' => '李四',
             'status' => 1,
-        ])
+        ])->assertJsonPath('code', 0);
+        $code = $res->json('data.code');
+        $this->assertStringStartsWith('WH', $code);
+        $res2 = $this->withToken($this->token)->postJson('/api/v1/warehouses', ['name' => '测试仓2', 'status' => 1])
             ->assertJsonPath('code', 0);
-        // 异常路径：重复编码 1105
-        $this->withToken($this->token)->postJson('/api/v1/warehouses', ['name' => '重复', 'code' => 'WH02'])
-            ->assertJsonPath('code', 1105);
+        $this->assertNotSame($code, $res2->json('data.code'));
+        $this->assertDatabaseHas('warehouses', ['code' => $code]);
     }
 
-    public function test_update_warehouse(): void
+    public function test_store_auto_code_continues_after_legacy_wh_codes(): void
     {
-        // 正常路径：更新地址与负责人
+        // 老库衔接：已有 WH01/WH02（字母+数字无分隔符样式，序号 2 为当前最大值），
+        // 自动编码以最大序号为起点 → WH000003，不与历史编码撞号
+        DocumentNumberConfig::create([
+            'type' => 'wh', 'prefix' => 'WH', 'date_format' => '', 'seq_length' => 6,
+            'is_enabled' => true,
+        ]);
+        Warehouse::create(['name' => '老仓1', 'code' => 'WH01', 'status' => 1]);
+        Warehouse::create(['name' => '老仓2', 'code' => 'WH02', 'status' => 1]);
+        $res = $this->withToken($this->token)->postJson('/api/v1/warehouses', ['name' => '新仓', 'status' => 1])
+            ->assertJsonPath('code', 0);
+        $this->assertSame('WH000003', $res->json('data.code'));
+        $this->assertDatabaseHas('warehouses', ['code' => 'WH000003']);
+    }
+
+    public function test_store_persists_region_and_detail_address(): void
+    {
+        // 正常路径：四级地址名称（省/市/区县/乡镇）与详细地址一并落库
+        $this->withToken($this->token)->postJson('/api/v1/warehouses', [
+            'name' => '区域仓',
+            'province' => '广东省', 'city' => '深圳市', 'district' => '南山区', 'town' => '粤海街道',
+            'address' => '科技园路 1 号',
+            'manager' => '李四',
+            'status' => 1,
+        ])->assertJsonPath('code', 0);
+        $this->assertDatabaseHas('warehouses', [
+            'name' => '区域仓', 'province' => '广东省', 'city' => '深圳市',
+            'district' => '南山区', 'town' => '粤海街道', 'address' => '科技园路 1 号',
+        ]);
+    }
+
+    public function test_update_warehouse_keeps_original_code(): void
+    {
+        // 正常路径：更新属性时带上 code 字段不改变原编码（载荷已不收 code，忽略传入值）
         $w = Warehouse::create(['name' => '主仓', 'code' => 'WH01', 'status' => 1]);
         $this->withToken($this->token)->putJson("/api/v1/warehouses/{$w->id}", [
             'name' => '主仓2',
-            'code' => 'WH01',
+            'code' => 'WH99',
             'address' => '新地址',
+            'province' => '浙江省', 'city' => '杭州市', 'district' => '西湖区', 'town' => '文新街道',
             'manager' => '王五',
             'status' => 1,
         ])
             ->assertJsonPath('code', 0);
-        $this->assertDatabaseHas('warehouses', ['id' => $w->id, 'name' => '主仓2', 'manager' => '王五']);
+        $this->assertDatabaseHas('warehouses', [
+            'id' => $w->id, 'name' => '主仓2', 'manager' => '王五', 'code' => 'WH01',
+            'province' => '浙江省', 'city' => '杭州市', 'district' => '西湖区', 'town' => '文新街道',
+        ]);
     }
 
     public function test_location_crud_under_warehouse(): void

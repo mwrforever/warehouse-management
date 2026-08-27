@@ -8,24 +8,29 @@ import { expect, test, type Page } from '@playwright/test'
 import { execSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// 已登录页面的认证请求辅助：token 取自 localStorage（与 purchase/production spec 同构）
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie（与 purchase/production spec 同构）
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
+}
+
+// 认证删除辅助（清理用）：断言业务 code=0——后端统一 HTTP 200 由 code 承载结果，
+// 仅看 HTTP 层（res.ok）会漏掉业务失败（如校验拒绝）导致的静默残留
+async function apiDelete(page: Page, url: string) {
+  const res = await page.request.delete(url, { headers: await sessionHeaders(page) })
+  expect((await res.json()).code).toBe(0)
 }
 
 // 当日日期字符串（单据下单/计划日期默认今天，按本地时区拼装）
@@ -131,19 +136,12 @@ test.describe('前端交互基础设施', () => {
   // 每条用例结束后清理自建数据：草稿采购单/供应商可经 API 删，生产中工单走直连库删除
   test.afterEach(async ({ page }) => {
     for (const id of createdPoIds) {
-      await page.request.delete(`/api/v1/purchase/orders/${id}`, {
-        headers: {
-          Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-        },
-      })
+      // 删除结果必须校验：失败即报错中止，避免 11 张草稿单静默残留污染后续 spec 的 .first() 匹配假设
+      await apiDelete(page, `/api/v1/purchase/orders/${id}`)
     }
     createdPoIds = []
     if (createdSupplierId) {
-      await page.request.delete(`/api/v1/suppliers/${createdSupplierId}`, {
-        headers: {
-          Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-        },
-      })
+      await apiDelete(page, `/api/v1/suppliers/${createdSupplierId}`)
       createdSupplierId = 0
     }
     if (createdMoNo) {

@@ -5,28 +5,25 @@
 // 定位方式：el-select 占位符无 placeholder 属性且 filterable 的 input 拦截点击 → 点 .el-select 外壳；
 // 下拉项用 getByRole('option')，并先等唯一匹配（旧下拉淡出期间 aria-hidden 未翻转会产生重复匹配）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 // PUT 请求辅助：修改类接口（订单/入库单更新）走 PUT 方法
 async function apiPut(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.put(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -153,9 +150,7 @@ test.describe('采购管理模块', () => {
     })
     expect(put.code).toBe(1303)
     const del = await page.request.delete(`/api/v1/purchase/orders/${poId}`, {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
     })
     expect(((await del.json()) as { code: number }).code).toBe(1304)
   })
@@ -166,7 +161,7 @@ test.describe('采购管理模块', () => {
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
     // 选订单 → 自动预填 2 行（MAT-001 剩余 120、SEMI-001 剩余 50）
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await pickOption(page, poNo)
     await expect(dialog.locator('.el-table__row')).toHaveCount(2)
     const matRow = dialog.locator('.el-table__row', { hasText: 'MAT-001' })
@@ -180,7 +175,9 @@ test.describe('采购管理模块', () => {
     await pickOption(page, 'A-01')
     await dialog.getByRole('button', { name: /保\s*存/ }).click()
     await expect(page.locator('.el-message--success')).toContainText('保存成功')
-    const piRow = page.locator('.el-table__row', { hasText: 'PI' })
+    // 列表按 id 倒序 → .first() 即刚保存的草稿（前置 spec（outsourcing/routing 库存注入）会留
+    // 已审核 PI 行，全量串行下不可假设 PI 行唯一；与 TC-PUR-04 的 .first() 口径一致）
+    const piRow = page.locator('.el-table__row', { hasText: 'PI' }).first()
     await expect(piRow).toContainText('草稿')
     // 超量拦截：MAT-001 数量改 200（>剩余 120）→ 前端/后端拒绝
     await piRow.getByRole('button', { name: /编\s*辑/ }).click()
@@ -248,7 +245,7 @@ test.describe('采购管理模块', () => {
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await pickOption(page, poNo)
     await expect(dialog.locator('.el-table__row')).toHaveCount(1)
     const matRow5 = dialog.locator('.el-table__row', { hasText: 'MAT-001' })
@@ -277,7 +274,7 @@ test.describe('采购管理模块', () => {
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog2 = page.locator('.el-dialog')
-    await dialog2.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog2.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await expect(page.getByRole('option', { name: poNo })).toHaveCount(0)
     await page.keyboard.press('Escape')
   })
@@ -318,7 +315,7 @@ test.describe('采购管理模块', () => {
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog2 = page.locator('.el-dialog')
-    await dialog2.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog2.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await expect(page.getByRole('option', { name: po2No })).toHaveCount(0)
     await page.keyboard.press('Escape')
     // 已完成订单不可关闭（API → 1306）
@@ -359,7 +356,7 @@ test.describe('采购管理模块', () => {
     await dialog.locator('.el-select', { hasText: '选择供应商' }).click()
     await pickOption(page, '测试供应商')
     const row = dialog.locator('.el-table__row').nth(0)
-    await row.locator('.el-select', { hasText: '选择商品' }).click()
+    await row.locator('.el-select', { hasText: '搜索商品编码/名称' }).click()
     await pickOption(page, 'MAT-001')
     await row.locator('.el-input-number input').first().fill('5')
     await row.locator('.el-input-number input').nth(1).fill('1')
@@ -422,7 +419,7 @@ test.describe('采购管理模块', () => {
     })
     expect(neg.code).toBe(1311)
     expect(neg.message).toBe('价格不能为负数')
-    // 小数价格无误差：0.10×3 → ¥0.30（price=10 分，total_amount 分单位 → 30.00）
+    // 小数价格无误差：0.10×3 → ¥0.30（price=10 分，total_amount 为整数分 → 30）
     const gift = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supplierId,
       order_date: '2026-08-12',
@@ -432,7 +429,7 @@ test.describe('采购管理模块', () => {
     const giftList = await apiGet(page, '/api/v1/purchase/orders', {
       keyword: (gift.data as { no: string }).no,
     })
-    expect(giftList.items[0].total_amount).toBe('30.00')
+    expect(giftList.items[0].total_amount).toBe(30)
     // 空明细双端拦截 → 1301
     const empty = await apiPost(page, '/api/v1/purchase/orders', {
       supplier_id: supplierId,
@@ -471,7 +468,7 @@ test.describe('采购管理模块', () => {
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await pickOption(page, poNo3)
     await expect(dialog.locator('.el-table__row')).toHaveCount(2)
     const matRow = dialog.locator('.el-table__row', { hasText: 'MAT-001' })
@@ -507,7 +504,7 @@ test.describe('采购管理模块', () => {
     // 再次从订单生成 PO3：仅剩 MAT 行、剩余 20（0 行商品留在订单上可再收）
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog2 = page.locator('.el-dialog')
-    await dialog2.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog2.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await pickOption(page, poNo3)
     await expect(dialog2.locator('.el-table__row')).toHaveCount(1)
     await expect(dialog2.locator('.el-table__row')).toContainText('MAT-001')
@@ -523,7 +520,7 @@ test.describe('采购管理模块', () => {
     await page.goto('/purchase/inbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分入库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分入库订单' }).click()
     await pickOption(page, poNo3)
     await expect(dialog.locator('.el-table__row')).toHaveCount(1)
     const matRow = dialog.locator('.el-table__row', { hasText: 'MAT-001' })

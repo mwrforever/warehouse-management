@@ -5,28 +5,25 @@
 // 定位方式：el-select 占位符无 placeholder 属性且 filterable 的 input 拦截点击 → 点 .el-select 外壳；
 // 下拉项用 getByRole('option')，并先等唯一匹配（旧下拉淡出期间 aria-hidden 未翻转会产生重复匹配）
 import { expect, test, type Page } from '@playwright/test'
-import { loginByAPI } from './helpers'
+import { loginByAPI, sessionHeaders } from './helpers'
 
-// 已登录页面的认证请求辅助：token 取自 localStorage
+// 已登录页面的会话认证请求辅助：page.request 与浏览器上下文共享会话 cookie
 async function apiGet(page: Page, url: string, params: Record<string, string | number> = {}) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const res = await page.request.get(url, { headers: { Authorization: `Bearer ${token}` }, params })
+  const res = await page.request.get(url, { headers: await sessionHeaders(page), params })
   expect(res.ok()).toBeTruthy()
   return (await res.json()).data
 }
 async function apiPost(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.post(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
 }
 // PUT 请求辅助：修改类接口（订单/出库单更新）走 PUT 方法
 async function apiPut(page: Page, url: string, body?: unknown) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
   const res = await page.request.put(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: await sessionHeaders(page),
     data: body,
   })
   return (await res.json()) as { code: number; message?: string; data?: unknown }
@@ -181,7 +178,7 @@ test.describe('销售管理模块', () => {
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
     // 选订单 → 自动预填 2 行（FIN-002 剩余 10、SEMI-001 剩余 5）
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分出库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分出库订单' }).click()
     await pickOption(page, soNo)
     await expect(dialog.locator('.el-table__row')).toHaveCount(2)
     const finRow = dialog.locator('.el-table__row', { hasText: 'FIN-002' })
@@ -245,7 +242,7 @@ test.describe('销售管理模块', () => {
     await dialog.locator('.el-select', { hasText: '选择客户' }).click()
     await pickOption(page, '测试客户')
     const row = dialog.locator('.el-table__row').nth(0)
-    await row.locator('.el-select', { hasText: '选择商品' }).click()
+    await row.locator('.el-select', { hasText: '搜索商品编码/名称' }).click()
     await pickOption(page, 'FIN-002')
     await row.locator('.el-input-number input').first().fill('9999')
     await dialog.locator('.el-select', { hasText: '选择仓库' }).click()
@@ -275,9 +272,7 @@ test.describe('销售管理模块', () => {
     // 删除该草稿出库单
     const list = await apiGet(page, '/api/v1/sales/outbounds', { keyword: oversellNo })
     const del = await page.request.delete(`/api/v1/sales/outbounds/${list.items[0].id}`, {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
     })
     expect(((await del.json()) as { code: number }).code).toBe(0)
   })
@@ -319,9 +314,7 @@ test.describe('销售管理模块', () => {
     const failed = ra.code === 1409 ? aNo : bNo
     const failedList = await apiGet(page, '/api/v1/sales/outbounds', { keyword: failed })
     await page.request.delete(`/api/v1/sales/outbounds/${failedList.items[0].id}`, {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
     })
   })
 
@@ -331,7 +324,7 @@ test.describe('销售管理模块', () => {
     await page.goto('/sales/outbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog = page.locator('.el-dialog')
-    await dialog.locator('.el-select', { hasText: '选择已审核/部分出库订单' }).click()
+    await dialog.locator('.el-select', { hasText: '输入单号搜索已审核/部分出库订单' }).click()
     await pickOption(page, soNo)
     await expect(dialog.locator('.el-table__row')).toHaveCount(1)
     const finRow5 = dialog.locator('.el-table__row', { hasText: 'FIN-002' })
@@ -372,7 +365,7 @@ test.describe('销售管理模块', () => {
     await page.goto('/sales/outbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog2 = page.locator('.el-dialog')
-    await dialog2.locator('.el-select', { hasText: '选择已审核/部分出库订单' }).click()
+    await dialog2.locator('.el-select', { hasText: '输入单号搜索已审核/部分出库订单' }).click()
     await expect(page.getByRole('option', { name: soNo })).toHaveCount(0)
     await page.keyboard.press('Escape')
   })
@@ -413,7 +406,7 @@ test.describe('销售管理模块', () => {
     await page.goto('/sales/outbounds')
     await page.getByRole('button', { name: /从订单生成/ }).click()
     const dialog2 = page.locator('.el-dialog')
-    await dialog2.locator('.el-select', { hasText: '选择已审核/部分出库订单' }).click()
+    await dialog2.locator('.el-select', { hasText: '输入单号搜索已审核/部分出库订单' }).click()
     await expect(page.getByRole('option', { name: so2No })).toHaveCount(0)
     await page.keyboard.press('Escape')
     // 已完成订单不可关闭（API → 1405）
@@ -453,7 +446,7 @@ test.describe('销售管理模块', () => {
     await dialog.locator('.el-select', { hasText: '选择客户' }).click()
     await pickOption(page, '测试客户')
     const row = dialog.locator('.el-table__row').nth(0)
-    await row.locator('.el-select', { hasText: '选择商品' }).click()
+    await row.locator('.el-select', { hasText: '搜索商品编码/名称' }).click()
     await pickOption(page, 'SEMI-001')
     await row.locator('.el-input-number input').first().fill('1')
     await row.locator('.el-input-number input').nth(1).fill('20')
@@ -529,9 +522,7 @@ test.describe('销售管理模块', () => {
     expect(dup.code).toBe(1412)
     // 清理零单草稿
     await page.request.delete(`/api/v1/sales/outbounds/${zeroList.items[0].id}`, {
-      headers: {
-        Authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('token'))}`,
-      },
+      headers: await sessionHeaders(page),
     })
   })
 

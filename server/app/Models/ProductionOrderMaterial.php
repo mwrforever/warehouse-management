@@ -18,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ProductionOrderMaterial extends Model
 {
-    protected $fillable = ['order_id', 'material_id', 'required_qty', 'issued_qty'];
+    protected $fillable = ['order_id', 'material_id', 'required_qty', 'issued_qty', 'node_no'];
 
     protected function casts(): array
     {

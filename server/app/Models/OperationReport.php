@@ -18,12 +18,12 @@ use Illuminate\Support\Carbon;
  * @property string $qualified_qty
  * @property string $defective_qty
  * @property string $hours
- * @property Carbon $report_time
+ * @property Carbon $reported_at
  * @property string|null $remark
  */
 class OperationReport extends Model
 {
-    protected $fillable = ['operation_id', 'order_id', 'operator', 'qualified_qty', 'defective_qty', 'hours', 'report_time', 'remark'];
+    protected $fillable = ['operation_id', 'order_id', 'operator', 'qualified_qty', 'defective_qty', 'hours', 'reported_at', 'remark'];
 
     protected function casts(): array
     {
@@ -31,7 +31,7 @@ class OperationReport extends Model
             'qualified_qty' => 'decimal:2',
             'defective_qty' => 'decimal:2',
             'hours' => 'decimal:2',
-            'report_time' => 'datetime',
+            'reported_at' => 'datetime',
         ];
     }
 

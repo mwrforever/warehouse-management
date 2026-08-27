@@ -9,10 +9,11 @@
     "preview": "vite preview",
     "type-check": "vue-tsc -b",
     "lint": "eslint .",
-    "lint:css": "stylelint \"src/**/*.css\"",
+    "lint:css": "stylelint \"src/**/*.css\" && stylelint \"src/**/*.vue\" --config .stylelintrc.vue.json",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "test:unit": "vitest run",
+    "pretest:e2e": "node scripts/kill-ports.mjs 7000 4000",
     "test:e2e": "playwright test",
     "prepare": "husky"
   },
@@ -20,7 +21,9 @@
     "@element-plus/icons-vue": "^2.3.2",
     "@fontsource-variable/space-grotesk": "^5.3.0",
     "@fontsource/fira-code": "^5.3.0",
+    "@vue-flow/core": "^1.48.2",
     "axios": "^1.19.0",
+    "china-division": "^2.7.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.4",
     "jsbarcode": "^3.12.3",
@@ -41,6 +44,7 @@
     "husky": "^9.1.7",
     "jsdom": "^30.0.1",
     "lint-staged": "^17.3.0",
+    "postcss-html": "^2.0.0",
     "prettier": "^3.9.6",
     "stylelint": "^17.14.1",
     "stylelint-config-standard": "^40.0.0",
@@ -58,6 +62,9 @@
     "*.css": [
       "stylelint --fix",
       "prettier --write"
+    ],
+    "*.vue": [
+      "stylelint --config .stylelintrc.vue.json --fix"
     ]
   }
 }

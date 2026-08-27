@@ -48,7 +48,7 @@ import DashboardView from '../views/DashboardView.vue'
 function okSummary() {
   return {
     inventory_total_qty: '1234.50',
-    inventory_value: '567.80',
+    inventory_value: 56780,
     today_inbound_qty: '10.00',
     today_outbound_qty: '3.00',
     pending_approvals: 2,
